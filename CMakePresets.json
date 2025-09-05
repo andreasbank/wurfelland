@@ -1,0 +1,71 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": { "major": 3, "minor": 20 },
+
+  "vendor": {
+    "preset_hints": "Use -vcpkg presets if you want vcpkg toolchain; otherwise use plain presets."
+  },
+
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    },
+    {
+      "name": "win-msvc",
+      "displayName": "Windows MSVC (no vcpkg)",
+      "inherits": "base",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64"
+    },
+    {
+      "name": "win-msvc-vcpkg",
+      "displayName": "Windows MSVC + vcpkg",
+      "inherits": "win-msvc",
+      "cacheVariables": {
+        "CMAKE_TOOLCHAIN_FILE": "${env:VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+      },
+      "environment": {
+        "VCPKG_ROOT": "E:/docs/vcpkg"
+     }
+    },
+    {
+      "name": "linux-ninja",
+      "displayName": "Linux Ninja (no vcpkg)",
+      "inherits": "base",
+      "generator": "Ninja",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "linux-ninja-vcpkg",
+      "displayName": "Linux Ninja + vcpkg",
+      "inherits": "linux-ninja",
+      "cacheVariables": {
+        "CMAKE_TOOLCHAIN_FILE": "${env:VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+      },
+      "environment": {
+        "VCPKG_ROOT": "$HOME/vcpkg"
+     }
+    }
+  ],
+
+  "buildPresets": [
+    { "name": "build-win-debug",   "configurePreset": "win-msvc",         "configuration": "Debug" },
+    { "name": "build-win-release", "configurePreset": "win-msvc",         "configuration": "Release" },
+    { "name": "build-win-vcpkg-debug",   "configurePreset": "win-msvc-vcpkg", "configuration": "Debug" },
+    { "name": "build-win-vcpkg-release", "configurePreset": "win-msvc-vcpkg", "configuration": "Release" },
+
+    { "name": "build-linux-debug",       "configurePreset": "linux-ninja",       "configuration": "Debug" },
+    { "name": "build-linux-release",     "configurePreset": "linux-ninja",       "configuration": "Release" },
+    { "name": "build-linux-vcpkg-debug",   "configurePreset": "linux-ninja-vcpkg", "configuration": "Debug" },
+    { "name": "build-linux-vcpkg-release", "configurePreset": "linux-ninja-vcpkg", "configuration": "Release" }
+  ],
+
+  "testPresets": []
+}
