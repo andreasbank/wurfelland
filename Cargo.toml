@@ -1,0 +1,15 @@
+[package]
+name = "wuffellannd"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.100"
+env_logger = "0.11.8"
+gl = "0.14.0"
+glam = "0.31.0"
+glfw = "0.61.0"
+glm = "0.3.0"
+log = "0.4.29"
+nalgebra-glm = "0.20.0"
+noise = "0.9"
