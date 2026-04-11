@@ -1,4 +1,3 @@
-use gl::types::*;
 use std::mem;
 use std::os::raw::c_void;
 use crate::renderer::utils::{compile_shader, link_program};

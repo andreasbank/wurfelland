@@ -205,6 +205,26 @@ impl World {
         });
     }
 
+    /// Replace a block at world coords and mark the chunk (plus border neighbors) for rebuild.
+    pub fn set_block(&mut self, wx: i32, wy: i32, wz: i32, block: BlockType) {
+        if wy < 0 || wy >= 16 { return; }
+        let cx = wx.div_euclid(16);
+        let cz = wz.div_euclid(16);
+        let lx = wx.rem_euclid(16) as usize;
+        let ly = wy as usize;
+        let lz = wz.rem_euclid(16) as usize;
+        if let Some(chunk) = self.chunks.get_mut(&[cx, 0, cz]) {
+            chunk.set_block(lx, ly, lz, block);
+            chunk.mark_for_rebuild();
+        }
+        // If the block sits on a chunk border, the adjacent chunk's face visibility
+        // changes too — mark it dirty so it re-meshes on the next update.
+        if lx == 0  { if let Some(c) = self.chunks.get_mut(&[cx-1, 0, cz]) { c.mark_for_rebuild(); } }
+        if lx == 15 { if let Some(c) = self.chunks.get_mut(&[cx+1, 0, cz]) { c.mark_for_rebuild(); } }
+        if lz == 0  { if let Some(c) = self.chunks.get_mut(&[cx, 0, cz-1]) { c.mark_for_rebuild(); } }
+        if lz == 15 { if let Some(c) = self.chunks.get_mut(&[cx, 0, cz+1]) { c.mark_for_rebuild(); } }
+    }
+
     pub fn get_block(&self, wx: i32, wy: i32, wz: i32) -> BlockType {
         if wy < 0 || wy >= 16 {
             return BlockType::Air;

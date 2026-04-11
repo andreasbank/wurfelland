@@ -19,16 +19,7 @@ pub struct NeighborEdges {
     pub back:  [[BlockType; 16]; 16],
 }
 
-impl NeighborEdges {
-    pub fn all_air() -> Self {
-        NeighborEdges {
-            right: [[BlockType::Air; 16]; 16],
-            left:  [[BlockType::Air; 16]; 16],
-            front: [[BlockType::Air; 16]; 16],
-            back:  [[BlockType::Air; 16]; 16],
-        }
-    }
-}
+impl NeighborEdges {}
 
 /// ~1-in-3 chance per column, deterministic from world coords.
 fn grass_hash(world_x: i32, world_z: i32) -> bool {
@@ -154,6 +145,10 @@ impl Chunk {
 
     pub fn get_block(&self, x: usize, y: usize, z: usize) -> BlockType {
         self.blocks[x][y][z]
+    }
+
+    pub fn set_block(&mut self, x: usize, y: usize, z: usize, block: BlockType) {
+        self.blocks[x][y][z] = block;
     }
 
     /// Returns a copy of the block data — cheap since BlockType is Copy.
@@ -382,21 +377,4 @@ impl Chunk {
         frustum.intersects_aabb(min, max)
     }
 
-    pub fn aabb(&self) -> (Vec3, Vec3) {
-        let min = Vec3::new(
-            self.position[0] as f32 * 16.0,
-            self.position[1] as f32 * 16.0,
-            self.position[2] as f32 * 16.0,
-        );
-        let max = Vec3::new(min.x + 16.0, min.y + 16.0, min.z + 16.0);
-        (min, max)
-    }
-
-    pub fn center(&self) -> Vec3 {
-        Vec3::new(
-            (self.position[0] as f32 + 0.5) * 16.0,
-            (self.position[1] as f32 + 0.5) * 16.0,
-            (self.position[2] as f32 + 0.5) * 16.0,
-        )
-    }
 }

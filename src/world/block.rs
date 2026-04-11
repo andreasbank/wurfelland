@@ -51,6 +51,41 @@ impl BlockType {
         matches!(self, BlockType::Water)
     }
 
+    /// Base dig time in seconds with bare hands (None = cannot be dug).
+    /// Multiply delta_time by a tool speed factor before accumulating progress
+    /// to support faster tools in the future.
+    pub fn hardness(&self) -> Option<f32> {
+        match self {
+            BlockType::Air       => None,
+            BlockType::Water     => None,
+            BlockType::TallGrass => Some(0.05),
+            BlockType::Leaves    => Some(0.2),
+            BlockType::Grass     => Some(0.5),
+            BlockType::Dirt      => Some(0.5),
+            BlockType::Log       => Some(1.5),
+            BlockType::Stone     => Some(3.0),
+        }
+    }
+
+    /// Items dropped when this block is broken.
+    /// Uses a position hash for deterministic ~50% drop rate on leaves.
+    pub fn drops(&self, wx: i32, wy: i32, wz: i32) -> Vec<crate::world::item::ItemType> {
+        use crate::world::item::ItemType;
+        let hash = (wx.wrapping_mul(374761393)
+            .wrapping_add(wy.wrapping_mul(668265263))
+            .wrapping_add(wz.wrapping_mul(2147483647))) as u32;
+        match self {
+            BlockType::Leaves => {
+                if hash % 2 == 0 { vec![ItemType::Stick] } else { vec![] }
+            }
+            BlockType::Log          => vec![ItemType::LogBlock],
+            BlockType::Grass |
+            BlockType::Dirt         => vec![ItemType::DirtClump],
+            BlockType::Stone => vec![ItemType::StoneChunk],
+            _ => vec![],
+        }
+    }
+
     pub fn texture_id(&self, face: crate::world::Face) -> u32 {
         match self {
             BlockType::Air       => 0,

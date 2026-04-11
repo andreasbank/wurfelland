@@ -49,23 +49,6 @@ impl Camera {
         self.aspect_ratio = width as f32 / height as f32;
     }
 
-    pub fn update_from_mouse(&mut self, xoffset: f32, yoffset: f32) {
-        let sensitivity = 0.1;
-        self.yaw += xoffset * sensitivity;
-        self.pitch += yoffset * sensitivity;
-        
-        // Constrain pitch
-        self.pitch = self.pitch.clamp(-89.0, 89.0);
-        
-        // Update front vector
-        let front = Vec3::new(
-            self.yaw.to_radians().cos() * self.pitch.to_radians().cos(),
-            self.pitch.to_radians().sin(),
-            self.yaw.to_radians().sin() * self.pitch.to_radians().cos(),
-        );
-        self.front = front.normalize();
-    }
-
     pub fn view_matrix(&self) -> Mat4 {
         // Using look_at_rh (right-handed coordinate system)
         // Eye = camera position
@@ -84,18 +67,6 @@ impl Camera {
             self.aspect_ratio,      // Width / height (e.g., 800/600 = 1.333)
             self.near_plane,        // Near clipping plane (e.g., 0.1)
             self.far_plane,         // Far clipping plane (e.g., 1000.0)
-        )
-    }
-    
-    // Alternative: Orthographic projection (for 2D/minimap)
-    pub fn orthographic_matrix(&self, size: f32) -> Mat4 {
-        Mat4::orthographic_rh(
-            -size * self.aspect_ratio,
-            size * self.aspect_ratio,
-            -size,
-            size,
-            self.near_plane,
-            self.far_plane,
         )
     }
     

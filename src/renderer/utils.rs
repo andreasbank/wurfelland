@@ -1,6 +1,4 @@
 use std::ffi::CString;
-use std::mem;
-use std::os::raw::c_void;
 use gl::types::*;
 use std::ptr;
 
@@ -44,69 +42,6 @@ pub fn link_program(vertex_shader: GLuint, fragment_shader: GLuint) -> Result<GL
         
         Ok(program)
     }
-}
-
-pub fn create_checkerboard_texture() -> u32 {
-    unsafe {
-        let mut texture_id = 0;
-        gl::GenTextures(1, &mut texture_id);
-        gl::BindTexture(gl::TEXTURE_2D, texture_id);
-        
-        // 64x64 checkerboard pattern
-        let size = 64;
-        let mut pixels = vec![0u8; size * size * 4]; // RGBA
-        
-        for y in 0..size {
-            for x in 0..size {
-                let idx = (y * size + x) * 4;
-                let checker = ((x / 8) % 2) == ((y / 8) % 2);
-                
-                if checker {
-                    // White square
-                    pixels[idx] = 255;     // R
-                    pixels[idx + 1] = 255; // G
-                    pixels[idx + 2] = 255; // B
-                    pixels[idx + 3] = 255; // A
-                } else {
-                    // Gray square  
-                    pixels[idx] = 100;     // R
-                    pixels[idx + 1] = 100; // G
-                    pixels[idx + 2] = 100; // B
-                    pixels[idx + 3] = 255; // A
-                }
-            }
-        }
-        
-        // Upload to GPU
-        gl::TexImage2D(
-            gl::TEXTURE_2D,
-            0,
-            gl::RGBA as i32,
-            size as i32,
-            size as i32,
-            0,
-            gl::RGBA,
-            gl::UNSIGNED_BYTE,
-            pixels.as_ptr() as *const _,
-        );
-        
-        // Set texture parameters
-        gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_S, gl::REPEAT as i32);
-        gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_T, gl::REPEAT as i32);
-        gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::NEAREST as i32);
-        gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::NEAREST as i32);
-        
-        // Unbind
-        gl::BindTexture(gl::TEXTURE_2D, 0);
-        
-        texture_id
-    }
-}
-
-// Also add a real texture loader later:
-pub fn load_texture(_path: &str) -> Result<u32, String> {
-    // TODO: Use 'image' crate
-    Ok(create_checkerboard_texture()) // Return checkerboard for now
 }
 
 // Generates a 256x256 atlas (16x16 tiles, each tile 16x16 px).
@@ -194,6 +129,36 @@ pub fn create_block_atlas() -> u32 {
                 pixels[idx + 1] = (color[1] as i16 + variation).clamp(0, 255) as u8;
                 pixels[idx + 2] = (color[2] as i16 + variation).clamp(0, 255) as u8;
                 pixels[idx + 3] = alpha;
+            }
+        }
+    }
+
+    // Crack overlay tiles 9–13 (5 stages, transparent background + dark crack lines).
+    // Uses three families of crossing sine waves; higher stages have a lower threshold
+    // so more pixels become visible cracks.
+    let crack_thresholds = [0.10f32, 0.18, 0.28, 0.40, 0.55];
+    for stage in 0..5usize {
+        let tile_idx  = 9 + stage;
+        let tile_col  = tile_idx % TILES_PER_ROW;
+        let tile_row  = tile_idx / TILES_PER_ROW;
+        let threshold = crack_thresholds[stage];
+        for py in 0..TILE_SIZE {
+            for px in 0..TILE_SIZE {
+                let atlas_x = tile_col * TILE_SIZE + px;
+                let atlas_y = tile_row * TILE_SIZE + py;
+                let idx = (atlas_y * ATLAS_SIZE + atlas_x) * 4;
+                let x = px as f32 / TILE_SIZE as f32 * std::f32::consts::TAU;
+                let y = py as f32 / TILE_SIZE as f32 * std::f32::consts::TAU;
+                let v1 = (x * 2.3 + y * 1.7).sin().abs();
+                let v2 = (x * 0.9 - y * 2.1).sin().abs();
+                let v3 = (x * 3.1 + y * 0.5).sin().abs();
+                if v1.min(v2).min(v3) < threshold {
+                    pixels[idx]     = 20;
+                    pixels[idx + 1] = 20;
+                    pixels[idx + 2] = 20;
+                    pixels[idx + 3] = 200;
+                }
+                // else: already zeroed (transparent)
             }
         }
     }

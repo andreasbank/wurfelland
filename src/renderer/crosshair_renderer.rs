@@ -1,8 +1,4 @@
-use std::ffi::CString;
 use std::mem;
-use std::os::raw::c_void;
-use std::string;
-use gl::types::*;
 use std::ptr;
 
 use crate::renderer::utils::compile_shader;
@@ -10,7 +6,6 @@ use crate::renderer::utils::link_program;
 
 pub struct Crosshair {
     vao: u32,
-    vbo: u32,
     shader: u32,
 }
 
@@ -60,7 +55,8 @@ impl Crosshair {
             
             let shader = link_program(shader, frag_shader).unwrap();
             
-            Crosshair { vao, vbo, shader }
+            let _ = vbo; // buffer stays bound to VAO; handle not needed after setup
+            Crosshair { vao, shader }
         }
     }
     

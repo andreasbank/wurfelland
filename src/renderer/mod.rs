@@ -1,8 +1,6 @@
 pub mod utils;
-pub use utils::{compile_shader, create_checkerboard_texture, create_block_atlas, load_texture};
 
 pub mod crosshair_renderer;
-pub use crosshair_renderer::Crosshair;
 
 pub mod healthbar_renderer;
 pub use healthbar_renderer::HealthBar;
@@ -21,3 +19,15 @@ pub use player_renderer::PlayerRenderer;
 
 pub mod chunk_mesh;
 pub use chunk_mesh::ChunkMesh;
+
+pub mod crack_renderer;
+pub use crack_renderer::CrackRenderer;
+
+pub mod item_renderer;
+pub use item_renderer::ItemRenderer;
+
+pub mod hotbar_renderer;
+pub use hotbar_renderer::HotbarRenderer;
+
+pub mod bag_renderer;
+pub use bag_renderer::BagRenderer;

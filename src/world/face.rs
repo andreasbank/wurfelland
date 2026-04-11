@@ -10,17 +10,6 @@ pub enum Face {
 
 // Usage:
 impl Face {
-    pub fn normal(&self) -> [i32; 3] {
-        match self {
-            Face::Right => [1, 0, 0],
-            Face::Left => [-1, 0, 0],
-            Face::Up => [0, 1, 0],
-            Face::Down => [0, -1, 0],
-            Face::Front => [0, 0, 1],
-            Face::Back => [0, 0, -1],
-        }
-    }
-    
     pub fn texture_coords(&self, texture_index: u32, atlas_size: u32) -> [[f32; 2]; 4] {
         // Calculate texture coordinates in atlas
         // atlas_size = how many textures per row/column (e.g., 16 for 16x16 atlas)
@@ -47,11 +36,6 @@ impl Face {
         }
     }
     
-    // Simpler version: just return unit texture coordinates
-    pub fn unit_texture_coords() -> [[f32; 2]; 4] {
-        [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]
-    }
-
     // For each vertex [0..3], returns [side1, side2, corner] block offsets for AO sampling.
     // Offsets are relative to the block being rendered.
     pub fn ao_neighbors(&self) -> [[(i32, i32, i32); 3]; 4] {

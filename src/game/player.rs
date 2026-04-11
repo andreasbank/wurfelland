@@ -1,3 +1,9 @@
+use crate::world::item::ItemType;
+
+pub const INVENTORY_COLS: usize = 3;
+pub const INVENTORY_ROWS: usize = 6;
+pub const INVENTORY_SIZE: usize = INVENTORY_COLS * INVENTORY_ROWS;
+
 const GRAVITY: f32 = -20.0;
 const JUMP_SPEED: f32 = 8.0;
 const MOVE_SPEED: f32 = 5.0;
@@ -6,27 +12,45 @@ const HALF_WIDTH: f32 = 0.3; // Player is 0.6 wide
 const PLAYER_HEIGHT: f32 = 1.8;
 
 pub struct Player {
-    pub name: String,
     pub health: u32,
     pub position: [f32; 3], // feet position
     pub yaw: f32,
     pub pitch: f32,
     pub velocity: [f32; 3],
     pub on_ground: bool,
+    pub inventory: [Option<(ItemType, u32)>; INVENTORY_SIZE],
     mouse_sensitivity: f32,
 }
 
 impl Player {
-    pub fn new(name: &str) -> Self {
+    pub fn new() -> Self {
         Player {
-            name: name.to_string(),
             health: 100,
             position: [0.0, 64.0, 0.0],
             yaw: -90.0,
             pitch: 0.0,
             velocity: [0.0; 3],
             on_ground: false,
+            inventory: [None; INVENTORY_SIZE],
             mouse_sensitivity: 0.1,
+        }
+    }
+
+    /// Places the item in the first empty inventory slot.
+    /// Returns true if picked up, false if inventory is full.
+    pub fn pick_up(&mut self, item: ItemType) -> bool {
+        // Stack onto existing slot of the same type first
+        for slot in self.inventory.iter_mut() {
+            if let Some((t, count)) = slot {
+                if *t == item { *count += 1; return true; }
+            }
+        }
+        // Otherwise place in first empty slot
+        if let Some(slot) = self.inventory.iter_mut().find(|s| s.is_none()) {
+            *slot = Some((item, 1));
+            true
+        } else {
+            false
         }
     }
 
@@ -134,15 +158,4 @@ impl Player {
         false
     }
 
-    pub fn take_damage(&mut self, amount: u32) {
-        if amount >= self.health {
-            self.health = 0;
-        } else {
-            self.health -= amount;
-        }
-    }
-
-    pub fn is_alive(&self) -> bool {
-        self.health > 0
-    }
 }

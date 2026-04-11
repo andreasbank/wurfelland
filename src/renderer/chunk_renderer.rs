@@ -1,9 +1,7 @@
 use crate::renderer::utils::{compile_shader, create_block_atlas};
-use gl::types::{GLchar, GLuint};
+use gl::types::GLchar;
 use std::ptr;
 use crate::world::chunk::Chunk;
-use crate::camera::Camera;
-use glam::Vec3;
 
 struct UniformLocations {
     model: i32,
@@ -197,80 +195,6 @@ impl ChunkRenderer {
         }
     }
     
-    // If chunk position is separate:
-    pub fn draw_chunk_at(&self, chunk: &Chunk, position: &glam::Mat4) {
-        let mesh = match &chunk.mesh {
-            Some(m) => m,
-            None => return,
-        };
-        
-        unsafe {
-            gl::UniformMatrix4fv(self.uniforms.model, 1, gl::FALSE, position.as_ref().as_ptr());
-            gl::BindVertexArray(mesh.vao);
-            gl::DrawArrays(gl::TRIANGLES, 0, mesh.vertex_count);
-        }
-    }
-
-    pub fn draw_chunks(&self, chunks: &[&Chunk]) {
-        unsafe {
-            // Count draw calls for debugging
-            let mut draw_calls = 0;
-            
-            for chunk in chunks {
-                // Skip chunks without mesh
-                let mesh = match &chunk.mesh {
-                    Some(m) => m,
-                    None => continue,
-                };
-                
-                // Set model matrix for this chunk
-                let model = chunk.model_matrix();
-                gl::UniformMatrix4fv(self.uniforms.model, 1, gl::FALSE, model.as_ref().as_ptr());
-                
-                // Bind and draw
-                gl::BindVertexArray(mesh.vao);
-                gl::DrawArrays(gl::TRIANGLES, 0, mesh.vertex_count);
-                
-                draw_calls += 1;
-            }
-            
-            // Optional: print draw call count (debug)
-            // println!("Drew {} chunks in {} draw calls", chunks.len(), draw_calls);
-        }
-    }
-    
-    // Alternative: With frustum culling
-    pub fn draw_chunks_with_culling(&self, chunks: &[&Chunk], camera: &Camera) {
-        let frustum = camera.frustum();
-        
-        for chunk in chunks {
-            // Skip if chunk not visible
-            if !chunk.is_in_frustum(&frustum) {
-                continue;
-            }
-            
-            // Draw as before...
-            if let Some(mesh) = &chunk.mesh {
-                unsafe {
-                    let model = chunk.model_matrix();
-                    gl::UniformMatrix4fv(self.uniforms.model, 1, gl::FALSE, model.as_ref().as_ptr());
-                    gl::BindVertexArray(mesh.vao);
-                    gl::DrawArrays(gl::TRIANGLES, 0, mesh.vertex_count);
-                }
-            }
-        }
-    }
-    
-    // Alternative: Batch by distance (near to far for transparency)
-    pub fn draw_chunks_sorted(&self, chunks: &mut [&Chunk], camera_pos: Vec3) {
-        // Sort chunks by distance from camera (front to back for opaque)
-        chunks.sort_by_key(|chunk| {
-            let chunk_center = chunk.center();
-            (camera_pos.distance_squared(chunk_center) * 1000.0) as i32
-        });
-        
-        self.draw_chunks(chunks);
-    }
 }
 
 impl Drop for ChunkRenderer {
