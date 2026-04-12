@@ -1,66 +1,67 @@
 use std::mem;
 use std::os::raw::c_void;
-use crate::renderer::utils::{compile_shader, link_program};
+use crate::renderer::utils::{compile_shader, link_program, create_item_atlas};
 use crate::world::item::ItemType;
 use crate::world::ItemEntity;
 
-// Vertex format: [x, y, z, r, g, b] — 6 floats, colors baked per vertex.
-const STRIDE: usize = 6;
+// Vertex format: [x, y, z, u, v] — 5 floats.
+const STRIDE: usize = 5;
 
-fn push_vert(v: &mut Vec<f32>, x: f32, y: f32, z: f32, r: f32, g: f32, b: f32) {
-    v.extend_from_slice(&[x, y, z, r, g, b]);
+// Returns (u_min, u_max, v_top, v_bot) for a tile in the 256×256 item atlas.
+// The atlas stores pixel data top-to-bottom, but OpenGL treats row 0 of TexImage2D
+// data as the BOTTOM of the texture. So visual-top of a tile = lower GL v value.
+fn tile_uv(tile_idx: usize) -> (f32, f32, f32, f32) {
+    let col = tile_idx % 16;
+    let row = tile_idx / 16;
+    let u_min = col as f32 / 16.0;
+    let u_max = (col + 1) as f32 / 16.0;
+    let v_top = row as f32 / 16.0;         // top of tile image = low GL v
+    let v_bot = (row + 1) as f32 / 16.0;   // bottom of tile image = high GL v
+    (u_min, u_max, v_top, v_bot)
 }
 
-// Emit a CCW quad as two triangles with a flat color.
-fn push_quad(v: &mut Vec<f32>, p: [[f32; 3]; 4], r: f32, g: f32, b: f32) {
+fn push_vert(v: &mut Vec<f32>, x: f32, y: f32, z: f32, u: f32, vt: f32) {
+    v.extend_from_slice(&[x, y, z, u, vt]);
+}
+
+// Emit a CCW quad as two triangles.
+// p: 4 corners [bottom-left, bottom-right, top-right, top-left]
+// uv: matching UV per corner
+fn push_quad(v: &mut Vec<f32>, p: [[f32; 3]; 4], uv: [[f32; 2]; 4]) {
     for &i in &[0usize, 1, 2, 0, 2, 3] {
-        push_vert(v, p[i][0], p[i][1], p[i][2], r, g, b);
+        push_vert(v, p[i][0], p[i][1], p[i][2], uv[i][0], uv[i][1]);
     }
 }
 
-// ── Stick: a 0.3×0.3 flat quad in the XY plane, centered on X, base at Y=0 ──
+// ── Stick: flat double-sided quad, 0.3×0.3, centered on X, base at Y=0 ──
 fn build_stick_mesh() -> Vec<f32> {
+    let (u0, u1, vt, vb) = tile_uv(ItemType::Stick.tile_index());
     let mut v = Vec::new();
-    let [r, g, b] = ItemType::Stick.color();
-    // Front face
-    push_quad(&mut v, [[-0.15, 0.0, 0.0], [0.15, 0.0, 0.0], [0.15, 0.3, 0.0], [-0.15, 0.3, 0.0]], r, g, b);
-    // Back face (reversed winding so it's visible from behind)
-    push_quad(&mut v, [[-0.15, 0.3, 0.0], [0.15, 0.3, 0.0], [0.15, 0.0, 0.0], [-0.15, 0.0, 0.0]], r, g, b);
+    // Front face: bottom-left, bottom-right, top-right, top-left
+    push_quad(&mut v,
+        [[-0.15, 0.0, 0.0], [0.15, 0.0, 0.0], [0.15, 0.3, 0.0], [-0.15, 0.3, 0.0]],
+        [[u0, vb], [u1, vb], [u1, vt], [u0, vt]]);
+    // Back face (reversed winding — same UV, mirrored will look fine for a stick)
+    push_quad(&mut v,
+        [[-0.15, 0.3, 0.0], [0.15, 0.3, 0.0], [0.15, 0.0, 0.0], [-0.15, 0.0, 0.0]],
+        [[u0, vt], [u1, vt], [u1, vb], [u0, vb]]);
     v
 }
 
-// ── Generic small cube (0.35³, base at Y=0) with brightness per face ──
-fn build_cube_mesh(base: [f32; 3]) -> Vec<f32> {
-    let mut v = Vec::new();
-    let [r, g, b] = base;
-    const H: f32 = 0.175;
-    const CY: f32 = H;
-    // Top, Bottom, Front/Back, Left/Right — brightness matches chunk renderer
-    push_quad(&mut v, [[-H,CY+H,-H],[H,CY+H,-H],[H,CY+H,H],[-H,CY+H,H]], r,       g,       b      );
-    push_quad(&mut v, [[-H,CY-H,H],[H,CY-H,H],[H,CY-H,-H],[-H,CY-H,-H]], r*0.50, g*0.50, b*0.50);
-    push_quad(&mut v, [[-H,CY-H,H],[H,CY-H,H],[H,CY+H,H],[-H,CY+H,H]],   r*0.80, g*0.80, b*0.80);
-    push_quad(&mut v, [[H,CY-H,-H],[-H,CY-H,-H],[-H,CY+H,-H],[H,CY+H,-H]],r*0.80,g*0.80, b*0.80);
-    push_quad(&mut v, [[-H,CY-H,-H],[-H,CY-H,H],[-H,CY+H,H],[-H,CY+H,-H]],r*0.65,g*0.65,b*0.65);
-    push_quad(&mut v, [[H,CY-H,H],[H,CY-H,-H],[H,CY+H,-H],[H,CY+H,H]],    r*0.65,g*0.65, b*0.65);
-    v
-}
-
-// ── Log cube: same shape but top uses tan ring color and sides use bark color ──
-fn build_log_mesh() -> Vec<f32> {
+// ── Small cube (0.35³, base at Y=0): all 6 faces map the same tile ──
+fn build_cube_mesh(tile_idx: usize) -> Vec<f32> {
+    let (u0, u1, vt, vb) = tile_uv(tile_idx);
+    // Standard face UV: bottom-left→bottom-right→top-right→top-left
+    let uv = [[u0,vb],[u1,vb],[u1,vt],[u0,vt]];
     let mut v = Vec::new();
     const H: f32 = 0.175;
     const CY: f32 = H;
-    let [sr, sg, sb] = [0.55_f32, 0.35, 0.17]; // bark base
-    // Top — lighter tan rings
-    push_quad(&mut v, [[-H,CY+H,-H],[H,CY+H,-H],[H,CY+H,H],[-H,CY+H,H]], 0.73, 0.59, 0.37);
-    // Bottom
-    push_quad(&mut v, [[-H,CY-H,H],[H,CY-H,H],[H,CY-H,-H],[-H,CY-H,-H]], sr*0.50, sg*0.50, sb*0.50);
-    // Front/Back
-    push_quad(&mut v, [[-H,CY-H,H],[H,CY-H,H],[H,CY+H,H],[-H,CY+H,H]],   sr*0.80, sg*0.80, sb*0.80);
-    push_quad(&mut v, [[H,CY-H,-H],[-H,CY-H,-H],[-H,CY+H,-H],[H,CY+H,-H]],sr*0.80,sg*0.80, sb*0.80);
-    // Left/Right
-    push_quad(&mut v, [[-H,CY-H,-H],[-H,CY-H,H],[-H,CY+H,H],[-H,CY+H,-H]],sr*0.65,sg*0.65,sb*0.65);
-    push_quad(&mut v, [[H,CY-H,H],[H,CY-H,-H],[H,CY+H,-H],[H,CY+H,H]],    sr*0.65,sg*0.65, sb*0.65);
+    push_quad(&mut v, [[-H,CY+H,-H],[H,CY+H,-H],[H,CY+H,H],[-H,CY+H,H]],   uv);
+    push_quad(&mut v, [[-H,CY-H,H],[H,CY-H,H],[H,CY-H,-H],[-H,CY-H,-H]],   uv);
+    push_quad(&mut v, [[-H,CY-H,H],[H,CY-H,H],[H,CY+H,H],[-H,CY+H,H]],     uv);
+    push_quad(&mut v, [[H,CY-H,-H],[-H,CY-H,-H],[-H,CY+H,-H],[H,CY+H,-H]], uv);
+    push_quad(&mut v, [[-H,CY-H,-H],[-H,CY-H,H],[-H,CY+H,H],[-H,CY+H,-H]], uv);
+    push_quad(&mut v, [[H,CY-H,H],[H,CY-H,-H],[H,CY+H,-H],[H,CY+H,H]],     uv);
     v
 }
 
@@ -79,11 +80,11 @@ fn upload_vao(mesh: &[f32]) -> u32 {
             gl::STATIC_DRAW,
         );
         let stride = (STRIDE * mem::size_of::<f32>()) as i32;
-        // attrib 0: position
+        // attrib 0: position (vec3)
         gl::VertexAttribPointer(0, 3, gl::FLOAT, gl::FALSE, stride, std::ptr::null());
         gl::EnableVertexAttribArray(0);
-        // attrib 1: color
-        gl::VertexAttribPointer(1, 3, gl::FLOAT, gl::FALSE, stride,
+        // attrib 1: uv (vec2)
+        gl::VertexAttribPointer(1, 2, gl::FLOAT, gl::FALSE, stride,
             (3 * mem::size_of::<f32>()) as *const c_void);
         gl::EnableVertexAttribArray(1);
         gl::BindBuffer(gl::ARRAY_BUFFER, 0);
@@ -94,57 +95,67 @@ fn upload_vao(mesh: &[f32]) -> u32 {
 }
 
 pub struct ItemRenderer {
-    vao_quad: u32,  // stick
-    vao_cube: u32,  // log block
-    vao_dirt: u32,  // dirt clump
-    vao_stone: u32, // stone chunk
+    vao_stick: u32,
+    vao_log: u32,
+    vao_dirt: u32,
+    vao_stone: u32,
+    vao_seeds: u32,
     shader: u32,
     mvp_loc: i32,
-    quad_vert_count: i32,
+    atlas: u32,
+    stick_vert_count: i32,
     cube_vert_count: i32,
-    dirt_vert_count: i32,
-    stone_vert_count: i32,
 }
 
 impl ItemRenderer {
     pub fn new() -> Self {
         let vert = compile_shader(gl::VERTEX_SHADER, r#"#version 330 core
             layout(location = 0) in vec3 aPos;
-            layout(location = 1) in vec3 aColor;
+            layout(location = 1) in vec2 aUV;
             uniform mat4 mvp;
-            out vec3 vColor;
+            out vec2 vUV;
             void main() {
                 gl_Position = mvp * vec4(aPos, 1.0);
-                vColor = aColor;
+                vUV = aUV;
             }
         "#).unwrap();
 
         let frag = compile_shader(gl::FRAGMENT_SHADER, r#"#version 330 core
-            in vec3 vColor;
+            in vec2 vUV;
+            uniform sampler2D u_atlas;
             out vec4 FragColor;
-            void main() { FragColor = vec4(vColor, 1.0); }
+            void main() {
+                vec4 col = texture(u_atlas, vUV);
+                if (col.a < 0.1) discard;
+                FragColor = col;
+            }
         "#).unwrap();
 
         let shader = link_program(vert, frag).unwrap();
         let mvp_loc = unsafe { gl::GetUniformLocation(shader, c"mvp".as_ptr()) };
 
         let stick_mesh = build_stick_mesh();
-        let log_mesh   = build_log_mesh();
-        let dirt_mesh  = build_cube_mesh([0.61, 0.44, 0.22]);
-        let stone_mesh = build_cube_mesh([0.50, 0.50, 0.50]);
+        let log_mesh   = build_cube_mesh(ItemType::LogBlock.tile_index());
+        let dirt_mesh  = build_cube_mesh(ItemType::DirtClump.tile_index());
+        let stone_mesh = build_cube_mesh(ItemType::StoneChunk.tile_index());
+        let seeds_mesh = build_cube_mesh(ItemType::Seeds.tile_index());
 
-        let quad_vert_count  = (stick_mesh.len() / STRIDE) as i32;
-        let cube_vert_count  = (log_mesh.len()   / STRIDE) as i32;
-        let dirt_vert_count  = (dirt_mesh.len()  / STRIDE) as i32;
-        let stone_vert_count = (stone_mesh.len() / STRIDE) as i32;
+        let stick_vert_count = (stick_mesh.len() / STRIDE) as i32;
+        let cube_vert_count  = (log_mesh.len()   / STRIDE) as i32; // same for all cubes
 
-        let vao_quad  = upload_vao(&stick_mesh);
-        let vao_cube  = upload_vao(&log_mesh);
+        let vao_stick = upload_vao(&stick_mesh);
+        let vao_log   = upload_vao(&log_mesh);
         let vao_dirt  = upload_vao(&dirt_mesh);
         let vao_stone = upload_vao(&stone_mesh);
+        let vao_seeds = upload_vao(&seeds_mesh);
 
-        ItemRenderer { vao_quad, vao_cube, vao_dirt, vao_stone, shader, mvp_loc,
-                       quad_vert_count, cube_vert_count, dirt_vert_count, stone_vert_count }
+        let atlas = create_item_atlas();
+
+        ItemRenderer {
+            vao_stick, vao_log, vao_dirt, vao_stone, vao_seeds,
+            shader, mvp_loc, atlas,
+            stick_vert_count, cube_vert_count,
+        }
     }
 
     pub fn draw(&self, items: &[ItemEntity], view: &glam::Mat4, projection: &glam::Mat4) {
@@ -152,14 +163,19 @@ impl ItemRenderer {
 
         unsafe {
             gl::Disable(gl::CULL_FACE);
+            gl::Enable(gl::BLEND);
+            gl::BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);
             gl::UseProgram(self.shader);
+            gl::ActiveTexture(gl::TEXTURE0);
+            gl::BindTexture(gl::TEXTURE_2D, self.atlas);
 
             for item in items {
                 let (vao, vert_count) = match item.item {
-                    ItemType::Stick      => (self.vao_quad,  self.quad_vert_count),
-                    ItemType::LogBlock   => (self.vao_cube,  self.cube_vert_count),
-                    ItemType::DirtClump  => (self.vao_dirt,  self.dirt_vert_count),
-                    ItemType::StoneChunk => (self.vao_stone, self.stone_vert_count),
+                    ItemType::Stick      => (self.vao_stick, self.stick_vert_count),
+                    ItemType::LogBlock   => (self.vao_log,   self.cube_vert_count),
+                    ItemType::DirtClump  => (self.vao_dirt,  self.cube_vert_count),
+                    ItemType::StoneChunk => (self.vao_stone, self.cube_vert_count),
+                    ItemType::Seeds      => (self.vao_seeds, self.cube_vert_count),
                 };
 
                 let pos = glam::Vec3::new(
@@ -177,6 +193,8 @@ impl ItemRenderer {
             }
 
             gl::BindVertexArray(0);
+            gl::BindTexture(gl::TEXTURE_2D, 0);
+            gl::Disable(gl::BLEND);
             gl::Enable(gl::CULL_FACE);
         }
     }
@@ -185,10 +203,12 @@ impl ItemRenderer {
 impl Drop for ItemRenderer {
     fn drop(&mut self) {
         unsafe {
-            gl::DeleteVertexArrays(1, &self.vao_quad);
-            gl::DeleteVertexArrays(1, &self.vao_cube);
+            gl::DeleteVertexArrays(1, &self.vao_stick);
+            gl::DeleteVertexArrays(1, &self.vao_log);
             gl::DeleteVertexArrays(1, &self.vao_dirt);
             gl::DeleteVertexArrays(1, &self.vao_stone);
+            gl::DeleteVertexArrays(1, &self.vao_seeds);
+            gl::DeleteTextures(1, &self.atlas);
             gl::DeleteProgram(self.shader);
         }
     }

@@ -312,6 +312,7 @@ fn main() {
 
                 // Update world around player
                 world.update(player.position);
+                world.tick_water(delta_time);
             }
 
             // Clear and draw
@@ -325,21 +326,6 @@ fn main() {
             chunk_renderer.begin_frame(&view, &projection);
             world.draw(&chunk_renderer, &camera);
             chunk_renderer.end_frame();
-
-            // Draw crosshair
-            crosshair_renderer.draw();
-
-            // Draw health bar
-            let health_fraction = player.health as f32 / 100.0;
-            health_bar.draw(health_fraction);
-
-            // Draw hotbar
-            hotbar_renderer.draw(selected_slot, &hotbar, win_w, win_h);
-
-            // Draw bag
-            if bag_open {
-                bag_renderer.draw(&player.inventory, win_w, win_h);
-            }
 
             // Draw player model
             // SWING_SPEED: future tools can multiply this (axe faster, pick medium, etc.)
@@ -376,6 +362,29 @@ fn main() {
                         crack_renderer.draw(target, stage, &view, &projection);
                     }
                 }
+            }
+
+            // ── HUD (drawn last so nothing 3D renders on top) ──────────────
+
+            // Underwater tint — check the block at eye level
+            let eye = camera.position;
+            if world.get_block(eye.x.floor() as i32, eye.y.floor() as i32, eye.z.floor() as i32) == world::BlockType::Water {
+                hotbar_renderer.draw_fullscreen_tint([0.05, 0.20, 0.60, 0.35], win_w, win_h);
+            }
+
+            // Draw crosshair
+            crosshair_renderer.draw();
+
+            // Draw health bar
+            let health_fraction = player.health as f32 / 100.0;
+            health_bar.draw(health_fraction);
+
+            // Draw hotbar
+            hotbar_renderer.draw(selected_slot, &hotbar, win_w, win_h);
+
+            // Draw bag
+            if bag_open {
+                bag_renderer.draw(&player.inventory, win_w, win_h);
             }
 
             // Draw pause menu

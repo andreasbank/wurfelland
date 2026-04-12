@@ -44,6 +44,106 @@ pub fn link_program(vertex_shader: GLuint, fragment_shader: GLuint) -> Result<GL
     }
 }
 
+// ── Item atlas ────────────────────────────────────────────────────────────────
+// 256×256 RGBA texture, 16×16 tiles, 16 tiles per row.
+// Each tile is 16×16 pixels = 256 [R,G,B,A] values, row-major, top-to-bottom.
+//
+// HOW TO ADD YOUR OWN PIXEL ART FOR A TILE
+// ─────────────────────────────────────────
+// 1. Find the tile's section below (e.g. "=== TILE 0: Stick ===").
+// 2. Replace the `fill_tile_placeholder(...)` call with `write_tile(&mut pixels, ..., &YOUR_DATA)`.
+// 3. Define YOUR_DATA as a `[[u8;4]; 256]` — 256 pixels in reading order (left→right, top→bottom).
+//    Each pixel is [R, G, B, A]. Use A=0 for transparent background.
+//
+// PIXEL FORMAT REMINDER
+//   [255, 255, 255, 255] = solid white
+//   [140,  89,  43, 255] = brown (stick color)
+//   [  0,   0,   0,   0] = fully transparent
+//
+// TILE MAP (col, row inside the 256×256 atlas)
+//   Tile 0 = Stick       (col 0, row 0) — pixels 0..256
+//   Tile 1 = LogBlock    (col 1, row 0)
+//   Tile 2 = DirtClump   (col 2, row 0)
+//   Tile 3 = StoneChunk  (col 3, row 0)
+//   Tile 4 = Seeds       (col 4, row 0)
+
+#[allow(dead_code)]
+pub fn write_tile(pixels: &mut [u8], tile_idx: usize, data: &[[u8; 4]; 256]) {
+    const ATLAS: usize = 256;
+    const TILE:  usize = 16;
+    const TPR:   usize = ATLAS / TILE; // tiles per row = 16
+    let tc = tile_idx % TPR;
+    let tr = tile_idx / TPR;
+    for py in 0..TILE {
+        for px in 0..TILE {
+            let ax = tc * TILE + px;
+            let ay = tr * TILE + py;
+            let dst = (ay * ATLAS + ax) * 4;
+            let src = &data[py * TILE + px];
+            pixels[dst..dst + 4].copy_from_slice(src);
+        }
+    }
+}
+
+/// Fills a tile with a solid opaque color and a 1px black border.
+/// Used as a placeholder until real pixel art is provided.
+fn fill_tile_placeholder(pixels: &mut [u8], tile_idx: usize, r: u8, g: u8, b: u8) {
+    const ATLAS: usize = 256;
+    const TILE:  usize = 16;
+    const TPR:   usize = ATLAS / TILE;
+    let tc = tile_idx % TPR;
+    let tr = tile_idx / TPR;
+    for py in 0..TILE {
+        for px in 0..TILE {
+            let ax = tc * TILE + px;
+            let ay = tr * TILE + py;
+            let dst = (ay * ATLAS + ax) * 4;
+            let border = px == 0 || py == 0 || px == TILE - 1 || py == TILE - 1;
+            pixels[dst]     = if border { 40 } else { r };
+            pixels[dst + 1] = if border { 20 } else { g };
+            pixels[dst + 2] = if border { 10 } else { b };
+            pixels[dst + 3] = 255;
+        }
+    }
+}
+
+pub fn create_item_atlas() -> u32 {
+    const ATLAS_SIZE: usize = 256;
+    let mut pixels = vec![0u8; ATLAS_SIZE * ATLAS_SIZE * 4];
+
+    // === TILE 0: Stick ===
+    // Replace fill_tile_placeholder with write_tile(&mut pixels, 0, &YOUR_DATA)
+    // when you have your pixel art ready.
+    fill_tile_placeholder(&mut pixels, 0, 140, 89, 43);
+
+    // === TILE 1: LogBlock ===
+    fill_tile_placeholder(&mut pixels, 1, 139, 90, 43);
+
+    // === TILE 2: DirtClump ===
+    fill_tile_placeholder(&mut pixels, 2, 156, 112, 57);
+
+    // === TILE 3: StoneChunk ===
+    fill_tile_placeholder(&mut pixels, 3, 128, 128, 128);
+
+    // === TILE 4: Seeds ===
+    fill_tile_placeholder(&mut pixels, 4, 204, 192, 51);
+
+    unsafe {
+        let mut id = 0u32;
+        gl::GenTextures(1, &mut id);
+        gl::BindTexture(gl::TEXTURE_2D, id);
+        gl::TexImage2D(gl::TEXTURE_2D, 0, gl::RGBA as i32,
+            ATLAS_SIZE as i32, ATLAS_SIZE as i32, 0,
+            gl::RGBA, gl::UNSIGNED_BYTE, pixels.as_ptr() as *const _);
+        gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::NEAREST as i32);
+        gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::NEAREST as i32);
+        gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_S, gl::CLAMP_TO_EDGE as i32);
+        gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_T, gl::CLAMP_TO_EDGE as i32);
+        gl::BindTexture(gl::TEXTURE_2D, 0);
+        id
+    }
+}
+
 // Generates a 256x256 atlas (16x16 tiles, each tile 16x16 px).
 // Tile layout matches BlockType::texture_id():
 //   0 = Grass top (green)

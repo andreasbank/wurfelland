@@ -6,15 +6,28 @@ pub enum ItemType {
     LogBlock,
     DirtClump,
     StoneChunk,
+    Seeds,
 }
 
 impl ItemType {
+    /// Atlas tile index in the item atlas (256×256, 16 tiles/row, 16×16 px each).
+    pub fn tile_index(&self) -> usize {
+        match self {
+            ItemType::Stick      => 0,
+            ItemType::LogBlock   => 1,
+            ItemType::DirtClump  => 2,
+            ItemType::StoneChunk => 3,
+            ItemType::Seeds      => 4,
+        }
+    }
+
     pub fn color(&self) -> [f32; 3] {
         match self {
             ItemType::Stick      => [0.55, 0.35, 0.17],
             ItemType::LogBlock   => [0.55, 0.35, 0.17], // fallback; faces are shaded in renderer
             ItemType::DirtClump  => [0.61, 0.44, 0.22],
             ItemType::StoneChunk => [0.50, 0.50, 0.50],
+            ItemType::Seeds      => [0.80, 0.75, 0.20],
         }
     }
 }

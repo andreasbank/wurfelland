@@ -7,6 +7,9 @@ use noise::{NoiseFn, Perlin};
 
 pub type Blocks = [[[BlockType; 16]; 16]; 16];
 
+/// Per-block water levels for a chunk (0 = not water, 1–7 = flowing, 8 = source).
+pub type WaterLevels = [[[u8; 16]; 16]; 16];
+
 /// The single-block-deep face of an adjacent chunk, needed for border face culling.
 /// `right[y][z]`  = blocks[0][y][z]  of the chunk to our +X
 /// `left[y][z]`   = blocks[15][y][z] of the chunk to our -X
@@ -17,6 +20,14 @@ pub struct NeighborEdges {
     pub left:  [[BlockType; 16]; 16],
     pub front: [[BlockType; 16]; 16],
     pub back:  [[BlockType; 16]; 16],
+    /// Water levels at lx=0 of the +X neighbour  [y][z]
+    pub wl_right: [[u8; 16]; 16],
+    /// Water levels at lx=15 of the -X neighbour [y][z]
+    pub wl_left:  [[u8; 16]; 16],
+    /// Water levels at lz=0 of the +Z neighbour  [y][x]
+    pub wl_front: [[u8; 16]; 16],
+    /// Water levels at lz=15 of the -Z neighbour [y][x]
+    pub wl_back:  [[u8; 16]; 16],
 }
 
 impl NeighborEdges {}
@@ -211,8 +222,8 @@ impl Chunk {
     }
 
     /// Build vertex data off the main thread.
-    /// Takes a block snapshot + pre-extracted neighbor edge slices.
-    pub fn build_vertices(blocks: &Blocks, edges: &NeighborEdges) -> Vec<f32> {
+    /// Takes a block snapshot + pre-extracted neighbor edge slices + water level snapshot.
+    pub fn build_vertices(blocks: &Blocks, edges: &NeighborEdges, water_levels: &WaterLevels) -> Vec<f32> {
         let mut vertices = Vec::new();
 
         for x in 0..16usize {
@@ -229,6 +240,47 @@ impl Chunk {
                         continue;
                     }
 
+                    // Water gets variable-height geometry driven by water_levels.
+                    if block == BlockType::Water {
+                        let lxi = x as i32;
+                        let lyi = y as i32;
+                        let lzi = z as i32;
+                        for face in [Face::Right, Face::Left, Face::Up, Face::Down, Face::Front, Face::Back] {
+                            if !Self::is_face_visible(blocks, x, y, z, face, edges) { continue; }
+                            let corners: [f32; 4] = match face {
+                                Face::Up => [
+                                    // v0=front-left (x,z+1), v1=front-right (x+1,z+1)
+                                    // v2=back-right (x+1,z), v3=back-left  (x,z)
+                                    Self::water_corner_h(lxi,   lyi, lzi+1, blocks, water_levels, edges),
+                                    Self::water_corner_h(lxi+1, lyi, lzi+1, blocks, water_levels, edges),
+                                    Self::water_corner_h(lxi+1, lyi, lzi,   blocks, water_levels, edges),
+                                    Self::water_corner_h(lxi,   lyi, lzi,   blocks, water_levels, edges),
+                                ],
+                                Face::Right => [0.0,
+                                    Self::water_corner_h(lxi+1, lyi, lzi,   blocks, water_levels, edges),
+                                    Self::water_corner_h(lxi+1, lyi, lzi+1, blocks, water_levels, edges),
+                                    0.0],
+                                Face::Left => [0.0,
+                                    Self::water_corner_h(lxi,   lyi, lzi+1, blocks, water_levels, edges),
+                                    Self::water_corner_h(lxi,   lyi, lzi,   blocks, water_levels, edges),
+                                    0.0],
+                                Face::Front => [0.0,
+                                    Self::water_corner_h(lxi+1, lyi, lzi+1, blocks, water_levels, edges),
+                                    Self::water_corner_h(lxi,   lyi, lzi+1, blocks, water_levels, edges),
+                                    0.0],
+                                Face::Back => [0.0,
+                                    Self::water_corner_h(lxi,   lyi, lzi,   blocks, water_levels, edges),
+                                    Self::water_corner_h(lxi+1, lyi, lzi,   blocks, water_levels, edges),
+                                    0.0],
+                                Face::Down => [0.0; 4],
+                            };
+                            vertices.extend(Self::water_face_vertices(
+                                x as f32, y as f32, z as f32, face, block, corners,
+                            ));
+                        }
+                        continue;
+                    }
+
                     for face in [Face::Right, Face::Left, Face::Up, Face::Down, Face::Front, Face::Back] {
                         if Self::is_face_visible(blocks, x, y, z, face, edges) {
                             let ao = Self::compute_ao(blocks, x as i32, y as i32, z as i32, face);
@@ -242,6 +294,82 @@ impl Chunk {
         }
 
         vertices
+    }
+
+    // ── Water helpers ────────────────────────────────────────────────────────
+
+    /// Look up the water level at chunk-local coords, falling back to neighbor edges.
+    fn water_level_local(lx: i32, ly: i32, lz: i32,
+                         water_levels: &WaterLevels,
+                         edges: &NeighborEdges) -> u8 {
+        if ly < 0 || ly >= 16 { return 0; }
+        if lx < 0 {
+            if lz >= 0 && lz < 16 { edges.wl_left[ly as usize][lz as usize] } else { 0 }
+        } else if lx >= 16 {
+            if lz >= 0 && lz < 16 { edges.wl_right[ly as usize][lz as usize] } else { 0 }
+        } else if lz < 0 {
+            edges.wl_back[ly as usize][lx as usize]
+        } else if lz >= 16 {
+            edges.wl_front[ly as usize][lx as usize]
+        } else {
+            water_levels[lx as usize][ly as usize][lz as usize]
+        }
+    }
+
+    /// Height [0.0, 1.0] for the water surface at corner (cx, cz).
+    /// Corner (cx, cz) is shared by blocks (cx-1,cz-1), (cx,cz-1), (cx-1,cz), (cx,cz).
+    fn water_corner_h(cx: i32, cy: i32, cz: i32,
+                      _blocks: &Blocks,
+                      water_levels: &WaterLevels,
+                      edges: &NeighborEdges) -> f32 {
+        let mut max_level: u8 = 0;
+        for (bx, bz) in [(cx-1, cz-1), (cx, cz-1), (cx-1, cz), (cx, cz)] {
+            let lvl = Self::water_level_local(bx, cy, bz, water_levels, edges);
+            if lvl == 0 { continue; }
+            // Block with water directly above it counts as full height.
+            let above = Self::water_level_local(bx, cy + 1, bz, water_levels, edges);
+            let eff = if above > 0 { 8 } else { lvl };
+            max_level = max_level.max(eff);
+        }
+        max_level as f32 / 8.0
+    }
+
+    /// Emit vertices for a water face using per-corner height offsets.
+    /// `corners[i]` is the Y offset (0.0–1.0) for vertex i above the block's base Y.
+    /// For Up: all 4 corners vary. For side faces: corners[1] and [2] are the top pair.
+    fn water_face_vertices(x: f32, y: f32, z: f32, face: Face,
+                           block_type: BlockType, corners: [f32; 4]) -> Vec<f32> {
+        let mut pos = face.positions(x, y, z);
+        match face {
+            Face::Up => {
+                for i in 0..4 { pos[i][1] = y + corners[i]; }
+            }
+            Face::Right | Face::Left | Face::Front | Face::Back => {
+                pos[1][1] = y + corners[1];
+                pos[2][1] = y + corners[2];
+            }
+            Face::Down => {}
+        }
+        let tex = face.texture_coords(block_type.texture_id(face), 16);
+        let [r, g, b] = block_type.color();
+        let bright = match face {
+            Face::Up                  => 1.0,
+            Face::Down                => 0.5,
+            Face::Front | Face::Back  => 0.8,
+            Face::Left  | Face::Right => 0.65,
+        };
+        let mut verts = Vec::new();
+        for &vi in &[0usize, 1, 2, 0, 2, 3] {
+            verts.push(pos[vi][0]);
+            verts.push(pos[vi][1]);
+            verts.push(pos[vi][2]);
+            verts.push(r * bright);
+            verts.push(g * bright);
+            verts.push(b * bright);
+            verts.push(tex[vi][0]);
+            verts.push(tex[vi][1]);
+        }
+        verts
     }
 
     fn is_face_visible(blocks: &Blocks, x: usize, y: usize, z: usize, face: Face, edges: &NeighborEdges) -> bool {

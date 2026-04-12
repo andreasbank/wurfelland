@@ -81,7 +81,10 @@ impl BlockType {
             BlockType::Log          => vec![ItemType::LogBlock],
             BlockType::Grass |
             BlockType::Dirt         => vec![ItemType::DirtClump],
-            BlockType::Stone => vec![ItemType::StoneChunk],
+            BlockType::TallGrass    => {
+                if hash % 20 == 0 { vec![ItemType::Seeds] } else { vec![] }
+            }
+            BlockType::Stone        => vec![ItemType::StoneChunk],
             _ => vec![],
         }
     }

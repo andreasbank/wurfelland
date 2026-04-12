@@ -77,6 +77,21 @@ impl HotbarRenderer {
         }
     }
 
+    pub fn draw_fullscreen_tint(&self, color: [f32; 4], screen_w: f32, screen_h: f32) {
+        let screen = [screen_w, screen_h];
+        unsafe {
+            gl::Disable(gl::DEPTH_TEST);
+            gl::Enable(gl::BLEND);
+            gl::BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);
+            gl::UseProgram(self.shader);
+            gl::BindVertexArray(self.vao);
+            self.draw_rect(0.0, 0.0, screen_w, screen_h, color, screen);
+            gl::BindVertexArray(0);
+            gl::Disable(gl::BLEND);
+            gl::Enable(gl::DEPTH_TEST);
+        }
+    }
+
     fn draw_rect(&self, x: f32, y: f32, w: f32, h: f32, color: [f32; 4], screen: [f32; 2]) {
         unsafe {
             gl::Uniform2f(self.pos_loc,    x, y);
