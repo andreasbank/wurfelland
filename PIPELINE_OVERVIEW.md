@@ -4,7 +4,7 @@
 
 ```
 ╔══════════════════════════════════════════════════════════════════════════════════╗
-║                          EVERY FRAME  (main.rs loop)                           ║
+║                          EVERY FRAME  (main.rs loop)                             ║
 ╚══════════════════════════════════════════════════════════════════════════════════╝
 
  Player input → player.walk() / player.jump() / process_mouse_movement()
@@ -111,7 +111,7 @@ Vertex layout in memory (per chunk VBO):
   ┌──────────────────────────────────────────────┐
   │ f32 f32 f32 │ f32 f32 f32 │ f32 f32          │
   │   x   y   z │   r   g   b │  u   v           │
-  │  position   │ lit color   │ atlas UV          │
+  │  position   │ lit color   │ atlas UV         │
   └──────────────────────────────────────────────┘
   attrib 0 ──────┘             └── attrib 1       └── attrib 2
 ```
@@ -126,10 +126,10 @@ create_block_atlas()                                       [renderer/utils.rs]
   256×256 RGBA texture, 16 tiles per row, each tile 16×16 px
 
   Tile index → block face:
-  ┌────┬────┬────┬────┬────┬────┬────┬────┬────┬──────┐
-  │ 0  │ 1  │ 2  │ 3  │ 4  │ 5  │ 6  │ 7  │ 8  │ 9-13 │
+  ┌─────┬────┬─────┬─────┬─────────┬───────┬──────┬──────┬─────────┬──────┐
+  │ 0   │ 1  │ 2   │ 3   │ 4       │ 5     │ 6    │ 7    │ 8       │ 9-13 │
   │Grass│Dirt│Stone│Water│GrassSide│LogSide│Leaves│LogTop│TallGrass│Cracks│
-  └────┴────┴────┴────┴────┴────┴────┴────┴────┴──────┘
+  └─────┴────┴─────┴─────┴─────────┴───────┴──────┴──────┴─────────┴──────┘
 
   UV mapping:  col = tile_id % 16,  row = tile_id / 16
                u = [col/16, (col+1)/16]
@@ -158,9 +158,9 @@ Water block at [x, y, z] with water_level L (1–8):
 
   Top face (Face::Up) — 4 corners all vary:
   ┌──────────────────────────────────────────────┐
-  │ v3 (x,  z  ) h=hBL    v2 (x+1,z  ) h=hBR   │
-  │                                               │
-  │ v0 (x,  z+1) h=hFL    v1 (x+1,z+1) h=hFR   │
+  │ v3 (x,  z  ) h=hBL    v2 (x+1,z  ) h=hBR     │
+  │                                              │
+  │ v0 (x,  z+1) h=hFL    v1 (x+1,z+1) h=hFR     │
   └──────────────────────────────────────────────┘
   Y of each corner = y + corner_h  →  tilted surface toward flow direction
 
@@ -224,8 +224,8 @@ Step 4 — Fill
  │                                                                          │
  │  PASS 1 — Opaque geometry          chunk_renderer.set_transparent(false) │
  │  DepthMask ON,  CullFace BACK                                            │
- │  Fragment shader: discard if α < 0.99  (skips water / leaves / glass)   │
- │  world.draw() → frustum cull → draw_chunk() per visible chunk           │
+ │  Fragment shader: discard if α < 0.99  (skips water / leaves / glass)    │
+ │  world.draw() → frustum cull → draw_chunk() per visible chunk            │
  │       chunk.model_matrix() → translate to chunk's world position         │
  │       gl::UniformMatrix4fv(model, view, projection)                      │
  │       gl::BindVertexArray(mesh.vao)                                      │
@@ -234,13 +234,13 @@ Step 4 — Fill
  │  PASS 2 — Transparent geometry     chunk_renderer.set_transparent(true)  │
  │  DepthMask OFF (water doesn't occlude things behind it)                  │
  │  CullFace OFF  (see water from below)                                    │
- │  Fragment shader: discard if α >= 0.99  (skips opaque blocks)           │
+ │  Fragment shader: discard if α >= 0.99  (skips opaque blocks)            │
  │  Same draw_chunk() loop — water faces now pass the filter                │
  │       Fog applied: mix(block_color, sky_color, fog_factor)               │
  │       fog_start=32  fog_end=64  (world units)                            │
  │                                                                          │
  │  3D overlays (depth test ON):                                            │
- │     player_renderer.draw()   ← arms with swing_angle rotation           │
+ │     player_renderer.draw()   ← arms with swing_angle rotation            │
  │     outline_renderer.draw()  ← slightly expanded cube wireframe          │
  │     item_renderer.draw()     ← spinning dropped items                    │
  │     crack_renderer.draw()    ← crack overlay tiles 9-13 from atlas       │
