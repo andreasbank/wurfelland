@@ -5,6 +5,8 @@ A voxel sandbox game written in Rust, inspired by Minecraft. Built from scratch 
 ![Rust](https://img.shields.io/badge/Rust-1.75+-orange)
 ![OpenGL](https://img.shields.io/badge/OpenGL-3.3-blue)
 
+![Screenshot](screenshot.png)
+
 ## Features
 
 - **Procedurally generated terrain** — Perlin noise with surface variation, oceans, beaches, stone layers

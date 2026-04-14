@@ -226,6 +226,7 @@ impl World {
     // Drain all pending during startup
     pub fn finalize_all_pending(&mut self) {
         std::thread::sleep(std::time::Duration::from_millis(5));
+        self.dispatch_terrain_threads();
         // Drain terrain threads
         while let Ok(ready) = self.block_rx.try_recv() {
             self.pending_blocks.remove(&ready.position);

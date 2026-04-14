@@ -32,7 +32,7 @@ fn main() {
     
     // Create window
     let (mut window, events) = glfw
-        .create_window(1600, 1200, "OpenGL Triangle", glfw::WindowMode::Windowed)
+        .create_window(1600, 1200, "Wurfelland", glfw::WindowMode::Windowed)
         .unwrap();
     
     window.make_current();
