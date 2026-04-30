@@ -51,7 +51,7 @@ fn main() {
     
     unsafe {
         let chunk_renderer = ChunkRenderer::new().unwrap();
-        println!("OpenGL initialized! Press ESC to quit.");
+        println!("OpenGL initialized");
 
         // Enable depth testing:
         gl::Enable(gl::DEPTH_TEST);
@@ -84,7 +84,7 @@ fn main() {
 
         let crosshair_renderer = crosshair_renderer::Crosshair::new();
         let health_bar = HealthBar::new();
-        let menu_renderer = MenuRenderer::new();
+        let mut menu_renderer = MenuRenderer::new();
         let outline_renderer = BlockOutlineRenderer::new();
         let player_renderer = PlayerRenderer::new();
         let crack_renderer = CrackRenderer::new();
@@ -135,18 +135,19 @@ fn main() {
 
                     glfw::WindowEvent::MouseButton(glfw::MouseButton::Button1, Action::Press, _) => {
                         if paused {
-                            if menu_renderer.is_exit_clicked(last_mouse_x, last_mouse_y, win_w, win_h) {
-                                window.set_should_close(true);
-                            } else if menu_renderer.is_outline_clicked(last_mouse_x, last_mouse_y, win_w, win_h) {
-                                outline_enabled = !outline_enabled;
-                            } else if menu_renderer.is_res_clicked(last_mouse_x, last_mouse_y, win_w, win_h) {
-                                hi_res = !hi_res;
-                                let (new_w, new_h) = if hi_res { (1600, 1200) } else { (800, 600) };
-                                window.set_size(new_w, new_h);
-                                win_w = new_w as f32;
-                                win_h = new_h as f32;
-                                camera.on_resize(new_w as u32, new_h as u32);
-                                gl::Viewport(0, 0, new_w, new_h);
+                            match menu_renderer.handle_click(last_mouse_x, last_mouse_y, win_w, win_h) {
+                                Some("exit") => window.set_should_close(true),
+                                Some("outline") => outline_enabled = !outline_enabled,
+                                Some("res") => {
+                                    hi_res = !hi_res;
+                                    let (new_w, new_h) = if hi_res { (1600, 1200) } else { (800, 600) };
+                                    window.set_size(new_w, new_h);
+                                    win_w = new_w as f32;
+                                    win_h = new_h as f32;
+                                    camera.on_resize(new_w as u32, new_h as u32);
+                                    gl::Viewport(0, 0, new_w, new_h);
+                                }
+                                _ => {}
                             }
                         } else {
                             window.set_cursor_mode(glfw::CursorMode::Disabled);
