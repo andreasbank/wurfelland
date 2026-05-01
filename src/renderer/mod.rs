@@ -32,3 +32,6 @@ pub use hotbar_renderer::HotbarRenderer;
 
 pub mod bag_renderer;
 pub use bag_renderer::BagRenderer;
+
+pub mod build_menu_renderer;
+pub use build_menu_renderer::BuildMenuRenderer;

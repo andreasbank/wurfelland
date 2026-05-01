@@ -1,19 +1,25 @@
 use std::mem;
 use std::os::raw::c_void;
 use crate::renderer::utils::{compile_shader, link_program};
+use crate::renderer::ui::Window;
 use crate::world::item::ItemType;
 use crate::game::player::INVENTORY_SIZE;
 
 const COLS: usize = 3;
 const ROWS: usize = 6;
-const SLOT_SIZE: f32 = 50.0;
-const SLOT_GAP:  f32 =  5.0;
-const BORDER:    f32 =  2.0;
-const PADDING:   f32 = 16.0;
 
-// ── Bitmap font ───────────────────────────────────────────────────────────────
-// 11 glyphs in order: x, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9
-// Each glyph: 3 wide × 5 tall pixels. Each row is one u8 (3 MSBs, left→right).
+// All sizes in [0,1] normalised screen space (Y down).
+const SLOT_SIZE: f32 = 0.075;
+const SLOT_GAP:  f32 = 0.010;
+const BORDER:    f32 = 0.003;
+const PADDING:   f32 = 0.016;
+// Count-label glyph dimensions in [0,1] space.
+const GLYPH_W:   f32 = 0.0085;
+const GLYPH_H:   f32 = 0.0140;
+const GLYPH_GAP: f32 = 0.0010;
+
+// ── Digit atlas ───────────────────────────────────────────────────────────────
+// 11 glyphs in order: x, 0–9.  Each glyph: 3 wide × 5 tall pixels.
 const GLYPHS: [[u8; 5]; 11] = [
     [0b101_00000, 0b101_00000, 0b010_00000, 0b101_00000, 0b101_00000], // x
     [0b111_00000, 0b101_00000, 0b101_00000, 0b101_00000, 0b111_00000], // 0
@@ -27,8 +33,6 @@ const GLYPHS: [[u8; 5]; 11] = [
     [0b111_00000, 0b101_00000, 0b111_00000, 0b101_00000, 0b111_00000], // 8
     [0b111_00000, 0b101_00000, 0b111_00000, 0b001_00000, 0b111_00000], // 9
 ];
-
-// Atlas: 11 glyphs × 4px each (3 content + 1 gap) = 44 wide, 5 tall
 const ATLAS_W: i32 = 44;
 const ATLAS_H: i32 = 5;
 
@@ -58,21 +62,22 @@ fn create_digit_texture() -> u32 {
 }
 
 pub struct BagRenderer {
-    vao: u32,
-    // Rect shader
-    shader: u32,
-    pos_loc: i32,
-    size_loc: i32,
-    screen_loc: i32,
-    color_loc: i32,
-    angle_loc: i32,
-    // Text shader
-    text_shader: u32,
-    digit_tex: u32,
-    t_pos_loc: i32,
-    t_screen_loc: i32,
-    t_glyph_loc: i32,
-    t_scale_loc: i32,
+    // Window provides flat rect drawing via its UiRenderer.
+    window:         Window,
+    // Shared VAO/VBO for the two bag-specific shaders (rotated rect + glyph).
+    vao:            u32,
+    vbo:            u32,
+    // Rotated rect shader (stick icon).
+    rot_shader:     u32,
+    rot_center_loc: i32,
+    rot_half_loc:   i32,
+    rot_angle_loc:  i32,
+    rot_color_loc:  i32,
+    // Digit glyph shader.
+    glyph_shader:   u32,
+    glyph_rect_loc: i32,
+    glyph_idx_loc:  i32,
+    digit_tex:      u32,
 }
 
 impl BagRenderer {
@@ -83,73 +88,56 @@ impl BagRenderer {
             0.0, 0.0,  1.0, 1.0,  0.0, 1.0,
         ];
 
-        // Rect shader
-        let vert = compile_shader(gl::VERTEX_SHADER, r#"#version 330 core
+        // ── rotated rect shader ─────────────────────────────────────────────
+        let rot_vert = compile_shader(gl::VERTEX_SHADER, r#"#version 330 core
             layout(location = 0) in vec2 aPos;
-            uniform vec2 u_pos;
-            uniform vec2 u_size;
-            uniform vec2 u_screen;
+            uniform vec2  u_center; // center in [0,1]
+            uniform vec2  u_half;   // half-size in [0,1]
             uniform float u_angle;
             void main() {
-                vec2 center  = u_pos + u_size * 0.5;
-                vec2 local   = (aPos - 0.5) * u_size;
+                vec2 local = (aPos - 0.5) * 2.0; // [-1,1]
                 float c = cos(u_angle); float s = sin(u_angle);
-                vec2 rotated = vec2(c*local.x - s*local.y, s*local.x + c*local.y);
-                vec2 px  = center + rotated;
-                vec2 ndc = (px / u_screen) * 2.0 - 1.0;
-                gl_Position = vec4(ndc, 0.0, 1.0);
-            }
-        "#).unwrap();
-
-        let frag = compile_shader(gl::FRAGMENT_SHADER, r#"#version 330 core
+                vec2 rot = vec2(c * local.x - s * local.y,
+                                s * local.x + c * local.y);
+                vec2 p = u_center + rot * u_half;
+                gl_Position = vec4(p.x * 2.0 - 1.0, -(p.y * 2.0 - 1.0), 0.0, 1.0);
+            }"#).unwrap();
+        let rot_frag = compile_shader(gl::FRAGMENT_SHADER, r#"#version 330 core
             uniform vec4 u_color;
             out vec4 FragColor;
-            void main() { FragColor = u_color; }
-        "#).unwrap();
+            void main() { FragColor = u_color; }"#).unwrap();
+        let rot_shader     = link_program(rot_vert, rot_frag).unwrap();
+        let rot_center_loc = unsafe { gl::GetUniformLocation(rot_shader, c"u_center".as_ptr()) };
+        let rot_half_loc   = unsafe { gl::GetUniformLocation(rot_shader, c"u_half".as_ptr())   };
+        let rot_angle_loc  = unsafe { gl::GetUniformLocation(rot_shader, c"u_angle".as_ptr())  };
+        let rot_color_loc  = unsafe { gl::GetUniformLocation(rot_shader, c"u_color".as_ptr())  };
 
-        let shader = link_program(vert, frag).unwrap();
-
-        // Text shader — samples glyph from digit atlas, renders white pixels
-        let t_vert = compile_shader(gl::VERTEX_SHADER, r#"#version 330 core
+        // ── digit glyph shader ──────────────────────────────────────────────
+        let glyph_vert = compile_shader(gl::VERTEX_SHADER, r#"#version 330 core
             layout(location = 0) in vec2 aPos;
-            uniform vec2  u_pos;
-            uniform vec2  u_screen;
-            uniform int   u_glyph;
-            uniform float u_scale;
+            uniform vec4 u_rect;  // glyph cell in [0,1] screen space (Y down)
+            uniform int  u_glyph;
             out vec2 v_uv;
             void main() {
                 float gx = float(u_glyph) * 4.0;
-                v_uv = vec2((gx + aPos.x * 3.0) / 44.0, 1.0 - aPos.y);
-                vec2 px  = u_pos + aPos * vec2(3.0, 5.0) * u_scale;
-                vec2 ndc = (px / u_screen) * 2.0 - 1.0;
-                gl_Position = vec4(ndc, 0.0, 1.0);
-            }
-        "#).unwrap();
-
-        let t_frag = compile_shader(gl::FRAGMENT_SHADER, r#"#version 330 core
+                v_uv = vec2((gx + aPos.x * 3.0) / 44.0, aPos.y);
+                vec2 p = vec2(mix(u_rect.x, u_rect.z, aPos.x),
+                              mix(u_rect.y, u_rect.w, aPos.y));
+                gl_Position = vec4(p.x * 2.0 - 1.0, -(p.y * 2.0 - 1.0), 0.0, 1.0);
+            }"#).unwrap();
+        let glyph_frag = compile_shader(gl::FRAGMENT_SHADER, r#"#version 330 core
             in vec2 v_uv;
             uniform sampler2D u_atlas;
             out vec4 FragColor;
             void main() {
                 if (texture(u_atlas, v_uv).r < 0.5) discard;
                 FragColor = vec4(1.0, 1.0, 1.0, 1.0);
-            }
-        "#).unwrap();
+            }"#).unwrap();
+        let glyph_shader   = link_program(glyph_vert, glyph_frag).unwrap();
+        let glyph_rect_loc = unsafe { gl::GetUniformLocation(glyph_shader, c"u_rect".as_ptr())  };
+        let glyph_idx_loc  = unsafe { gl::GetUniformLocation(glyph_shader, c"u_glyph".as_ptr()) };
 
-        let text_shader = link_program(t_vert, t_frag).unwrap();
-
-        unsafe {
-            let pos_loc    = gl::GetUniformLocation(shader, c"u_pos".as_ptr());
-            let size_loc   = gl::GetUniformLocation(shader, c"u_size".as_ptr());
-            let screen_loc = gl::GetUniformLocation(shader, c"u_screen".as_ptr());
-            let color_loc  = gl::GetUniformLocation(shader, c"u_color".as_ptr());
-            let angle_loc  = gl::GetUniformLocation(shader, c"u_angle".as_ptr());
-
-            let t_pos_loc    = gl::GetUniformLocation(text_shader, c"u_pos".as_ptr());
-            let t_screen_loc = gl::GetUniformLocation(text_shader, c"u_screen".as_ptr());
-            let t_glyph_loc  = gl::GetUniformLocation(text_shader, c"u_glyph".as_ptr());
-            let t_scale_loc  = gl::GetUniformLocation(text_shader, c"u_scale".as_ptr());
-
+        let (vao, vbo, digit_tex) = unsafe {
             let mut vao = 0u32;
             let mut vbo = 0u32;
             gl::GenVertexArrays(1, &mut vao);
@@ -167,43 +155,39 @@ impl BagRenderer {
             gl::EnableVertexAttribArray(0);
             gl::BindBuffer(gl::ARRAY_BUFFER, 0);
             gl::BindVertexArray(0);
-            let _ = vbo;
+            (vao, vbo, create_digit_texture())
+        };
 
-            let digit_tex = create_digit_texture();
-
-            BagRenderer {
-                vao, shader, pos_loc, size_loc, screen_loc, color_loc, angle_loc,
-                text_shader, digit_tex, t_pos_loc, t_screen_loc, t_glyph_loc, t_scale_loc,
-            }
+        BagRenderer {
+            window: Window::new(),
+            vao, vbo,
+            rot_shader, rot_center_loc, rot_half_loc, rot_angle_loc, rot_color_loc,
+            glyph_shader, glyph_rect_loc, glyph_idx_loc,
+            digit_tex,
         }
     }
 
-    fn draw_rect(&self, x: f32, y: f32, w: f32, h: f32, color: [f32; 4], screen: [f32; 2]) {
-        self.draw_rect_rotated(x, y, w, h, 0.0, color, screen);
-    }
-
-    fn draw_rect_rotated(&self, x: f32, y: f32, w: f32, h: f32, angle: f32, color: [f32; 4], screen: [f32; 2]) {
+    // Center and half-extents in [0,1] space.
+    fn draw_rect_rotated(&self, cx: f32, cy: f32, hw: f32, hh: f32, angle: f32, color: [f32; 4]) {
         unsafe {
-            gl::Uniform2f(self.pos_loc,    x, y);
-            gl::Uniform2f(self.size_loc,   w, h);
-            gl::Uniform2f(self.screen_loc, screen[0], screen[1]);
-            gl::Uniform4f(self.color_loc,  color[0], color[1], color[2], color[3]);
-            gl::Uniform1f(self.angle_loc,  angle);
+            gl::UseProgram(self.rot_shader);
+            gl::BindVertexArray(self.vao);
+            gl::Uniform2f(self.rot_center_loc, cx, cy);
+            gl::Uniform2f(self.rot_half_loc,   hw, hh);
+            gl::Uniform1f(self.rot_angle_loc,  angle);
+            gl::Uniform4f(self.rot_color_loc,  color[0], color[1], color[2], color[3]);
             gl::DrawArrays(gl::TRIANGLES, 0, 6);
         }
     }
 
-    /// Renders "x", "0"–"9" characters at pixel position (x, y).
-    /// scale=2 → each font pixel becomes 2×2 screen pixels (chars are 6×10px).
-    fn draw_text(&self, text: &str, x: f32, y: f32, scale: f32, screen: [f32; 2]) {
+    fn draw_label(&self, text: &str, x0: f32, y0: f32) {
         unsafe {
-            gl::UseProgram(self.text_shader);
-            gl::Uniform2f(self.t_screen_loc, screen[0], screen[1]);
-            gl::Uniform1f(self.t_scale_loc,  scale);
+            gl::UseProgram(self.glyph_shader);
+            gl::BindVertexArray(self.vao);
             gl::ActiveTexture(gl::TEXTURE0);
             gl::BindTexture(gl::TEXTURE_2D, self.digit_tex);
 
-            let mut cx = x;
+            let mut cx = x0;
             for ch in text.chars() {
                 let glyph: i32 = match ch {
                     'x' => 0,
@@ -211,99 +195,96 @@ impl BagRenderer {
                     '5' => 6, '6' => 7, '7' => 8, '8' => 9, '9' => 10,
                     _ => continue,
                 };
-                gl::Uniform2f(self.t_pos_loc, cx, y);
-                gl::Uniform1i(self.t_glyph_loc, glyph);
+                gl::Uniform4f(self.glyph_rect_loc, cx, y0, cx + GLYPH_W, y0 + GLYPH_H);
+                gl::Uniform1i(self.glyph_idx_loc,  glyph);
                 gl::DrawArrays(gl::TRIANGLES, 0, 6);
-                cx += 4.0 * scale; // 3px glyph + 1px gap
+                cx += GLYPH_W + GLYPH_GAP;
             }
-
-            // Restore rect shader for subsequent draw_rect calls
-            gl::UseProgram(self.shader);
         }
     }
 
-    fn draw_item_icon(&self, item: ItemType, count: u32, sx: f32, sy: f32, screen: [f32; 2]) {
+    fn draw_item_icon(&self, item: ItemType, count: u32, sx: f32, sy: f32) {
         match item {
             ItemType::Stick => {
                 let cx = sx + SLOT_SIZE * 0.5;
                 let cy = sy + SLOT_SIZE * 0.5;
-                let (w, h) = (5.0, 30.0);
-                self.draw_rect_rotated(cx - w * 0.5, cy - h * 0.5, w, h,
-                    std::f32::consts::FRAC_PI_4, [0.55, 0.35, 0.17, 1.0], screen);
+                let hw = SLOT_SIZE * 0.06;
+                let hh = SLOT_SIZE * 0.38;
+                self.draw_rect_rotated(cx, cy, hw, hh,
+                    std::f32::consts::FRAC_PI_4, [0.55, 0.35, 0.17, 1.0]);
             }
             _ => {
                 let [r, g, b] = item.color();
-                let pad = 8.0;
-                self.draw_rect(sx + pad, sy + pad,
-                    SLOT_SIZE - pad * 2.0, SLOT_SIZE - pad * 2.0,
-                    [r, g, b, 1.0], screen);
+                let pad = SLOT_SIZE * 0.12;
+                self.window.draw_rect(sx + pad, sy + pad,
+                    sx + SLOT_SIZE - pad, sy + SLOT_SIZE - pad,
+                    r, g, b, 1.0);
             }
         }
 
-        // Stack count label — hidden for single items
         if count > 1 {
             let label = format!("x{}", count);
-            let scale = 2.0;
-            let text_w = label.len() as f32 * 4.0 * scale;
-            let text_h = 5.0 * scale;
-            self.draw_text(
-                &label,
-                sx + SLOT_SIZE - text_w - 2.0,
-                sy + SLOT_SIZE - text_h - 2.0,
-                scale,
-                screen,
-            );
+            let margin = SLOT_SIZE * 0.04;
+            let text_w = label.len() as f32 * (GLYPH_W + GLYPH_GAP) - GLYPH_GAP;
+            let lx = sx + SLOT_SIZE - text_w - margin;
+            let ly = sy + SLOT_SIZE - GLYPH_H - margin;
+            self.draw_label(&label, lx, ly);
         }
     }
 
-    pub fn draw(&self, inventory: &[Option<(ItemType, u32)>; INVENTORY_SIZE], screen_w: f32, screen_h: f32) {
-        let screen = [screen_w, screen_h];
-
-        let grid_w = COLS as f32 * SLOT_SIZE + (COLS - 1) as f32 * SLOT_GAP;
-        let grid_h = ROWS as f32 * SLOT_SIZE + (ROWS - 1) as f32 * SLOT_GAP;
+    /// Draws the bag inventory panel. Layout is defined in [0,1] normalised
+    /// screen space and scales automatically with window resolution.
+    pub fn draw(&self, inventory: &[Option<(ItemType, u32)>; INVENTORY_SIZE]) {
+        let grid_w  = COLS as f32 * SLOT_SIZE + (COLS - 1) as f32 * SLOT_GAP;
+        let grid_h  = ROWS as f32 * SLOT_SIZE + (ROWS - 1) as f32 * SLOT_GAP;
         let panel_w = grid_w + PADDING * 2.0;
         let panel_h = grid_h + PADDING * 2.0;
-        let panel_x = (screen_w - panel_w) * 0.5;
-        let panel_y = (screen_h - panel_h) * 0.5;
+        let panel_x = (1.0 - panel_w) * 0.5;
+        let panel_y = (1.0 - panel_h) * 0.5;
 
         unsafe {
             gl::Disable(gl::DEPTH_TEST);
+            gl::Disable(gl::CULL_FACE);
             gl::Enable(gl::BLEND);
             gl::BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);
-            gl::UseProgram(self.shader);
-            gl::BindVertexArray(self.vao);
+        }
 
-            // Full-screen dark overlay
-            self.draw_rect(0.0, 0.0, screen_w, screen_h, [0.0, 0.0, 0.0, 0.45], screen);
+        // Dark overlay + panel chrome — flat rects via Window
+        self.window.draw_rect(0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.45);
+        self.window.draw_rect(
+            panel_x - BORDER, panel_y - BORDER,
+            panel_x + panel_w + BORDER, panel_y + panel_h + BORDER,
+            0.60, 0.60, 0.60, 1.0,
+        );
+        self.window.draw_rect(panel_x, panel_y, panel_x + panel_w, panel_y + panel_h,
+            0.15, 0.15, 0.15, 0.95);
 
-            // Panel border then background
-            let b = BORDER;
-            self.draw_rect(panel_x - b, panel_y - b, panel_w + b * 2.0, panel_h + b * 2.0,
-                [0.60, 0.60, 0.60, 1.0], screen);
-            self.draw_rect(panel_x, panel_y, panel_w, panel_h, [0.15, 0.15, 0.15, 0.95], screen);
+        let grid_x = panel_x + PADDING;
+        let grid_y = panel_y + PADDING;
 
-            // Slot grid
-            let grid_x = panel_x + PADDING;
-            let grid_y = panel_y + PADDING;
-            for row in 0..ROWS {
-                for col in 0..COLS {
-                    let sx = grid_x + col as f32 * (SLOT_SIZE + SLOT_GAP);
-                    let sy = grid_y + row as f32 * (SLOT_SIZE + SLOT_GAP);
+        for row in 0..ROWS {
+            for col in 0..COLS {
+                let sx = grid_x + col as f32 * (SLOT_SIZE + SLOT_GAP);
+                let sy = grid_y + row as f32 * (SLOT_SIZE + SLOT_GAP);
 
-                    self.draw_rect(sx - b, sy - b, SLOT_SIZE + b * 2.0, SLOT_SIZE + b * 2.0,
-                        [0.50, 0.50, 0.50, 1.0], screen);
-                    self.draw_rect(sx, sy, SLOT_SIZE, SLOT_SIZE,
-                        [0.22, 0.22, 0.22, 1.0], screen);
+                self.window.draw_rect(
+                    sx - BORDER, sy - BORDER,
+                    sx + SLOT_SIZE + BORDER, sy + SLOT_SIZE + BORDER,
+                    0.50, 0.50, 0.50, 1.0,
+                );
+                self.window.draw_rect(sx, sy, sx + SLOT_SIZE, sy + SLOT_SIZE,
+                    0.22, 0.22, 0.22, 1.0);
 
-                    let idx = row * COLS + col;
-                    if let Some((item, count)) = inventory[idx] {
-                        self.draw_item_icon(item, count, sx, sy, screen);
-                    }
+                let idx = row * COLS + col;
+                if let Some((item, count)) = inventory[idx] {
+                    self.draw_item_icon(item, count, sx, sy);
                 }
             }
+        }
 
-            gl::BindVertexArray(0);
+        unsafe {
             gl::Disable(gl::BLEND);
+            gl::Enable(gl::CULL_FACE);
             gl::Enable(gl::DEPTH_TEST);
         }
     }
@@ -313,9 +294,10 @@ impl Drop for BagRenderer {
     fn drop(&mut self) {
         unsafe {
             gl::DeleteVertexArrays(1, &self.vao);
+            gl::DeleteBuffers(1, &self.vbo);
             gl::DeleteTextures(1, &self.digit_tex);
-            gl::DeleteProgram(self.shader);
-            gl::DeleteProgram(self.text_shader);
+            gl::DeleteProgram(self.rot_shader);
+            gl::DeleteProgram(self.glyph_shader);
         }
     }
 }

@@ -331,6 +331,18 @@ impl Window {
         self.buttons.iter_mut().find(|b| b.id == id)
     }
 
+    /// Draw a flat coloured rectangle in [0,1] screen space (Y down).
+    /// Caller is responsible for enabling BLEND if transparency is needed.
+    pub fn draw_rect(&self, x0: f32, y0: f32, x1: f32, y1: f32, r: f32, g: f32, b: f32, a: f32) {
+        self.renderer.draw_rect(x0, y0, x1, y1, r, g, b, a);
+    }
+
+    /// Draw a text texture in [0,1] screen space (Y down).
+    /// Caller is responsible for enabling BLEND.
+    pub fn draw_text(&self, tex: &TextTexture, x0: f32, y0: f32, x1: f32, y1: f32) {
+        self.renderer.draw_text(tex, x0, y0, x1, y1);
+    }
+
     pub fn draw(&self) {
         unsafe {
             gl::Disable(gl::DEPTH_TEST);

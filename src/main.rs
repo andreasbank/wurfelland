@@ -24,6 +24,7 @@ use renderer::CrackRenderer;
 use renderer::ItemRenderer;
 use renderer::HotbarRenderer;
 use renderer::BagRenderer;
+use renderer::BuildMenuRenderer;
 
 
 fn main() {
@@ -92,7 +93,9 @@ fn main() {
         let mut item_entities: Vec<ItemEntity> = Vec::new();
         let hotbar_renderer = HotbarRenderer::new();
         let bag_renderer = BagRenderer::new();
+        let build_renderer = BuildMenuRenderer::new();
         let mut bag_open = false;
+        let mut build_open = false;
         let mut selected_slot: usize = 0;
         let hotbar: [Option<ItemType>; 9] = [None; 9];
         let mut paused = false;
@@ -124,7 +127,7 @@ fn main() {
                         last_mouse_x = x as f32;
                         last_mouse_y = y as f32;
 
-                        if !paused && !bag_open {
+                        if !paused && !bag_open && !build_open {
                             if first_mouse {
                                 first_mouse = false;
                             } else {
@@ -148,6 +151,11 @@ fn main() {
                                     gl::Viewport(0, 0, new_w, new_h);
                                 }
                                 _ => {}
+                            }
+                        } else if build_open {
+                            match build_renderer.handle_click(last_mouse_x, last_mouse_y, win_w, win_h) {
+                                Some(_id) => { /* future: queue build action */ }
+                                None => {}
                             }
                         } else {
                             window.set_cursor_mode(glfw::CursorMode::Disabled);
@@ -176,6 +184,9 @@ fn main() {
                                     if bag_open {
                                         bag_open = false;
                                         window.set_cursor_mode(glfw::CursorMode::Disabled);
+                                    } else if build_open {
+                                        build_open = false;
+                                        window.set_cursor_mode(glfw::CursorMode::Disabled);
                                     } else {
                                         paused = !paused;
                                         if paused {
@@ -187,7 +198,18 @@ fn main() {
                                     }
                                 } else if key == Key::I && !paused {
                                     bag_open = !bag_open;
+                                    build_open = false;
                                     if bag_open {
+                                        window.set_cursor_mode(glfw::CursorMode::Normal);
+                                        first_mouse = true;
+                                    } else {
+                                        window.set_cursor_mode(glfw::CursorMode::Disabled);
+                                        first_mouse = true;
+                                    }
+                                } else if key == Key::B && !paused {
+                                    build_open = !build_open;
+                                    bag_open = false;
+                                    if build_open {
                                         window.set_cursor_mode(glfw::CursorMode::Normal);
                                         first_mouse = true;
                                     } else {
@@ -223,7 +245,7 @@ fn main() {
                 }
             }
 
-            if !paused && !bag_open {
+            if !paused && !bag_open && !build_open {
                 // Player movement
                 player.walk(
                     *keys_pressed.get(&Key::W).unwrap_or(&false),
@@ -343,7 +365,7 @@ fn main() {
             player_renderer.draw(player.position, player.yaw, &view, &projection, PlayerDrawMode::ArmsOnly, swing_angle);
 
             // Draw block outline
-            if outline_enabled && !paused && !bag_open {
+            if outline_enabled && !paused && !bag_open && !build_open {
                 let cam_pos = [camera.position.x, camera.position.y, camera.position.z];
                 let cam_dir = [camera.front.x, camera.front.y, camera.front.z];
                 if let Some(block) = world.raycast(cam_pos, cam_dir, 5.0) {
@@ -385,7 +407,14 @@ fn main() {
 
             // Draw bag
             if bag_open {
-                bag_renderer.draw(&player.inventory, win_w, win_h);
+                bag_renderer.draw(&player.inventory);
+            }
+
+            // Draw build menu
+            if build_open {
+                let nx = last_mouse_x / win_w;
+                let ny = last_mouse_y / win_h;
+                build_renderer.draw(nx, ny);
             }
 
             // Draw pause menu

@@ -218,7 +218,9 @@ impl Chunk {
 
     pub fn finalize_mesh(&mut self, vertices: Vec<f32>) {
         self.mesh = Some(ChunkMesh::from_vertices(&vertices));
-        self.needs_rebuild = false;
+        // Do not clear needs_rebuild here. mark_mesh_dispatched already cleared it at
+        // dispatch time. If mark_for_rebuild was called while the mesh thread was in
+        // flight (e.g. a neighbor arrived), that pending rebuild must be preserved.
     }
 
     /// Build vertex data off the main thread.
