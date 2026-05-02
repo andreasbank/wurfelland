@@ -26,6 +26,7 @@ use renderer::HotbarRenderer;
 use renderer::BagRenderer;
 use renderer::BuildMenuRenderer;
 use renderer::ConsoleRenderer;
+use renderer::console_renderer::ConsoleAction;
 
 
 fn main() {
@@ -100,6 +101,7 @@ fn main() {
         let mut bag_open = false;
         let mut build_open = false;
         let mut console_open = false;
+        let mut console_swallow_char = false;
         let mut selected_slot: usize = 0;
         let hotbar: [Option<ItemType>; 9] = [None; 9];
         let mut paused = false;
@@ -205,11 +207,14 @@ fn main() {
                                         }
                                     }
                                 } else if console_open && key == Key::Enter {
-                                    console.submit();
+                                    if let ConsoleAction::Exit = console.submit() {
+                                        window.set_should_close(true);
+                                    }
                                 } else if console_open && key == Key::Backspace {
                                     console.backspace();
                                 } else if key == Key::T && !paused && !bag_open && !build_open && !console_open {
                                     console_open = true;
+                                    console_swallow_char = true;
                                     window.set_cursor_mode(glfw::CursorMode::Normal);
                                     first_mouse = true;
                                 } else if key == Key::I && !paused && !console_open {
@@ -259,7 +264,11 @@ fn main() {
 
                     glfw::WindowEvent::Char(c) => {
                         if console_open {
-                            console.type_char(c);
+                            if console_swallow_char {
+                                console_swallow_char = false;
+                            } else {
+                                console.type_char(c);
+                            }
                         }
                     }
 
@@ -441,7 +450,7 @@ fn main() {
 
             // Draw pause menu
             if paused {
-                menu_renderer.draw(outline_enabled, hi_res);
+                menu_renderer.draw(outline_enabled, hi_res, win_w, win_h);
             }
 
             // Draw console

@@ -1,4 +1,6 @@
-use crate::renderer::ui::{UiRenderer, TextTexture, create_text_texture};
+use crate::renderer::ui::{UiRenderer, TextTexture, create_text_texture_scaled};
+
+fn make_tex(text: &str) -> TextTexture { create_text_texture_scaled(text, 2) }
 
 const GAME_NAME: &str = "WURFELLAND";
 const GAME_VERSION: &str = "0.1.0";
@@ -9,6 +11,11 @@ const PAD_X: f32        = 0.012;
 const INPUT_TOP: f32    = 0.958;
 const LINE_H: f32       = 0.032;
 const TEXT_H: f32       = 0.025;
+
+pub enum ConsoleAction {
+    None,
+    Exit,
+}
 
 pub struct ConsoleRenderer {
     renderer:     UiRenderer,
@@ -41,7 +48,7 @@ impl ConsoleRenderer {
         self.input_dirty = true;
     }
 
-    pub fn submit(&mut self) {
+    pub fn submit(&mut self) -> ConsoleAction {
         let trimmed = self.input.trim().to_string();
         let cmd = trimmed.to_lowercase();
         if !trimmed.is_empty() {
@@ -55,16 +62,19 @@ impl ConsoleRenderer {
                 self.push_line(&format!("{} V{}", GAME_NAME, GAME_VERSION));
                 self.push_line("COMMANDS:");
                 self.push_line("  HELP  -  SHOW THIS MESSAGE");
+                self.push_line("  EXIT  -  QUIT THE GAME");
             }
+            "exit" => return ConsoleAction::Exit,
             "" => {}
             _ => {
                 self.push_line(&format!("UNKNOWN COMMAND: {}", cmd.to_uppercase()));
             }
         }
+        ConsoleAction::None
     }
 
     fn push_line(&mut self, text: &str) {
-        let tex = create_text_texture(text);
+        let tex = make_tex(text);
         self.output_lines.push(tex);
         // Keep a bounded history — anything older than ~14 lines is scrolled away anyway
         if self.output_lines.len() > 50 {
@@ -75,7 +85,7 @@ impl ConsoleRenderer {
     pub fn draw(&mut self, win_w: f32, win_h: f32) {
         if self.input_dirty {
             let display = format!("> {}", self.input.to_uppercase());
-            self.input_tex = Some(create_text_texture(&display));
+            self.input_tex = Some(make_tex(&display));
             self.input_dirty = false;
         }
 

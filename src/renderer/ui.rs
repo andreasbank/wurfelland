@@ -72,16 +72,18 @@ impl Drop for TextTexture {
 }
 
 pub fn create_text_texture(text: &str) -> TextTexture {
+    create_text_texture_scaled(text, 4)
+}
+
+pub fn create_text_texture_scaled(text: &str, scale: usize) -> TextTexture {
     const CHAR_W: usize = 5;
     const CHAR_H: usize = 7;
     const GAP:    usize = 2;
-    const SCALE:  usize = 4;
-
     let chars: Vec<char> = text.chars().collect();
     let n = chars.len();
     let content_w = n * CHAR_W + n.saturating_sub(1) * GAP;
-    let scaled_w  = content_w * SCALE;
-    let scaled_h  = CHAR_H * SCALE;
+    let scaled_w  = content_w * scale;
+    let scaled_h  = CHAR_H * scale;
     let tex_w = scaled_w.next_power_of_two();
     let tex_h = scaled_h.next_power_of_two();
 
@@ -93,10 +95,10 @@ pub fn create_text_texture(text: &str) -> TextTexture {
         for row in 0..CHAR_H {
             for col in 0..CHAR_W {
                 if (bitmap[row] >> (CHAR_W - 1 - col)) & 1 == 0 { continue; }
-                for sy in 0..SCALE {
-                    for sx in 0..SCALE {
-                        let px = (char_x + col) * SCALE + sx;
-                        let py = row * SCALE + sy;
+                for sy in 0..scale {
+                    for sx in 0..scale {
+                        let px = (char_x + col) * scale + sx;
+                        let py = row * scale + sy;
                         if px < tex_w && py < tex_h {
                             let idx = (py * tex_w + px) * 4;
                             pixels[idx]     = 255;
@@ -257,7 +259,7 @@ impl TextButton {
         TextButton {
             id: id.to_string(),
             bounds,
-            labels:  vec![create_text_texture(label)],
+            labels:  vec![create_text_texture_scaled(label, 2)],
             current: 0,
         }
     }
@@ -267,7 +269,7 @@ impl TextButton {
         TextButton {
             id: id.to_string(),
             bounds,
-            labels:  labels.iter().map(|s| create_text_texture(s)).collect(),
+            labels:  labels.iter().map(|s| create_text_texture_scaled(s, 2)).collect(),
             current: 0,
         }
     }
@@ -282,12 +284,18 @@ impl TextButton {
         nx >= x0 && nx <= x1 && ny >= y0 && ny <= y1
     }
 
-    pub fn draw(&self, r: &UiRenderer) {
+    pub fn draw(&self, r: &UiRenderer, win_w: f32, win_h: f32) {
         let (x0, y0, x1, y1) = self.bounds;
         let pad = 0.01;
         r.draw_rect(x0 - pad, y0 - pad, x1 + pad, y1 + pad, 0.8, 0.8, 0.8, 1.0);
         r.draw_rect(x0, y0, x1, y1, 0.2, 0.2, 0.2, 1.0);
-        r.draw_text(&self.labels[self.current], x0 + pad * 2.0, y0 + pad, x1 - pad * 2.0, y1 - pad);
+
+        let tex = &self.labels[self.current];
+        let tw = tex.pixel_width as f32 / win_w;
+        let th = tex.pixel_height as f32 / win_h;
+        let cx = (x0 + x1) / 2.0;
+        let cy = (y0 + y1) / 2.0;
+        r.draw_text(tex, cx - tw / 2.0, cy - th / 2.0, cx + tw / 2.0, cy + th / 2.0);
     }
 }
 
@@ -353,7 +361,7 @@ impl Window {
         self.renderer.draw_text(tex, x0, y0, x1, y1);
     }
 
-    pub fn draw(&self) {
+    pub fn draw(&self, win_w: f32, win_h: f32) {
         unsafe {
             gl::Disable(gl::DEPTH_TEST);
             gl::Disable(gl::CULL_FACE);
@@ -370,7 +378,7 @@ impl Window {
         }
 
         for btn in &self.buttons {
-            btn.draw(&self.renderer);
+            btn.draw(&self.renderer, win_w, win_h);
         }
 
         unsafe {

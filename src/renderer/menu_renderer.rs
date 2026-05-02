@@ -30,10 +30,10 @@ impl MenuRenderer {
     }
 
     /// Sync toggle-button labels to current game state, then draw.
-    pub fn draw(&mut self, outline_enabled: bool, hi_res: bool) {
+    pub fn draw(&mut self, outline_enabled: bool, hi_res: bool, win_w: f32, win_h: f32) {
         self.window.button_mut("outline").unwrap().set_label(outline_enabled as usize);
         self.window.button_mut("res").unwrap().set_label(hi_res as usize);
-        self.window.draw();
+        self.window.draw(win_w, win_h);
     }
 
     /// Returns the id of the clicked button ("exit", "outline", "res"), or None.
