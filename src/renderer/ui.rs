@@ -5,6 +5,9 @@ use crate::renderer::utils::{compile_shader, link_program};
 
 // 5x7 pixel bitmaps — each u8 is one row, MSB = leftmost pixel
 pub fn char_bitmap(c: char) -> [u8; 7] {
+    if c.is_ascii_lowercase() {
+        return char_bitmap(c.to_ascii_uppercase());
+    }
     match c {
         'A' => [0b01110, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001],
         'B' => [0b11110, 0b10001, 0b10001, 0b11110, 0b10001, 0b10001, 0b11110],
@@ -46,6 +49,11 @@ pub fn char_bitmap(c: char) -> [u8; 7] {
         '.' => [0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00100, 0b00100],
         '!' => [0b00100, 0b00100, 0b00100, 0b00100, 0b00000, 0b00000, 0b00100],
         ' ' => [0b00000; 7],
+        '-' => [0b00000, 0b00000, 0b00000, 0b11111, 0b00000, 0b00000, 0b00000],
+        '>' => [0b10000, 0b01000, 0b00100, 0b00010, 0b00100, 0b01000, 0b10000],
+        '/' => [0b00001, 0b00010, 0b00100, 0b01000, 0b10000, 0b00000, 0b00000],
+        '(' => [0b00110, 0b01000, 0b10000, 0b10000, 0b10000, 0b01000, 0b00110],
+        ')' => [0b11000, 0b00100, 0b00010, 0b00010, 0b00010, 0b00100, 0b11000],
         _   => [0b00000; 7],
     }
 }
@@ -53,6 +61,8 @@ pub fn char_bitmap(c: char) -> [u8; 7] {
 pub struct TextTexture {
     pub id: u32,
     pub uv_max: (f32, f32),
+    pub pixel_width: u32,
+    pub pixel_height: u32,
 }
 
 impl Drop for TextTexture {
@@ -116,7 +126,7 @@ pub fn create_text_texture(text: &str) -> TextTexture {
         gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_S, gl::CLAMP_TO_EDGE as i32);
         gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_T, gl::CLAMP_TO_EDGE as i32);
         gl::BindTexture(gl::TEXTURE_2D, 0);
-        TextTexture { id, uv_max }
+        TextTexture { id, uv_max, pixel_width: scaled_w as u32, pixel_height: scaled_h as u32 }
     }
 }
 

@@ -25,6 +25,7 @@ use renderer::ItemRenderer;
 use renderer::HotbarRenderer;
 use renderer::BagRenderer;
 use renderer::BuildMenuRenderer;
+use renderer::ConsoleRenderer;
 
 
 fn main() {
@@ -40,6 +41,7 @@ fn main() {
     window.set_key_polling(true);
     window.set_cursor_pos_polling(true);
     window.set_mouse_button_polling(true);
+    window.set_char_polling(true);
     
     // Load OpenGL functions
     gl::load_with(|symbol| {
@@ -94,8 +96,10 @@ fn main() {
         let hotbar_renderer = HotbarRenderer::new();
         let bag_renderer = BagRenderer::new();
         let build_renderer = BuildMenuRenderer::new();
+        let mut console = ConsoleRenderer::new();
         let mut bag_open = false;
         let mut build_open = false;
+        let mut console_open = false;
         let mut selected_slot: usize = 0;
         let hotbar: [Option<ItemType>; 9] = [None; 9];
         let mut paused = false;
@@ -181,7 +185,11 @@ fn main() {
                         match action {
                             Action::Press => {
                                 if key == Key::Escape {
-                                    if bag_open {
+                                    if console_open {
+                                        console_open = false;
+                                        window.set_cursor_mode(glfw::CursorMode::Disabled);
+                                        first_mouse = true;
+                                    } else if bag_open {
                                         bag_open = false;
                                         window.set_cursor_mode(glfw::CursorMode::Disabled);
                                     } else if build_open {
@@ -196,7 +204,15 @@ fn main() {
                                             window.set_cursor_mode(glfw::CursorMode::Disabled);
                                         }
                                     }
-                                } else if key == Key::I && !paused {
+                                } else if console_open && key == Key::Enter {
+                                    console.submit();
+                                } else if console_open && key == Key::Backspace {
+                                    console.backspace();
+                                } else if key == Key::T && !paused && !bag_open && !build_open && !console_open {
+                                    console_open = true;
+                                    window.set_cursor_mode(glfw::CursorMode::Normal);
+                                    first_mouse = true;
+                                } else if key == Key::I && !paused && !console_open {
                                     bag_open = !bag_open;
                                     build_open = false;
                                     if bag_open {
@@ -206,7 +222,7 @@ fn main() {
                                         window.set_cursor_mode(glfw::CursorMode::Disabled);
                                         first_mouse = true;
                                     }
-                                } else if key == Key::B && !paused {
+                                } else if key == Key::B && !paused && !console_open {
                                     build_open = !build_open;
                                     bag_open = false;
                                     if build_open {
@@ -216,7 +232,7 @@ fn main() {
                                         window.set_cursor_mode(glfw::CursorMode::Disabled);
                                         first_mouse = true;
                                     }
-                                } else if !paused {
+                                } else if !paused && !console_open {
                                     if key == Key::Space {
                                         player.jump();
                                     } else if let Some(slot) = match key {
@@ -241,11 +257,17 @@ fn main() {
                         }
                     }
 
+                    glfw::WindowEvent::Char(c) => {
+                        if console_open {
+                            console.type_char(c);
+                        }
+                    }
+
                     _ => {}
                 }
             }
 
-            if !paused && !bag_open && !build_open {
+            if !paused && !bag_open && !build_open && !console_open {
                 // Player movement
                 player.walk(
                     *keys_pressed.get(&Key::W).unwrap_or(&false),
@@ -420,6 +442,11 @@ fn main() {
             // Draw pause menu
             if paused {
                 menu_renderer.draw(outline_enabled, hi_res);
+            }
+
+            // Draw console
+            if console_open {
+                console.draw(win_w, win_h);
             }
 
             window.swap_buffers();

@@ -35,3 +35,6 @@ pub use bag_renderer::BagRenderer;
 
 pub mod build_menu_renderer;
 pub use build_menu_renderer::BuildMenuRenderer;
+
+pub mod console_renderer;
+pub use console_renderer::ConsoleRenderer;
