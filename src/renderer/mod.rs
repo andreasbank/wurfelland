@@ -38,3 +38,9 @@ pub use build_menu_renderer::BuildMenuRenderer;
 
 pub mod console_renderer;
 pub use console_renderer::ConsoleRenderer;
+
+pub mod shadow_pass;
+pub use shadow_pass::ShadowPass;
+
+pub mod sun_renderer;
+pub use sun_renderer::SunRenderer;

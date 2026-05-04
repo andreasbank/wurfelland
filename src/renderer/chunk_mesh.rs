@@ -26,10 +26,10 @@ impl ChunkMesh {
                 gl::STATIC_DRAW,
             );
             
-            // Layout: [x, y, z, r, g, b, u, v] = 8 floats per vertex
-            let stride = (8 * mem::size_of::<f32>()) as GLsizei;
+            // Layout: [x, y, z,  r, g, b,  u, v,  nx, ny, nz] = 11 floats per vertex
+            let stride = (11 * mem::size_of::<f32>()) as GLsizei;
 
-            // location 0: position (3 floats)
+            // location 0: position (3 floats, offset 0)
             gl::VertexAttribPointer(0, 3, gl::FLOAT, gl::FALSE, stride, ptr::null());
             gl::EnableVertexAttribArray(0);
 
@@ -41,13 +41,17 @@ impl ChunkMesh {
             gl::VertexAttribPointer(2, 2, gl::FLOAT, gl::FALSE, stride, (6 * mem::size_of::<f32>()) as *const c_void);
             gl::EnableVertexAttribArray(2);
 
+            // location 3: normal (3 floats, offset 8)
+            gl::VertexAttribPointer(3, 3, gl::FLOAT, gl::FALSE, stride, (8 * mem::size_of::<f32>()) as *const c_void);
+            gl::EnableVertexAttribArray(3);
+
             gl::BindBuffer(gl::ARRAY_BUFFER, 0);
             gl::BindVertexArray(0);
 
             ChunkMesh {
                 vao,
                 vbo,
-                vertex_count: vertices.len() as i32 / 8, // 8 floats per vertex
+                vertex_count: vertices.len() as i32 / 11, // 11 floats per vertex
             }
         }
     }

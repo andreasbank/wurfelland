@@ -360,6 +360,7 @@ impl Chunk {
             Face::Front | Face::Back  => 0.8,
             Face::Left  | Face::Right => 0.65,
         };
+        let normal = face.normal();
         let mut verts = Vec::new();
         for &vi in &[0usize, 1, 2, 0, 2, 3] {
             verts.push(pos[vi][0]);
@@ -370,6 +371,9 @@ impl Chunk {
             verts.push(b * bright);
             verts.push(tex[vi][0]);
             verts.push(tex[vi][1]);
+            verts.push(normal[0]);
+            verts.push(normal[1]);
+            verts.push(normal[2]);
         }
         verts
     }
@@ -445,11 +449,13 @@ impl Chunk {
 
         let mut quad = |p: [[f32; 3]; 4]| {
             let uvs = [[u0, v1], [u1, v1], [u1, v0], [u0, v0]];
+            // Cross geometry has no meaningful face normal; use up as placeholder.
+            let (nx, ny, nz) = (0.0f32, 1.0, 0.0);
             for &i in &[0usize, 1, 2, 0, 2, 3] {
-                v.extend_from_slice(&[p[i][0], p[i][1], p[i][2], r, g, b, uvs[i][0], uvs[i][1]]);
+                v.extend_from_slice(&[p[i][0], p[i][1], p[i][2], r, g, b, uvs[i][0], uvs[i][1], nx, ny, nz]);
             }
             for &i in &[2usize, 1, 0, 3, 2, 0] {
-                v.extend_from_slice(&[p[i][0], p[i][1], p[i][2], r, g, b, uvs[i][0], uvs[i][1]]);
+                v.extend_from_slice(&[p[i][0], p[i][1], p[i][2], r, g, b, uvs[i][0], uvs[i][1], nx, ny, nz]);
             }
         };
 
@@ -471,9 +477,10 @@ impl Chunk {
 
     fn face_vertices_real_(x: f32, y: f32, z: f32, face: Face, block_type: BlockType, ao: [f32; 4]) -> Vec<f32> {
         let mut vertices = Vec::new();
-        let positions = face.positions(x, y, z);
+        let positions  = face.positions(x, y, z);
         let tex_coords = face.texture_coords(block_type.texture_id(face), 16);
         let base_color = block_type.color();
+        let normal     = face.normal();
 
         let brightness = match face {
             Face::Up    => 1.0,
@@ -482,6 +489,7 @@ impl Chunk {
             Face::Left  | Face::Right => 0.65,
         };
 
+        // Vertex layout: [x, y, z,  r, g, b,  u, v,  nx, ny, nz] = 11 floats
         for &vertex_idx in &[0usize, 1, 2, 0, 2, 3] {
             let light = brightness * ao[vertex_idx];
             vertices.push(positions[vertex_idx][0]);
@@ -492,6 +500,9 @@ impl Chunk {
             vertices.push(base_color[2] * light);
             vertices.push(tex_coords[vertex_idx][0]);
             vertices.push(tex_coords[vertex_idx][1]);
+            vertices.push(normal[0]);
+            vertices.push(normal[1]);
+            vertices.push(normal[2]);
         }
 
         vertices

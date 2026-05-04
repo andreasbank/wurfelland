@@ -5,6 +5,7 @@ use std::thread;
 use crate::world::chunk::{Chunk, Blocks, NeighborEdges, WaterLevels};
 use crate::world::block::BlockType;
 use crate::renderer::ChunkRenderer;
+use crate::renderer::ShadowPass;
 
 // Phase 1: terrain data arrives from worker thread
 struct BlockReady {
@@ -522,6 +523,14 @@ impl World {
             } else {
                 bz += step_z; t_max_z += t_delta_z;
             }
+        }
+    }
+
+    /// Render all loaded chunks into the shadow map (depth-only pass).
+    /// No frustum culling here — we want geometry behind the camera to still cast shadows.
+    pub fn draw_shadow(&self, shadow_pass: &ShadowPass) {
+        for chunk in self.chunks.values() {
+            shadow_pass.draw_chunk(chunk);
         }
     }
 

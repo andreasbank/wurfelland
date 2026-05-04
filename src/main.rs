@@ -14,6 +14,9 @@ use world::{World, ItemEntity, ItemType};
 
 mod renderer;
 use renderer::ChunkRenderer;
+use renderer::ShadowPass;
+use renderer::SunRenderer;
+use renderer::shadow_pass::{CASCADE_ENDS, NUM_CASCADES};
 use renderer::crosshair_renderer;
 use renderer::HealthBar;
 use renderer::MenuRenderer;
@@ -55,6 +58,8 @@ fn main() {
     
     unsafe {
         let chunk_renderer = ChunkRenderer::new().unwrap();
+        let mut shadow_pass = ShadowPass::new().unwrap();
+        let sun_renderer = SunRenderer::new().unwrap();
         println!("OpenGL initialized");
 
         // Enable depth testing:
@@ -85,6 +90,16 @@ fn main() {
 
         let mut wireframe_mode = false;
         let mut last_frame = Instant::now();
+
+        // Sun angle drives the day/night cycle.
+        // Represents the sun's position on an arc in the X-Y plane:
+        //   angle=0      → eastern horizon (sunrise)
+        //   angle=PI/2   → directly overhead (noon)
+        //   angle=PI     → western horizon (sunset)
+        //   angle=3PI/2  → below ground (night)
+        // Start at a low morning angle so shadows are long and immediately obvious.
+        const DAY_LENGTH_SECS: f32 = 300.0; // seconds for a full day/night cycle
+        let mut sun_angle: f32 = std::f32::consts::FRAC_PI_4; // start at ~8 AM
 
         let crosshair_renderer = crosshair_renderer::Crosshair::new();
         let health_bar = HealthBar::new();
@@ -369,15 +384,105 @@ fn main() {
                 world.tick_water(delta_time);
             }
 
-            // Clear and draw
-            gl::ClearColor(0.53, 0.81, 0.92, 1.0);
-            gl::Clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT);
+            // (Clear happens later, once sky_color is known.)
 
             let view = camera.view_matrix();
             let projection = camera.projection_matrix();
 
-            // Draw terrain
-            chunk_renderer.begin_frame(&view, &projection);
+            // Advance the sun along its arc. Wraps at 2π (one full day).
+            sun_angle += delta_time * (std::f32::consts::TAU / DAY_LENGTH_SECS);
+            if sun_angle > std::f32::consts::TAU { sun_angle -= std::f32::consts::TAU; }
+
+            // Sun and moon are antipodal: when one sets, the other rises.
+            // Whichever is currently above the horizon is the active light source
+            // for shadow casting; sun_dir points from that body toward the scene.
+            let sun_pos  = glam::Vec3::new(sun_angle.cos(), sun_angle.sin(), 0.3);
+            let moon_pos = -sun_pos;
+            let light_pos = if sun_pos.y >= 0.0 { sun_pos } else { moon_pos };
+            let sun_dir = (-light_pos).normalize();
+
+            // ── Sky and lighting from sun altitude ─────────────────────────
+            // sun_pos.y in [-1, 1] drives a smooth day → dusk → night cycle.
+            // smoothstep: classic ease curve from 0 (a) to 1 (b).
+            let smoothstep = |a: f32, b: f32, x: f32| {
+                let t = ((x - a) / (b - a)).clamp(0.0, 1.0);
+                t * t * (3.0 - 2.0 * t)
+            };
+            let altitude = sun_pos.y;
+            let day_w   = smoothstep(0.0, 0.25, altitude);
+            let night_w = smoothstep(0.0, 0.25, -altitude);
+            let dusk_w  = (1.0 - day_w - night_w).max(0.0);
+
+            // Sky / fog color: blue → orange (twilight) → dark indigo.
+            let day_blue    = glam::Vec3::new(0.53, 0.81, 0.92);
+            let dusk_orange = glam::Vec3::new(1.00, 0.50, 0.30);
+            let night_dark  = glam::Vec3::new(0.04, 0.05, 0.12);
+            let sky_color   = day_blue * day_w + dusk_orange * dusk_w + night_dark * night_w;
+
+            // Ambient: floor brightness everywhere. Stays moderate so the world
+            // is never fully black.
+            let ambient_light = 0.45 * day_w + 0.25 * dusk_w + 0.10 * night_w;
+            // Directional: contribution from sun/moon, gated by shadow. Fades
+            // to ~0 at horizon so the light-source flip is invisible.
+            let active_alt = altitude.abs();
+            let dir_t = smoothstep(0.0, 0.20, active_alt);
+            let dir_max = if altitude >= 0.0 { 0.55 } else { 0.15 };
+            let directional_light = dir_max * dir_t;
+
+            // Clear with the current sky color so the horizon blends with fog.
+            gl::ClearColor(sky_color.x, sky_color.y, sky_color.z, 1.0);
+            gl::Clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT);
+            let (fb_w, fb_h) = window.get_framebuffer_size();
+            // CSM shadow pass: render the world once into each cascade's layer.
+            shadow_pass.begin(
+                sun_dir,
+                camera.position,
+                camera.front,
+                camera.up,
+                camera.fov.to_radians(),
+                camera.aspect_ratio,
+                chunk_renderer.texture_atlas(),
+            );
+            for i in 0..NUM_CASCADES {
+                shadow_pass.begin_cascade(i);
+                world.draw_shadow(&shadow_pass);
+            }
+            shadow_pass.end(fb_w, fb_h);
+
+            // Visible sun and moon: each is drawn only when above the horizon.
+            // Drawn behind terrain (depth test off, terrain overdraws where it
+            // occludes the sky).
+            if sun_pos.y > 0.0 {
+                // Tint warmer near the horizon for a sunrise/sunset feel.
+                let pale = glam::Vec3::new(1.0, 0.95, 0.80);
+                let warm = glam::Vec3::new(1.0, 0.55, 0.30);
+                let t = smoothstep(0.0, 0.25, sun_pos.y);
+                let color = warm + (pale - warm) * t;
+                sun_renderer.draw(
+                    &view, &projection, camera.position, sun_pos.normalize(),
+                    25.0, color,
+                );
+            }
+            if moon_pos.y > 0.0 {
+                sun_renderer.draw(
+                    &view, &projection, camera.position, moon_pos.normalize(),
+                    18.0, glam::Vec3::new(0.85, 0.88, 1.0),  // pale cool white
+                );
+            }
+
+            // Draw terrain (main pass, now with cascaded shadow maps)
+            chunk_renderer.begin_frame(
+                &view,
+                &projection,
+                shadow_pass.depth_texture_array(),
+                shadow_pass.light_space_matrices(),
+                &CASCADE_ENDS,
+                shadow_pass.texel_world_sizes(),
+                sun_dir,
+                sky_color,
+                ambient_light,
+                directional_light,
+            );
             world.draw(&chunk_renderer, &camera);
             chunk_renderer.end_frame();
 

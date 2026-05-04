@@ -8,6 +8,19 @@ pub enum Face {
     Back,    // -Z
 }
 
+impl Face {
+    pub fn normal(&self) -> [f32; 3] {
+        match self {
+            Face::Right => [ 1.0,  0.0,  0.0],
+            Face::Left  => [-1.0,  0.0,  0.0],
+            Face::Up    => [ 0.0,  1.0,  0.0],
+            Face::Down  => [ 0.0, -1.0,  0.0],
+            Face::Front => [ 0.0,  0.0,  1.0],
+            Face::Back  => [ 0.0,  0.0, -1.0],
+        }
+    }
+}
+
 // Usage:
 impl Face {
     pub fn texture_coords(&self, texture_index: u32, atlas_size: u32) -> [[f32; 2]; 4] {
