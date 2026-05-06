@@ -1545,6 +1545,7 @@ dependencies = [
  "glam 0.31.0",
  "glfw",
  "glm",
+ "image",
  "log",
  "nalgebra-glm",
  "noise",

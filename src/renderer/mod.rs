@@ -44,3 +44,12 @@ pub use shadow_pass::ShadowPass;
 
 pub mod sun_renderer;
 pub use sun_renderer::SunRenderer;
+
+pub mod sky_renderer;
+pub use sky_renderer::SkyRenderer;
+
+pub mod minimap_renderer;
+pub use minimap_renderer::MinimapRenderer;
+
+pub mod clock_renderer;
+pub use clock_renderer::ClockRenderer;

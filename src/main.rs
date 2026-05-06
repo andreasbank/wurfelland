@@ -16,6 +16,9 @@ mod renderer;
 use renderer::ChunkRenderer;
 use renderer::ShadowPass;
 use renderer::SunRenderer;
+use renderer::SkyRenderer;
+use renderer::MinimapRenderer;
+use renderer::ClockRenderer;
 use renderer::shadow_pass::{CASCADE_ENDS, NUM_CASCADES};
 use renderer::crosshair_renderer;
 use renderer::HealthBar;
@@ -60,6 +63,9 @@ fn main() {
         let chunk_renderer = ChunkRenderer::new().unwrap();
         let mut shadow_pass = ShadowPass::new().unwrap();
         let sun_renderer = SunRenderer::new().unwrap();
+        let sky_renderer = SkyRenderer::new("sky.hdr").unwrap();
+        let mut minimap = MinimapRenderer::new();
+        let clock_renderer = ClockRenderer::new();
         println!("OpenGL initialized");
 
         // Enable depth testing:
@@ -77,6 +83,7 @@ fn main() {
         }
         let spawn_y = world.surface_height(0, 0);
         player.position[1] = spawn_y as f32;
+        minimap.update(&world, player.position[0], player.position[2]);
 
         // Camera parameters
         let mut camera = Camera::new(1600, 1200);
@@ -429,9 +436,14 @@ fn main() {
             let dir_max = if altitude >= 0.0 { 0.55 } else { 0.15 };
             let directional_light = dir_max * dir_t;
 
-            // Clear with the current sky color so the horizon blends with fog.
+            // Clear with the current sky color so the horizon/fog blends correctly.
             gl::ClearColor(sky_color.x, sky_color.y, sky_color.z, 1.0);
             gl::Clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT);
+
+            // Draw the HDR panorama sky behind everything.
+            // sky_tint darkens and color-shifts it through dusk and night.
+            sky_renderer.draw(&view, &projection, sky_color, 0.5 + 0.8 * day_w); // exposure tuned up during the day to show more sun detail
+
             let (fb_w, fb_h) = window.get_framebuffer_size();
             // CSM shadow pass: render the world once into each cascade's layer.
             shadow_pass.begin(
@@ -523,6 +535,9 @@ fn main() {
                 }
             }
 
+            // ── Minimap update (CPU texture rebuild) ───────────────────────
+            minimap.update(&world, player.position[0], player.position[2]);
+
             // ── HUD (drawn last so nothing 3D renders on top) ──────────────
 
             // Underwater tint — check the block at eye level
@@ -540,6 +555,15 @@ fn main() {
 
             // Draw hotbar
             hotbar_renderer.draw(selected_slot, &hotbar, win_w, win_h);
+
+            // Draw minimap and clock
+            // sun_angle=0 → 6:00, PI/2 → 12:00, PI → 18:00, 3PI/2 → 0:00
+            let time_of_day  = (sun_angle / std::f32::consts::TAU * 24.0 + 6.0).rem_euclid(24.0);
+            let tod_hours    = time_of_day as u32;
+            let tod_minutes  = (time_of_day.fract() * 60.0) as u32;
+            let tod_seconds  = (time_of_day.fract() * 3600.0) as u32 % 60;
+            clock_renderer.draw(tod_hours, tod_minutes, tod_seconds, win_w, win_h);
+            minimap.draw(player.position[0], player.position[2], camera.front.x, camera.front.z, win_w, win_h);
 
             // Draw bag
             if bag_open {

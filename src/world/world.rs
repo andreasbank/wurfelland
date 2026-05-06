@@ -463,6 +463,16 @@ impl World {
         e
     }
 
+    /// Returns a reference to the chunk at chunk-grid coordinates (cx, cz).
+    /// Used by the minimap to batch block lookups per chunk instead of per block.
+    pub fn chunk_count(&self) -> usize {
+        self.chunks.len()
+    }
+
+    pub fn chunk_at(&self, cx: i32, cz: i32) -> Option<&Chunk> {
+        self.chunks.get(&[cx, 0, cz])
+    }
+
     pub fn get_block(&self, wx: i32, wy: i32, wz: i32) -> BlockType {
         if wy < 0 || wy >= 16 {
             return BlockType::Air;

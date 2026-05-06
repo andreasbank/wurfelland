@@ -13,3 +13,4 @@ glm = "0.3.0"
 log = "0.4.29"
 nalgebra-glm = "0.20.0"
 noise = "0.9"
+image = { version = "0.25", default-features = false, features = ["hdr"] }
