@@ -10,7 +10,7 @@ mod camera;
 use camera::Camera;
 
 mod world;
-use world::{World, ItemEntity, ItemType};
+use world::{World, ItemEntity, ItemType, Chicken};
 
 mod renderer;
 use renderer::ChunkRenderer;
@@ -33,6 +33,7 @@ use renderer::BagRenderer;
 use renderer::BuildMenuRenderer;
 use renderer::ConsoleRenderer;
 use renderer::console_renderer::ConsoleAction;
+use renderer::EntityRenderer;
 
 
 fn main() {
@@ -85,6 +86,38 @@ fn main() {
         player.position[1] = spawn_y as f32;
         minimap.update(&world, player.position[0], player.position[2]);
 
+        // Wait for chunks around the spawn area to generate for chicken placement.
+        // 2000 finalize calls is well within a normal startup budget.
+        let chicken_check: &[(i32, i32)] = &[(8,0), (-8,0), (0,8), (0,-8), (8,8), (-8,8), (8,-8)];
+        for _ in 0..2000 {
+            world.update(player.position);
+            world.finalize_all_pending();
+            if chicken_check.iter().all(|&(x, z)| world.surface_height(x, z) > 0) {
+                break;
+            }
+        }
+
+        // Spawn chickens in Minecraft-style groups of 4 spread around the spawn area.
+        // Sea level is y=10; we only spawn above it (grass, not beach/ocean).
+        let chicken_coords: &[(i32, i32)] = &[
+            // group 1 — just east of spawn
+            ( 5,  5), ( 8,  3), ( 3,  8), ( 9,  9),
+            // group 2 — west
+            (-6,  6), (-9,  4), (-4,  9), (-11,  6),
+            // group 3 — south
+            ( 7, -5), (10, -9), ( 5, -11), (12, -4),
+        ];
+        let mut chickens: Vec<Chicken> = chicken_coords.iter()
+            .filter_map(|&(cx, cz)| {
+                let sy = world.surface_height(cx, cz);
+                if sy > 10 {
+                    Some(Chicken::new(cx as f32 + 0.5, sy as f32, cz as f32 + 0.5))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
         // Camera parameters
         let mut camera = Camera::new(1600, 1200);
         let mut last_mouse_x = 800.0;
@@ -115,6 +148,7 @@ fn main() {
         let player_renderer = PlayerRenderer::new();
         let crack_renderer = CrackRenderer::new();
         let item_renderer = ItemRenderer::new();
+        let entity_renderer = EntityRenderer::new();
         let mut item_entities: Vec<ItemEntity> = Vec::new();
         let hotbar_renderer = HotbarRenderer::new();
         let bag_renderer = BagRenderer::new();
@@ -374,6 +408,11 @@ fn main() {
                     entity.update(delta_time, |x, y, z| world.get_block(x, y, z));
                 }
 
+                // Update chickens
+                for chicken in &mut chickens {
+                    chicken.update(delta_time, |x, y, z| world.get_block(x, y, z));
+                }
+
                 // Auto-pickup: collect items within 1.5 blocks of the player
                 item_entities.retain(|entity| {
                     let dx = entity.position[0] + 0.5 - player.position[0];
@@ -458,6 +497,7 @@ fn main() {
             for i in 0..NUM_CASCADES {
                 shadow_pass.begin_cascade(i);
                 world.draw_shadow(&shadow_pass);
+                entity_renderer.draw_shadows(&chickens, &shadow_pass);
             }
             shadow_pass.end(fb_w, fb_h);
 
@@ -523,6 +563,9 @@ fn main() {
 
             // Draw dropped items
             item_renderer.draw(&item_entities, &view, &projection);
+
+            // Draw chickens and other entities
+            entity_renderer.draw_chickens(&chickens, &view, &projection);
 
             // Draw crack overlay on block being dug
             if lmb_held {

@@ -53,3 +53,6 @@ pub use minimap_renderer::MinimapRenderer;
 
 pub mod clock_renderer;
 pub use clock_renderer::ClockRenderer;
+
+pub mod entity_renderer;
+pub use entity_renderer::EntityRenderer;

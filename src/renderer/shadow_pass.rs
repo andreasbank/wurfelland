@@ -26,6 +26,11 @@ pub struct ShadowPass {
     light_space_loc: i32,
     model_loc: i32,
     atlas_loc: i32,
+    /// Depth-only shader for opaque non-textured geometry (entities, NPCs, etc.)
+    solid_shader: u32,
+    solid_ls_loc: i32,
+    solid_model_loc: i32,
+    current_cascade: usize,
     /// Light-space (view * ortho) matrix for each cascade, recomputed every frame
     /// to fit the current camera frustum slice tightly.
     light_space_matrices: [glam::Mat4; NUM_CASCADES],
@@ -94,6 +99,27 @@ impl ShadowPass {
             let model_loc       = gl::GetUniformLocation(shader, c"model".as_ptr());
             let atlas_loc       = gl::GetUniformLocation(shader, c"atlas".as_ptr());
 
+            // Depth-only shader for opaque non-textured geometry (entities).
+            // Only reads aPos — no UV, no alpha test.
+            let vs_solid = compile_shader(gl::VERTEX_SHADER, r#"#version 330 core
+                layout(location = 0) in vec3 aPos;
+                uniform mat4 lightSpaceMatrix;
+                uniform mat4 model;
+                void main() {
+                    gl_Position = lightSpaceMatrix * model * vec4(aPos, 1.0);
+                }"#)?;
+            let fs_solid = compile_shader(gl::FRAGMENT_SHADER, r#"#version 330 core
+                void main() {}
+            "#)?;
+            let solid_shader = gl::CreateProgram();
+            gl::AttachShader(solid_shader, vs_solid);
+            gl::AttachShader(solid_shader, fs_solid);
+            gl::LinkProgram(solid_shader);
+            gl::DeleteShader(vs_solid);
+            gl::DeleteShader(fs_solid);
+            let solid_ls_loc    = gl::GetUniformLocation(solid_shader, c"lightSpaceMatrix".as_ptr());
+            let solid_model_loc = gl::GetUniformLocation(solid_shader, c"model".as_ptr());
+
             Ok(ShadowPass {
                 fbo,
                 depth_array,
@@ -102,6 +128,10 @@ impl ShadowPass {
                 light_space_loc,
                 model_loc,
                 atlas_loc,
+                solid_shader,
+                solid_ls_loc,
+                solid_model_loc,
+                current_cascade: 0,
                 light_space_matrices: [glam::Mat4::IDENTITY; NUM_CASCADES],
                 texel_world_sizes: [1.0; NUM_CASCADES],
             })
@@ -235,7 +265,8 @@ impl ShadowPass {
 
     /// Switch the FBO's depth attachment to cascade `index`'s layer, clear it,
     /// and set the corresponding light-space matrix uniform.
-    pub fn begin_cascade(&self, index: usize) {
+    pub fn begin_cascade(&mut self, index: usize) {
+        self.current_cascade = index;
         unsafe {
             gl::FramebufferTextureLayer(
                 gl::FRAMEBUFFER, gl::DEPTH_ATTACHMENT,
@@ -246,6 +277,22 @@ impl ShadowPass {
                 self.light_space_loc, 1, gl::FALSE,
                 self.light_space_matrices[index].as_ref().as_ptr(),
             );
+        }
+    }
+
+    /// Draw opaque non-textured geometry (entities, NPCs) into the active cascade.
+    /// `first` and `count` are vertex indices passed directly to DrawArrays.
+    /// Temporarily switches to the solid depth shader and restores the textured one.
+    pub fn draw_solid_mesh(&self, vao: u32, first: i32, count: i32, model: &glam::Mat4) {
+        unsafe {
+            gl::UseProgram(self.solid_shader);
+            gl::UniformMatrix4fv(self.solid_ls_loc, 1, gl::FALSE,
+                self.light_space_matrices[self.current_cascade].as_ref().as_ptr());
+            gl::UniformMatrix4fv(self.solid_model_loc, 1, gl::FALSE, model.as_ref().as_ptr());
+            gl::BindVertexArray(vao);
+            gl::DrawArrays(gl::TRIANGLES, first, count);
+            gl::BindVertexArray(0);
+            gl::UseProgram(self.shader); // restore textured shader for draw_chunk
         }
     }
 
@@ -290,6 +337,7 @@ impl Drop for ShadowPass {
             gl::DeleteFramebuffers(1, &self.fbo);
             gl::DeleteTextures(1, &self.depth_array);
             gl::DeleteProgram(self.shader);
+            gl::DeleteProgram(self.solid_shader);
         }
     }
 }

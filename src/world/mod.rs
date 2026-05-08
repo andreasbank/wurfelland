@@ -11,3 +11,6 @@ pub use face::Face;
 
 pub mod item;
 pub use item::{ItemType, ItemEntity};
+
+pub mod entity;
+pub use entity::Chicken;
