@@ -171,8 +171,7 @@ fn main() {
         let mut dig_target: Option<[i32; 3]> = None;
         let mut dig_progress: f32 = 0.0;
         let mut swing_time: f32 = 0.0;
-        let mut entity_hit_target: Option<usize> = None;
-        let mut entity_hit_progress: f32 = 0.0;
+        let mut entity_hit_cooldown: f32 = 0.0; // time until next entity hit is allowed
 
         // Main loop
         while !window.should_close() {
@@ -363,16 +362,11 @@ fn main() {
                 let cam_pos = [camera.position.x, camera.position.y, camera.position.z];
                 let cam_dir = [camera.front.x, camera.front.y, camera.front.z];
 
+                // Entity hit cooldown ticks down continuously.
+                entity_hit_cooldown = (entity_hit_cooldown - delta_time).max(0.0);
+
                 if !lmb_held {
-                    // Decay entity hit progress — full decay in 30 s.
-                    if entity_hit_target.is_some() {
-                        entity_hit_progress -= (world::entity::CHICKEN_HARDNESS / 30.0) * delta_time;
-                        if entity_hit_progress <= 0.0 {
-                            entity_hit_progress = 0.0;
-                            entity_hit_target = None;
-                        }
-                    }
-                    // Decay block dig progress.
+                    // Decay block dig progress when not holding.
                     if let Some(target) = dig_target {
                         let block = world.get_block(target[0], target[1], target[2]);
                         if let Some(hardness) = block.hardness() {
@@ -405,23 +399,16 @@ fn main() {
                     };
 
                     if hit_entity {
-                        let (idx, _) = ent_hit.unwrap();
-                        if entity_hit_target != Some(idx) {
-                            entity_hit_target = Some(idx);
-                            entity_hit_progress = 0.0;
-                        }
-                        entity_hit_progress += delta_time;
-                        if entity_hit_progress >= chickens[idx].hardness() {
+                        // Immediate hit when cooldown is up — no charge-up.
+                        if entity_hit_cooldown <= 0.0 {
+                            let (idx, _) = ent_hit.unwrap();
                             let len = (cam_dir[0]*cam_dir[0] + cam_dir[2]*cam_dir[2]).sqrt().max(0.001);
                             chickens[idx].take_hit([cam_dir[0]/len, 0.0, cam_dir[2]/len]);
-                            entity_hit_progress = 0.0;
-                            entity_hit_target = None;
+                            entity_hit_cooldown = 0.4; // ~Minecraft pre-1.9 swing speed
                         }
                         dig_target = None;
                         dig_progress = 0.0;
                     } else {
-                        entity_hit_target = None;
-                        entity_hit_progress = 0.0;
                         if let Some(target) = blk_hit {
                             let block = world.get_block(target[0], target[1], target[2]);
                             if Some(target) != dig_target {
@@ -465,13 +452,15 @@ fn main() {
                 for chicken in &mut chickens {
                     chicken.update(delta_time, |x, y, z| world.get_block(x, y, z));
                 }
-                // Remove dead chickens; invalidate stale hit target if indices shifted.
-                let old_chicken_count = chickens.len();
-                chickens.retain(|c| !c.is_dead());
-                if chickens.len() != old_chicken_count {
-                    entity_hit_target = None;
-                    entity_hit_progress = 0.0;
+                // Spawn drops from dead chickens, then remove them.
+                for chicken in chickens.iter().filter(|c| c.is_dead()) {
+                    for item_type in chicken.drops() {
+                        item_entities.push(ItemEntity::new(
+                            chicken.position[0], chicken.position[1] + 0.5, chicken.position[2], item_type,
+                        ));
+                    }
                 }
+                chickens.retain(|c| !c.is_dead());
 
                 // Auto-pickup: collect items within 1.5 blocks of the player
                 item_entities.retain(|entity| {

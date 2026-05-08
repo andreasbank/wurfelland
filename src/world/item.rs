@@ -7,27 +7,36 @@ pub enum ItemType {
     DirtClump,
     StoneChunk,
     Seeds,
+    Feather,
+    Egg,
+    ChickenMeat,
 }
 
 impl ItemType {
     /// Atlas tile index in the item atlas (256×256, 16 tiles/row, 16×16 px each).
     pub fn tile_index(&self) -> usize {
         match self {
-            ItemType::Stick      => 0,
-            ItemType::LogBlock   => 1,
-            ItemType::DirtClump  => 2,
-            ItemType::StoneChunk => 3,
-            ItemType::Seeds      => 4,
+            ItemType::Stick        => 0,
+            ItemType::LogBlock     => 1,
+            ItemType::DirtClump    => 2,
+            ItemType::StoneChunk   => 3,
+            ItemType::Seeds        => 4,
+            ItemType::Feather      => 5,
+            ItemType::Egg          => 6,
+            ItemType::ChickenMeat  => 7,
         }
     }
 
     pub fn color(&self) -> [f32; 3] {
         match self {
-            ItemType::Stick      => [0.55, 0.35, 0.17],
-            ItemType::LogBlock   => [0.55, 0.35, 0.17], // fallback; faces are shaded in renderer
-            ItemType::DirtClump  => [0.61, 0.44, 0.22],
-            ItemType::StoneChunk => [0.50, 0.50, 0.50],
-            ItemType::Seeds      => [0.80, 0.75, 0.20],
+            ItemType::Stick       => [0.55, 0.35, 0.17],
+            ItemType::LogBlock    => [0.55, 0.35, 0.17],
+            ItemType::DirtClump   => [0.61, 0.44, 0.22],
+            ItemType::StoneChunk  => [0.50, 0.50, 0.50],
+            ItemType::Seeds       => [0.80, 0.75, 0.20],
+            ItemType::Feather     => [0.95, 0.95, 0.90],
+            ItemType::Egg         => [0.95, 0.90, 0.75],
+            ItemType::ChickenMeat => [0.85, 0.40, 0.30],
         }
     }
 }

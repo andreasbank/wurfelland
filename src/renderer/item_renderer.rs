@@ -171,11 +171,14 @@ impl ItemRenderer {
 
             for item in items {
                 let (vao, vert_count) = match item.item {
-                    ItemType::Stick      => (self.vao_stick, self.stick_vert_count),
-                    ItemType::LogBlock   => (self.vao_log,   self.cube_vert_count),
-                    ItemType::DirtClump  => (self.vao_dirt,  self.cube_vert_count),
-                    ItemType::StoneChunk => (self.vao_stone, self.cube_vert_count),
-                    ItemType::Seeds      => (self.vao_seeds, self.cube_vert_count),
+                    ItemType::Stick        => (self.vao_stick, self.stick_vert_count),
+                    ItemType::LogBlock     => (self.vao_log,   self.cube_vert_count),
+                    ItemType::DirtClump    => (self.vao_dirt,  self.cube_vert_count),
+                    ItemType::StoneChunk   => (self.vao_stone, self.cube_vert_count),
+                    ItemType::Seeds        => (self.vao_seeds, self.cube_vert_count),
+                    ItemType::Feather      => (self.vao_stone, self.cube_vert_count),
+                    ItemType::Egg          => (self.vao_stone, self.cube_vert_count),
+                    ItemType::ChickenMeat  => (self.vao_stone, self.cube_vert_count),
                 };
 
                 let pos = glam::Vec3::new(
