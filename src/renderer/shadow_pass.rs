@@ -329,6 +329,12 @@ impl ShadowPass {
     pub fn texel_world_sizes(&self) -> &[f32; NUM_CASCADES] {
         &self.texel_world_sizes
     }
+
+    /// The light-space matrix for whichever cascade is currently active.
+    /// Used by callers to build a per-cascade frustum for shadow caster culling.
+    pub fn current_light_space_matrix(&self) -> glam::Mat4 {
+        self.light_space_matrices[self.current_cascade]
+    }
 }
 
 impl Drop for ShadowPass {

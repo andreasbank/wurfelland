@@ -80,6 +80,8 @@ pub struct Chunk {
     blocks: Blocks,
     pub mesh: Option<ChunkMesh>,
     needs_rebuild: bool,
+    // Precomputed translation matrix — the chunk never moves, so compute once.
+    model: glam::Mat4,
 }
 
 impl Chunk {
@@ -151,7 +153,12 @@ impl Chunk {
             }
         }
 
-        Chunk { position, blocks, mesh: None, needs_rebuild: true }
+        let model = glam::Mat4::from_translation(glam::Vec3::new(
+            position[0] as f32 * 16.0,
+            position[1] as f32 * 16.0,
+            position[2] as f32 * 16.0,
+        ));
+        Chunk { position, blocks, mesh: None, needs_rebuild: true, model }
     }
 
     pub fn get_block(&self, x: usize, y: usize, z: usize) -> BlockType {
@@ -196,11 +203,7 @@ impl Chunk {
     }
 
     pub fn model_matrix(&self) -> glam::Mat4 {
-        glam::Mat4::from_translation(glam::Vec3::new(
-            self.position[0] as f32 * 16.0,
-            self.position[1] as f32 * 16.0,
-            self.position[2] as f32 * 16.0,
-        ))
+        self.model
     }
 
     pub fn needs_mesh(&self) -> bool {
@@ -226,7 +229,9 @@ impl Chunk {
     /// Build vertex data off the main thread.
     /// Takes a block snapshot + pre-extracted neighbor edge slices + water level snapshot.
     pub fn build_vertices(blocks: &Blocks, edges: &NeighborEdges, water_levels: &WaterLevels) -> Vec<f32> {
-        let mut vertices = Vec::new();
+        // Rough estimate: ~10% of blocks are surface blocks with ~3 visible faces on average.
+        // 16³ * 0.10 * 3 faces * 6 verts * 11 floats ≈ 8192. Sized to avoid early reallocs.
+        let mut vertices = Vec::with_capacity(8192);
 
         for x in 0..16usize {
             for y in 0..16usize {

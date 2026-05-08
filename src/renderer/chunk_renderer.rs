@@ -115,8 +115,9 @@ impl ChunkRenderer {
                     float currentDepth = projCoords.z;
 
                     // 3x3 PCF in this cascade's depth layer.
+                    // texelSize is constant (MAP_SIZE = 2048), avoids a per-fragment textureSize query.
                     float shadow = 0.0;
-                    vec2 texelSize = 1.0 / vec2(textureSize(shadowMaps, 0).xy);
+                    const vec2 texelSize = vec2(1.0 / 2048.0);
                     for (int x = -1; x <= 1; ++x) {
                         for (int y = -1; y <= 1; ++y) {
                             float pcfDepth = texture(

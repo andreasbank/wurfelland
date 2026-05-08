@@ -6,6 +6,7 @@ use crate::world::chunk::{Chunk, Blocks, NeighborEdges, WaterLevels};
 use crate::world::block::BlockType;
 use crate::renderer::ChunkRenderer;
 use crate::renderer::ShadowPass;
+use crate::camera::frustum::Frustum;
 
 // Phase 1: terrain data arrives from worker thread
 struct BlockReady {
@@ -536,30 +537,40 @@ impl World {
         }
     }
 
-    /// Render all loaded chunks into the shadow map (depth-only pass).
-    /// No frustum culling here — we want geometry behind the camera to still cast shadows.
+    /// Render chunks into the active shadow cascade, culling against the cascade's
+    /// own orthographic frustum. This eliminates most chunks from the tight near
+    /// cascades (cascade 0 covers only 12 m, yet there are 81 loaded chunks).
     pub fn draw_shadow(&self, shadow_pass: &ShadowPass) {
+        let lsm = shadow_pass.current_light_space_matrix();
+        // Extract frustum planes from the light-space matrix (world → light clip).
+        // Passing IDENTITY as view folds lsm into the "projection" slot so the
+        // resulting mvp = lsm * I = lsm, giving correct world-space plane equations.
+        let cascade_frustum = Frustum::from_view_projection(&glam::Mat4::IDENTITY, &lsm);
         for chunk in self.chunks.values() {
-            shadow_pass.draw_chunk(chunk);
+            if chunk.mesh.is_some() && chunk.is_in_frustum(&cascade_frustum) {
+                shadow_pass.draw_chunk(chunk);
+            }
         }
     }
 
     pub fn draw(&self, renderer: &ChunkRenderer, camera: &crate::camera::Camera) {
         let frustum = camera.frustum();
-        let visible: Vec<&Chunk> = self.chunks.values()
-            .filter(|c| c.is_in_frustum(&frustum))
-            .collect();
 
-        // Pass 1: opaque + cutout geometry (full depth writes)
+        // Pass 1: opaque + cutout geometry (full depth writes).
+        // Iterate directly — avoids allocating a Vec<&Chunk> every frame.
         renderer.set_transparent_pass(false);
-        for chunk in &visible {
-            renderer.draw_chunk(chunk);
+        for chunk in self.chunks.values() {
+            if chunk.mesh.is_some() && chunk.is_in_frustum(&frustum) {
+                renderer.draw_chunk(chunk);
+            }
         }
 
-        // Pass 2: semi-transparent geometry (water) — depth test on, no depth writes
+        // Pass 2: semi-transparent geometry (water) — depth test on, no depth writes.
         renderer.set_transparent_pass(true);
-        for chunk in &visible {
-            renderer.draw_chunk(chunk);
+        for chunk in self.chunks.values() {
+            if chunk.mesh.is_some() && chunk.is_in_frustum(&frustum) {
+                renderer.draw_chunk(chunk);
+            }
         }
     }
 }
