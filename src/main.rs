@@ -10,7 +10,7 @@ mod camera;
 use camera::Camera;
 
 mod world;
-use world::{World, ItemEntity, ItemType, Chicken};
+use world::{World, ItemEntity, ItemType, Chicken, nearest_entity_hit};
 
 mod renderer;
 use renderer::ChunkRenderer;
@@ -166,11 +166,13 @@ fn main() {
         let mut win_w: f32 = 1600.0;
         let mut win_h: f32 = 1200.0;
 
-        // Digging state
+        // Digging / entity-hit state
         let mut lmb_held = false;
         let mut dig_target: Option<[i32; 3]> = None;
         let mut dig_progress: f32 = 0.0;
         let mut swing_time: f32 = 0.0;
+        let mut entity_hit_target: Option<usize> = None;
+        let mut entity_hit_progress: f32 = 0.0;
 
         // Main loop
         while !window.should_close() {
@@ -228,6 +230,16 @@ fn main() {
                     glfw::WindowEvent::MouseButton(glfw::MouseButton::Button1, Action::Release, _) => {
                         lmb_held = false;
                         // Progress is preserved — it decays over time in the update loop.
+                    }
+
+                    glfw::WindowEvent::MouseButton(glfw::MouseButton::Button2, Action::Press, _) => {
+                        if !paused && !bag_open && !build_open {
+                            let ro = [camera.position.x, camera.position.y, camera.position.z];
+                            let rd = [camera.front.x, camera.front.y, camera.front.z];
+                            if let Some((idx, _)) = nearest_entity_hit(&chickens, ro, rd, 5.0) {
+                                chickens[idx].interact();
+                            }
+                        }
                     }
 
                     glfw::WindowEvent::Key(Key::F12, _, Action::Press, _) => {
@@ -347,9 +359,20 @@ fn main() {
                 camera.update_pitch_yaw(player.pitch, player.yaw);
                 camera.move_to_abs(player.position[0], player.position[1] + 1.6, player.position[2]);
 
-                // Digging
+                // Digging / entity hit
+                let cam_pos = [camera.position.x, camera.position.y, camera.position.z];
+                let cam_dir = [camera.front.x, camera.front.y, camera.front.z];
+
                 if !lmb_held {
-                    // Decay progress while not digging — full decay in 30 seconds.
+                    // Decay entity hit progress — full decay in 30 s.
+                    if entity_hit_target.is_some() {
+                        entity_hit_progress -= (world::entity::CHICKEN_HARDNESS / 30.0) * delta_time;
+                        if entity_hit_progress <= 0.0 {
+                            entity_hit_progress = 0.0;
+                            entity_hit_target = None;
+                        }
+                    }
+                    // Decay block dig progress.
                     if let Some(target) = dig_target {
                         let block = world.get_block(target[0], target[1], target[2]);
                         if let Some(hardness) = block.hardness() {
@@ -366,33 +389,63 @@ fn main() {
                 }
 
                 if lmb_held {
-                    let cam_pos = [camera.position.x, camera.position.y, camera.position.z];
-                    let cam_dir = [camera.front.x, camera.front.y, camera.front.z];
-                    if let Some(target) = world.raycast(cam_pos, cam_dir, 5.0) {
-                        let block = world.get_block(target[0], target[1], target[2]);
-                        if Some(target) != dig_target {
-                            // Moved to a different block — reset progress
-                            dig_target = Some(target);
-                            dig_progress = 0.0;
+                    let ent_hit = nearest_entity_hit(&chickens, cam_pos, cam_dir, 5.0);
+                    let blk_hit = world.raycast(cam_pos, cam_dir, 5.0);
+
+                    // Prefer the closer of entity vs block.
+                    let hit_entity = match (ent_hit, blk_hit) {
+                        (Some((_, et)), Some(b)) => {
+                            let dx = b[0] as f32 + 0.5 - cam_pos[0];
+                            let dy = b[1] as f32 + 0.5 - cam_pos[1];
+                            let dz = b[2] as f32 + 0.5 - cam_pos[2];
+                            et < (dx*dx + dy*dy + dz*dz).sqrt()
                         }
-                        if let Some(hardness) = block.hardness() {
-                            // Tool speed multiplier goes here in the future (e.g. * tool.speed())
-                            dig_progress += delta_time;
-                            if dig_progress >= hardness {
-                                let drops = block.drops(target[0], target[1], target[2]);
-                                world.set_block(target[0], target[1], target[2], world::BlockType::Air);
-                                for item_type in drops {
-                                    item_entities.push(ItemEntity::new(
-                                        target[0] as f32, target[1] as f32, target[2] as f32, item_type,
-                                    ));
-                                }
-                                dig_target = None;
-                                dig_progress = 0.0;
-                            }
+                        (Some(_), None) => true,
+                        _ => false,
+                    };
+
+                    if hit_entity {
+                        let (idx, _) = ent_hit.unwrap();
+                        if entity_hit_target != Some(idx) {
+                            entity_hit_target = Some(idx);
+                            entity_hit_progress = 0.0;
                         }
-                    } else {
+                        entity_hit_progress += delta_time;
+                        if entity_hit_progress >= chickens[idx].hardness() {
+                            let len = (cam_dir[0]*cam_dir[0] + cam_dir[2]*cam_dir[2]).sqrt().max(0.001);
+                            chickens[idx].take_hit([cam_dir[0]/len, 0.0, cam_dir[2]/len]);
+                            entity_hit_progress = 0.0;
+                            entity_hit_target = None;
+                        }
                         dig_target = None;
                         dig_progress = 0.0;
+                    } else {
+                        entity_hit_target = None;
+                        entity_hit_progress = 0.0;
+                        if let Some(target) = blk_hit {
+                            let block = world.get_block(target[0], target[1], target[2]);
+                            if Some(target) != dig_target {
+                                dig_target = Some(target);
+                                dig_progress = 0.0;
+                            }
+                            if let Some(hardness) = block.hardness() {
+                                dig_progress += delta_time;
+                                if dig_progress >= hardness {
+                                    let drops = block.drops(target[0], target[1], target[2]);
+                                    world.set_block(target[0], target[1], target[2], world::BlockType::Air);
+                                    for item_type in drops {
+                                        item_entities.push(ItemEntity::new(
+                                            target[0] as f32, target[1] as f32, target[2] as f32, item_type,
+                                        ));
+                                    }
+                                    dig_target = None;
+                                    dig_progress = 0.0;
+                                }
+                            }
+                        } else {
+                            dig_target = None;
+                            dig_progress = 0.0;
+                        }
                     }
                 }
 
@@ -411,6 +464,13 @@ fn main() {
                 // Update chickens
                 for chicken in &mut chickens {
                     chicken.update(delta_time, |x, y, z| world.get_block(x, y, z));
+                }
+                // Remove dead chickens; invalidate stale hit target if indices shifted.
+                let old_chicken_count = chickens.len();
+                chickens.retain(|c| !c.is_dead());
+                if chickens.len() != old_chicken_count {
+                    entity_hit_target = None;
+                    entity_hit_progress = 0.0;
                 }
 
                 // Auto-pickup: collect items within 1.5 blocks of the player
@@ -552,12 +612,19 @@ fn main() {
             };
             player_renderer.draw(player.position, player.yaw, &view, &projection, PlayerDrawMode::ArmsOnly, swing_angle);
 
-            // Draw block outline
+            // Draw block outline — suppressed when an entity is closer.
             if outline_enabled && !paused && !bag_open && !build_open {
-                let cam_pos = [camera.position.x, camera.position.y, camera.position.z];
-                let cam_dir = [camera.front.x, camera.front.y, camera.front.z];
-                if let Some(block) = world.raycast(cam_pos, cam_dir, 5.0) {
-                    outline_renderer.draw(block, &view, &projection);
+                let ro = [camera.position.x, camera.position.y, camera.position.z];
+                let rd = [camera.front.x, camera.front.y, camera.front.z];
+                let ent_dist = nearest_entity_hit(&chickens, ro, rd, 5.0).map(|(_, t)| t);
+                if let Some(block) = world.raycast(ro, rd, 5.0) {
+                    let dx = block[0] as f32 + 0.5 - ro[0];
+                    let dy = block[1] as f32 + 0.5 - ro[1];
+                    let dz = block[2] as f32 + 0.5 - ro[2];
+                    let blk_dist = (dx*dx + dy*dy + dz*dz).sqrt();
+                    if ent_dist.map_or(true, |ed| blk_dist <= ed) {
+                        outline_renderer.draw(block, &view, &projection);
+                    }
                 }
             }
 

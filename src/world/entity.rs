@@ -5,11 +5,14 @@ const CHICKEN_SPEED: f32 = 1.5;
 const CHICKEN_HALF_W: f32 = 0.20;
 const CHICKEN_HEIGHT: f32 = 0.90;
 const CHICKEN_JUMP_SPEED: f32 = 8.0;
+const CHICKEN_HEALTH: f32 = 4.0;
+pub const CHICKEN_HARDNESS: f32 = 1.5; // seconds per hit with bare hand
 
 pub struct Chicken {
     pub position: [f32; 3],
     pub yaw: f32,       // current facing direction in degrees
     pub anim_time: f32, // drives wing flap animation, staggered per chicken
+    pub health: f32,
     velocity: [f32; 3],
     on_ground: bool,
     wander_timer: f32, // seconds until next AI decision
@@ -25,12 +28,40 @@ impl Chicken {
             position: [x, y, z],
             yaw: init_yaw,
             anim_time: seed.rem_euclid(6.28), // stagger so not all sync'd
+            health: CHICKEN_HEALTH,
             velocity: [0.0; 3],
             on_ground: false,
             wander_timer: seed.rem_euclid(5.0),
             target_yaw: init_yaw,
             move_speed: CHICKEN_SPEED,
         }
+    }
+
+    pub fn hardness(&self) -> f32 { CHICKEN_HARDNESS }
+    pub fn is_dead(&self) -> bool { self.health <= 0.0 }
+
+    pub fn aabb_min(&self) -> [f32; 3] {
+        [self.position[0] - CHICKEN_HALF_W, self.position[1], self.position[2] - CHICKEN_HALF_W]
+    }
+    pub fn aabb_max(&self) -> [f32; 3] {
+        [self.position[0] + CHICKEN_HALF_W, self.position[1] + CHICKEN_HEIGHT, self.position[2] + CHICKEN_HALF_W]
+    }
+
+    pub fn take_hit(&mut self, push_dir: [f32; 3]) {
+        self.health -= 1.0;
+        // Knockback: launch in hit direction and upward
+        self.velocity[0] = push_dir[0] * 6.0;
+        self.velocity[1] = 5.0;
+        self.velocity[2] = push_dir[2] * 6.0;
+        self.on_ground = false;
+        // Flee away from attacker
+        self.target_yaw = push_dir[0].atan2(push_dir[2]).to_degrees() + 180.0;
+        self.move_speed = CHICKEN_SPEED;
+        self.wander_timer = 3.0;
+    }
+
+    pub fn interact(&mut self) {
+        // stub — future: trading, petting, etc.
     }
 
     pub fn update(&mut self, dt: f32, get_block: impl Fn(i32, i32, i32) -> BlockType) {
@@ -110,6 +141,48 @@ impl Chicken {
             }
         }
     }
+}
+
+/// Slab-method ray vs AABB intersection. Returns entry distance if hit within max_dist.
+pub fn ray_aabb_intersect(
+    ro: [f32; 3], rd: [f32; 3],
+    min: [f32; 3], max: [f32; 3],
+    max_dist: f32,
+) -> Option<f32> {
+    let mut tmin = 0.0f32;
+    let mut tmax = max_dist;
+    for i in 0..3 {
+        if rd[i].abs() < 1e-6 {
+            if ro[i] < min[i] || ro[i] > max[i] { return None; }
+        } else {
+            let inv = 1.0 / rd[i];
+            let t1 = (min[i] - ro[i]) * inv;
+            let t2 = (max[i] - ro[i]) * inv;
+            let (t1, t2) = if t1 < t2 { (t1, t2) } else { (t2, t1) };
+            tmin = tmin.max(t1);
+            tmax = tmax.min(t2);
+            if tmin > tmax { return None; }
+        }
+    }
+    if tmax >= 0.0 { Some(tmin.max(0.0)) } else { None }
+}
+
+/// Returns index and entry distance of the nearest living chicken the ray hits.
+pub fn nearest_entity_hit(
+    chickens: &[Chicken],
+    ro: [f32; 3], rd: [f32; 3],
+    max_dist: f32,
+) -> Option<(usize, f32)> {
+    let mut best: Option<(usize, f32)> = None;
+    for (i, ch) in chickens.iter().enumerate() {
+        if ch.is_dead() { continue; }
+        if let Some(t) = ray_aabb_intersect(ro, rd, ch.aabb_min(), ch.aabb_max(), max_dist) {
+            if best.map_or(true, |(_, bt)| t < bt) {
+                best = Some((i, t));
+            }
+        }
+    }
+    best
 }
 
 fn angle_diff(target: f32, current: f32) -> f32 {
