@@ -167,11 +167,22 @@ pub fn create_block_atlas() -> u32 {
         [ 58, 120,  42], // 6: Leaves (dark green)
         [191, 152,  96], // 7: Log top (lighter tan rings)
         [102, 179,  51], // 8: Tall grass (bright green stems)
+        [  0,   0,   0], // 9–13: crack overlays — overwritten below; placeholders only
+        [  0,   0,   0],
+        [  0,   0,   0],
+        [  0,   0,   0],
+        [  0,   0,   0],
+        [245, 222, 153], // 14: Sand
+        [230, 240, 255], // 15: Snow
     ];
 
     let mut pixels = vec![0u8; ATLAS_SIZE * ATLAS_SIZE * 4];
 
     for tile_idx in 0..tile_colors.len() {
+        // Crack overlay tiles (9–13) are fully generated in the second pass below;
+        // skipping here keeps their background transparent (pixels stay zero).
+        if (9..=13).contains(&tile_idx) { continue; }
+
         let tile_col = tile_idx % TILES_PER_ROW;
         let tile_row = tile_idx / TILES_PER_ROW;
         let base_color = tile_colors[tile_idx];

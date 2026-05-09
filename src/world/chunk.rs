@@ -1,6 +1,7 @@
 use crate::renderer::ChunkMesh;
 use crate::world::face::Face;
 use crate::world::BlockType;
+use crate::world::biome::Biome;
 use glam::Vec3;
 use crate::camera::frustum::Frustum;
 use noise::{NoiseFn, Perlin};
@@ -28,22 +29,31 @@ pub struct NeighborEdges {
     pub wl_front: [[u8; 16]; 16],
     /// Water levels at lz=15 of the -Z neighbour [y][x]
     pub wl_back:  [[u8; 16]; 16],
+    /// Whether each neighbouring chunk was actually loaded when the edges were snapshotted.
+    /// Used so fluid face-visibility can treat an unloaded neighbour as same-fluid
+    /// (avoiding a seam wall) without hiding legitimate faces on solid blocks.
+    pub right_loaded: bool,
+    pub left_loaded:  bool,
+    pub front_loaded: bool,
+    pub back_loaded:  bool,
 }
 
 impl NeighborEdges {}
 
-/// ~1-in-3 chance per column, deterministic from world coords.
-fn grass_hash(world_x: i32, world_z: i32) -> bool {
-    let h = world_x.wrapping_mul(1234567891_i32)
-                   .wrapping_add(world_z.wrapping_mul(987654321_i32));
-    (h.unsigned_abs() % 3) == 0
-}
-
-/// ~1-in-25 chance per column, deterministic from world coords.
-fn tree_hash(world_x: i32, world_z: i32) -> bool {
+/// 1-in-`freq` chance per column for tree placement.
+fn should_place_tree(world_x: i32, world_z: i32, freq: u32) -> bool {
+    if freq == 0 { return false; }
     let h = world_x.wrapping_mul(374761393_i32)
                    .wrapping_add(world_z.wrapping_mul(668265263_i32));
-    (h.unsigned_abs() % 25) == 0
+    (h.unsigned_abs() % freq) == 0
+}
+
+/// 1-in-`freq` chance per column for tall grass placement.
+fn should_place_grass(world_x: i32, world_z: i32, freq: u32) -> bool {
+    if freq == 0 { return false; }
+    let h = world_x.wrapping_mul(1234567891_i32)
+                   .wrapping_add(world_z.wrapping_mul(987654321_i32));
+    (h.unsigned_abs() % freq) == 0
 }
 
 /// Plants a tree centred on (lx, lz) with base at surf_y.
@@ -86,32 +96,44 @@ pub struct Chunk {
 
 impl Chunk {
     pub fn generate(position: [i32; 3]) -> Self {
-        let perlin = Perlin::new(42);
-        let mut blocks = [[[BlockType::Air; 16]; 16]; 16];
+        let terrain = Perlin::new(42);
+        let temp    = Perlin::new(100);
+        let moist   = Perlin::new(200);
+        let cont    = Perlin::new(300);
 
-        let base_height = 8;
-        let amplitude   = 8.0;
-        let scale       = 0.05;
+        let mut blocks     = [[[BlockType::Air; 16]; 16]; 16];
+        let mut surface    = [[0usize; 16]; 16];
+        let mut biome_grid = [[Biome::Plains; 16]; 16];
+
         const SEA_LEVEL: usize = 10;
 
-        let mut surface: [[usize; 16]; 16] = [[0; 16]; 16];
-
+        // ── Block placement ──────────────────────────────────────────────────
         for x in 0..16usize {
             for z in 0..16usize {
-                let world_x = (position[0] * 16 + x as i32) as f64 * scale;
-                let world_z = (position[2] * 16 + z as i32) as f64 * scale;
-                let noise_val = (perlin.get([world_x, world_z]) + 1.0) / 2.0;
-                let surf_y = base_height + (noise_val * amplitude) as usize;
-                surface[x][z] = surf_y.min(15);
+                let wx = (position[0] * 16 + x as i32) as f64;
+                let wz = (position[2] * 16 + z as i32) as f64;
+
+                let biome = Biome::from_noise(
+                    temp .get([wx * 0.003, wz * 0.003]),
+                    moist.get([wx * 0.003, wz * 0.003]),
+                    cont .get([wx * 0.005, wz * 0.005]),
+                );
+                biome_grid[x][z] = biome;
+                let p = biome.params();
+
+                let noise_val = (terrain.get([wx * p.scale, wz * p.scale]) + 1.0) / 2.0;
+                let surf_y = (p.base_height + noise_val as f32 * p.amplitude) as usize;
+                let surf_y = surf_y.min(15);
+                surface[x][z] = surf_y;
 
                 let underwater = surf_y < SEA_LEVEL;
                 for y in 0..16usize {
                     blocks[x][y][z] = if y < surf_y.saturating_sub(3) {
                         BlockType::Stone
                     } else if y < surf_y {
-                        BlockType::Dirt
-                    } else if y == surf_y && y < 16 {
-                        if underwater { BlockType::Dirt } else { BlockType::Grass }
+                        p.sub_surface_block
+                    } else if y == surf_y {
+                        if underwater { p.sub_surface_block } else { p.surface_block }
                     } else {
                         BlockType::Air
                     };
@@ -119,34 +141,40 @@ impl Chunk {
 
                 if underwater {
                     for y in (surf_y + 1)..=SEA_LEVEL {
-                        if y < 16 {
-                            blocks[x][y][z] = BlockType::Water;
-                        }
+                        if y < 16 { blocks[x][y][z] = BlockType::Water; }
                     }
                 }
             }
         }
 
+        // ── Trees ────────────────────────────────────────────────────────────
         for x in 0..16usize {
             for z in 0..16usize {
                 let world_x = position[0] * 16 + x as i32;
                 let world_z = position[2] * 16 + z as i32;
-                if tree_hash(world_x, world_z) && surface[x][z] >= SEA_LEVEL {
-                    plant_tree(&mut blocks, x, surface[x][z], z);
+                let p    = biome_grid[x][z].params();
+                let surf = surface[x][z];
+                if should_place_tree(world_x, world_z, p.tree_freq)
+                    && surf >= SEA_LEVEL
+                    && blocks[x][surf][z] == BlockType::Grass
+                {
+                    plant_tree(&mut blocks, x, surf, z);
                 }
             }
         }
 
+        // ── Tall grass ───────────────────────────────────────────────────────
         for x in 0..16usize {
             for z in 0..16usize {
                 let world_x = position[0] * 16 + x as i32;
                 let world_z = position[2] * 16 + z as i32;
-                let surf = surface[x][z];
+                let p     = biome_grid[x][z].params();
+                let surf  = surface[x][z];
                 let above = surf + 1;
                 if above < 16
                     && blocks[x][surf][z] == BlockType::Grass
                     && blocks[x][above][z] == BlockType::Air
-                    && grass_hash(world_x, world_z)
+                    && should_place_grass(world_x, world_z, p.grass_freq)
                 {
                     blocks[x][above][z] = BlockType::TallGrass;
                 }
@@ -394,6 +422,16 @@ impl Chunk {
         };
 
         let current = blocks[x][y][z];
+
+        // Hide fluid faces at unloaded chunk boundaries to prevent water-wall seams.
+        // Solid block faces use Air default (normal behaviour — face is visible).
+        if current.is_fluid() {
+            let at_unloaded = (ix < 0 && !edges.left_loaded)
+                || (ix >= 16 && !edges.right_loaded)
+                || (iz < 0  && !edges.back_loaded)
+                || (iz >= 16 && !edges.front_loaded);
+            if at_unloaded { return false; }
+        }
 
         let neighbor = if ix < 0 {
             edges.left[y][z]

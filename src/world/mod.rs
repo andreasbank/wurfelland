@@ -1,6 +1,8 @@
 pub mod world;
 pub use world::World;
 
+pub mod biome;
+
 pub mod chunk;
 
 pub mod block;

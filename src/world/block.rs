@@ -8,6 +8,8 @@ pub enum BlockType {
     Log,
     Leaves,
     TallGrass,
+    Sand,
+    Snow,
 }
 
 impl BlockType {
@@ -21,6 +23,8 @@ impl BlockType {
             BlockType::Log       => [0.55, 0.35, 0.17],
             BlockType::Leaves    => [0.25, 0.51, 0.19],
             BlockType::TallGrass => [0.38, 0.70, 0.20],
+            BlockType::Sand      => [0.96, 0.87, 0.60],
+            BlockType::Snow      => [0.90, 0.94, 1.00],
         }
     }
     
@@ -38,8 +42,6 @@ impl BlockType {
         }
     }
 
-    /// True if the block can be selected/outlined by the crosshair raycast.
-    /// Differs from is_solid: tall grass is targetable but not a collision obstacle.
     pub fn is_targetable(&self) -> bool {
         match self {
             BlockType::Air | BlockType::Water => false,
@@ -59,9 +61,11 @@ impl BlockType {
             BlockType::Air       => None,
             BlockType::Water     => None,
             BlockType::TallGrass => Some(0.05),
+            BlockType::Snow      => Some(0.2),
             BlockType::Leaves    => Some(0.2),
             BlockType::Grass     => Some(0.5),
             BlockType::Dirt      => Some(0.5),
+            BlockType::Sand      => Some(0.5),
             BlockType::Log       => Some(1.5),
             BlockType::Stone     => Some(3.0),
         }
@@ -81,11 +85,43 @@ impl BlockType {
             BlockType::Log          => vec![ItemType::LogBlock],
             BlockType::Grass |
             BlockType::Dirt         => vec![ItemType::DirtClump],
+            BlockType::Sand         => vec![ItemType::DirtClump],
             BlockType::TallGrass    => {
                 if hash % 20 == 0 { vec![ItemType::Seeds] } else { vec![] }
             }
             BlockType::Stone        => vec![ItemType::StoneChunk],
             _ => vec![],
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn to_net_id(self) -> u8 {
+        match self {
+            BlockType::Air       => 0,
+            BlockType::Grass     => 1,
+            BlockType::Dirt      => 2,
+            BlockType::Stone     => 3,
+            BlockType::Water     => 4,
+            BlockType::Log       => 5,
+            BlockType::Leaves    => 6,
+            BlockType::TallGrass => 7,
+            BlockType::Sand      => 8,
+            BlockType::Snow      => 9,
+        }
+    }
+
+    pub fn from_net_id(id: u8) -> Self {
+        match id {
+            1 => Self::Grass,
+            2 => Self::Dirt,
+            3 => Self::Stone,
+            4 => Self::Water,
+            5 => Self::Log,
+            6 => Self::Leaves,
+            7 => Self::TallGrass,
+            8 => Self::Sand,
+            9 => Self::Snow,
+            _ => Self::Air,
         }
     }
 
@@ -106,6 +142,8 @@ impl BlockType {
             },
             BlockType::Leaves    => 6,
             BlockType::TallGrass => 8,
+            BlockType::Sand      => 14,
+            BlockType::Snow      => 15,
         }
     }
 

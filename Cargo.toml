@@ -14,3 +14,7 @@ log = "0.4.29"
 nalgebra-glm = "0.20.0"
 noise = "0.9"
 image = { version = "0.25", default-features = false, features = ["hdr"] }
+renet = "2.0.0"
+renet_netcode = "2.0.0"
+bincode = "1"
+serde = { version = "1", features = ["derive"] }

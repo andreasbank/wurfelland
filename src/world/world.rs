@@ -180,24 +180,7 @@ impl World {
             // Snapshot block data and neighbor edges — all copies, no borrows held.
             let blocks: Blocks = self.chunks[&pos].blocks_snapshot();
             let water_levels: WaterLevels = self.water_levels_snapshot(cx, cz);
-            let edges = NeighborEdges {
-                // "right" edge = lx=0 face of the +X neighbor
-                right: self.chunks.get(&[cx + 1, 0, cz])
-                    .map(|c| c.edge_right()).unwrap_or([[BlockType::Air; 16]; 16]),
-                // "left" edge = lx=15 face of the -X neighbor
-                left: self.chunks.get(&[cx - 1, 0, cz])
-                    .map(|c| c.edge_left()).unwrap_or([[BlockType::Air; 16]; 16]),
-                // "front" edge = lz=0 face of the +Z neighbor
-                front: self.chunks.get(&[cx, 0, cz + 1])
-                    .map(|c| c.edge_front()).unwrap_or([[BlockType::Air; 16]; 16]),
-                // "back" edge = lz=15 face of the -Z neighbor
-                back: self.chunks.get(&[cx, 0, cz - 1])
-                    .map(|c| c.edge_back()).unwrap_or([[BlockType::Air; 16]; 16]),
-                wl_right: self.water_edge_at_lx(cx + 1, cz, 0),
-                wl_left:  self.water_edge_at_lx(cx - 1, cz, 15),
-                wl_front: self.water_edge_at_lz(cx, cz + 1, 0),
-                wl_back:  self.water_edge_at_lz(cx, cz - 1, 15),
-            };
+            let edges = self.build_neighbor_edges(cx, cz);
 
             self.chunks.get_mut(&pos).unwrap().mark_mesh_dispatched();
             self.pending_meshes.insert(pos);
@@ -256,20 +239,7 @@ impl World {
             let [cx, _, cz] = pos;
             let blocks = self.chunks[&pos].blocks_snapshot();
             let water_levels: WaterLevels = self.water_levels_snapshot(cx, cz);
-            let edges = NeighborEdges {
-                right: self.chunks.get(&[cx + 1, 0, cz])
-                    .map(|c| c.edge_right()).unwrap_or([[BlockType::Air; 16]; 16]),
-                left: self.chunks.get(&[cx - 1, 0, cz])
-                    .map(|c| c.edge_left()).unwrap_or([[BlockType::Air; 16]; 16]),
-                front: self.chunks.get(&[cx, 0, cz + 1])
-                    .map(|c| c.edge_front()).unwrap_or([[BlockType::Air; 16]; 16]),
-                back: self.chunks.get(&[cx, 0, cz - 1])
-                    .map(|c| c.edge_back()).unwrap_or([[BlockType::Air; 16]; 16]),
-                wl_right: self.water_edge_at_lx(cx + 1, cz, 0),
-                wl_left:  self.water_edge_at_lx(cx - 1, cz, 15),
-                wl_front: self.water_edge_at_lz(cx, cz + 1, 0),
-                wl_back:  self.water_edge_at_lz(cx, cz - 1, 15),
-            };
+            let edges = self.build_neighbor_edges(cx, cz);
             let vertices = Chunk::build_vertices(&blocks, &edges, &water_levels);
             self.chunks.get_mut(&pos).unwrap().finalize_mesh(vertices);
         }
@@ -421,6 +391,27 @@ impl World {
         self.refresh_active_spread(wx, wy, wz);
     }
 
+    fn build_neighbor_edges(&self, cx: i32, cz: i32) -> NeighborEdges {
+        let r_loaded = self.chunks.contains_key(&[cx + 1, 0, cz]);
+        let l_loaded = self.chunks.contains_key(&[cx - 1, 0, cz]);
+        let f_loaded = self.chunks.contains_key(&[cx, 0, cz + 1]);
+        let b_loaded = self.chunks.contains_key(&[cx, 0, cz - 1]);
+        NeighborEdges {
+            right: if r_loaded { self.chunks[&[cx+1,0,cz]].edge_right() } else { [[BlockType::Air; 16]; 16] },
+            left:  if l_loaded { self.chunks[&[cx-1,0,cz]].edge_left()  } else { [[BlockType::Air; 16]; 16] },
+            front: if f_loaded { self.chunks[&[cx,0,cz+1]].edge_front() } else { [[BlockType::Air; 16]; 16] },
+            back:  if b_loaded { self.chunks[&[cx,0,cz-1]].edge_back()  } else { [[BlockType::Air; 16]; 16] },
+            wl_right: if r_loaded { self.water_edge_at_lx(cx+1, cz, 0)  } else { [[0u8; 16]; 16] },
+            wl_left:  if l_loaded { self.water_edge_at_lx(cx-1, cz, 15) } else { [[0u8; 16]; 16] },
+            wl_front: if f_loaded { self.water_edge_at_lz(cx, cz+1, 0)  } else { [[0u8; 16]; 16] },
+            wl_back:  if b_loaded { self.water_edge_at_lz(cx, cz-1, 15) } else { [[0u8; 16]; 16] },
+            right_loaded: r_loaded,
+            left_loaded:  l_loaded,
+            front_loaded: f_loaded,
+            back_loaded:  b_loaded,
+        }
+    }
+
     // ── Water level helpers (used when snapshotting data for mesh threads) ───
 
     /// Copy this chunk's water levels into a WaterLevels array.
@@ -491,7 +482,8 @@ impl World {
 
     pub fn surface_height(&self, wx: i32, wz: i32) -> i32 {
         for y in (0..16).rev() {
-            if self.get_block(wx, y, wz).is_solid() {
+            let b = self.get_block(wx, y, wz);
+            if b.is_solid() && !matches!(b, BlockType::Log | BlockType::Leaves) {
                 return y + 1;
             }
         }

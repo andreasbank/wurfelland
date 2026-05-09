@@ -56,3 +56,9 @@ pub use clock_renderer::ClockRenderer;
 
 pub mod entity_renderer;
 pub use entity_renderer::EntityRenderer;
+
+pub mod main_menu_renderer;
+pub use main_menu_renderer::MainMenuRenderer;
+
+pub mod multiplayer_menu_renderer;
+pub use multiplayer_menu_renderer::MultiplayerMenuRenderer;

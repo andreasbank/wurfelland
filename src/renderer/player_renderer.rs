@@ -83,6 +83,7 @@ fn create_player_texture() -> u32 {
 
 pub enum PlayerDrawMode {
     ArmsOnly,
+    Full,
 }
 
 // Vertex layout of the mesh (each box = 6 faces × 6 verts = 36 verts):
@@ -185,20 +186,42 @@ impl PlayerRenderer {
             gl::ActiveTexture(gl::TEXTURE0);
             gl::BindTexture(gl::TEXTURE_2D, self.tex_id);
             gl::BindVertexArray(self.vao);
-            let _ = mode;
 
-            // Left arm — no swing
-            gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE, mvp.to_cols_array().as_ptr());
-            gl::DrawArrays(gl::TRIANGLES, ARMS_START, ARM_VERTS);
+            match mode {
+                PlayerDrawMode::Full => {
+                    // Head + torso + legs (all at base MVP)
+                    gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE, mvp.to_cols_array().as_ptr());
+                    gl::DrawArrays(gl::TRIANGLES, 0, HEAD_VERTS + TORSO_VERTS);
+                    // Legs (start at 4×36 = 144)
+                    gl::DrawArrays(gl::TRIANGLES, ARMS_START + ARM_VERTS * 2, ARM_VERTS * 2);
 
-            // Right arm — pivot-rotate around shoulder joint (model-local x=0.275, y=1.45, z=0)
-            let pivot = glam::Vec3::new(0.275, 1.45, 0.0);
-            let arm_local = glam::Mat4::from_translation(pivot)
-                * glam::Mat4::from_rotation_x(swing_angle)
-                * glam::Mat4::from_translation(-pivot);
-            let mvp_right = *projection * *view * model * arm_local;
-            gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE, mvp_right.to_cols_array().as_ptr());
-            gl::DrawArrays(gl::TRIANGLES, ARMS_START + ARM_VERTS, ARM_VERTS);
+                    // Left arm — no swing
+                    gl::DrawArrays(gl::TRIANGLES, ARMS_START, ARM_VERTS);
+
+                    // Right arm — pivot-rotate around shoulder joint
+                    let pivot = glam::Vec3::new(0.275, 1.45, 0.0);
+                    let arm_local = glam::Mat4::from_translation(pivot)
+                        * glam::Mat4::from_rotation_x(swing_angle)
+                        * glam::Mat4::from_translation(-pivot);
+                    let mvp_right = *projection * *view * model * arm_local;
+                    gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE, mvp_right.to_cols_array().as_ptr());
+                    gl::DrawArrays(gl::TRIANGLES, ARMS_START + ARM_VERTS, ARM_VERTS);
+                }
+                PlayerDrawMode::ArmsOnly => {
+                    // Left arm — no swing
+                    gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE, mvp.to_cols_array().as_ptr());
+                    gl::DrawArrays(gl::TRIANGLES, ARMS_START, ARM_VERTS);
+
+                    // Right arm — pivot-rotate around shoulder joint (model-local x=0.275, y=1.45, z=0)
+                    let pivot = glam::Vec3::new(0.275, 1.45, 0.0);
+                    let arm_local = glam::Mat4::from_translation(pivot)
+                        * glam::Mat4::from_rotation_x(swing_angle)
+                        * glam::Mat4::from_translation(-pivot);
+                    let mvp_right = *projection * *view * model * arm_local;
+                    gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE, mvp_right.to_cols_array().as_ptr());
+                    gl::DrawArrays(gl::TRIANGLES, ARMS_START + ARM_VERTS, ARM_VERTS);
+                }
+            }
 
             gl::BindVertexArray(0);
             gl::Enable(gl::CULL_FACE);
