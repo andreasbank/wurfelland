@@ -227,6 +227,8 @@ impl ChunkRenderer {
         fog_color: glam::Vec3,
         ambient_light: f32,
         directional_light: f32,
+        fog_start: f32,
+        fog_end: f32,
     ) {
         unsafe {
             gl::UseProgram(self.shader);
@@ -243,8 +245,8 @@ impl ChunkRenderer {
             gl::Uniform1fv(self.uniforms.cascade_ends, NUM_CASCADES as i32, cascade_ends.as_ptr());
             gl::Uniform1fv(self.uniforms.shadow_texel_sizes, NUM_CASCADES as i32, shadow_texel_sizes.as_ptr());
             gl::Uniform1i(self.uniforms.use_textures, 1);
-            gl::Uniform1f(self.uniforms.fog_start, 32.0);
-            gl::Uniform1f(self.uniforms.fog_end,   64.0);
+            gl::Uniform1f(self.uniforms.fog_start, fog_start);
+            gl::Uniform1f(self.uniforms.fog_end,   fog_end);
             gl::Uniform3f(self.uniforms.fog_color, fog_color.x, fog_color.y, fog_color.z);
             gl::Uniform1f(self.uniforms.ambient_light, ambient_light);
             gl::Uniform1f(self.uniforms.directional_light, directional_light);

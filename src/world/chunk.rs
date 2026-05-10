@@ -95,11 +95,11 @@ pub struct Chunk {
 }
 
 impl Chunk {
-    pub fn generate(position: [i32; 3]) -> Self {
-        let terrain = Perlin::new(42);
-        let temp    = Perlin::new(100);
-        let moist   = Perlin::new(200);
-        let cont    = Perlin::new(300);
+    pub fn generate(position: [i32; 3], seed: u32) -> Self {
+        let terrain = Perlin::new(seed);
+        let temp    = Perlin::new(seed.wrapping_add(58));
+        let moist   = Perlin::new(seed.wrapping_add(158));
+        let cont    = Perlin::new(seed.wrapping_add(258));
 
         let mut blocks     = [[[BlockType::Air; 16]; 16]; 16];
         let mut surface    = [[0usize; 16]; 16];

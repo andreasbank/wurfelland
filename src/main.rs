@@ -36,6 +36,7 @@ use renderer::ConsoleRenderer;
 use renderer::console_renderer::ConsoleAction;
 use renderer::EntityRenderer;
 use renderer::MultiplayerMenuRenderer;
+use renderer::OptionsMenuRenderer;
 
 mod net;
 use net::{GameServer, GameClient};
@@ -47,6 +48,31 @@ enum GameState {
     MultiplayerMenu,
     LoadingGame,
     Playing,
+}
+
+const CHUNK_RADII: [i32; 5] = [4, 6, 8, 10, 12];
+
+#[derive(Clone, Copy, PartialEq)]
+enum FogDistance { Near, Normal, Far, Off }
+
+impl FogDistance {
+    fn fog_params(self) -> (f32, f32) {
+        match self {
+            Self::Near   => (48.0,   64.0),
+            Self::Normal => (80.0,   96.0),
+            Self::Far    => (112.0, 128.0),
+            Self::Off    => (9990.0, 9999.0),
+        }
+    }
+    fn as_idx(self) -> usize {
+        match self { Self::Near => 0, Self::Normal => 1, Self::Far => 2, Self::Off => 3 }
+    }
+    fn next(self) -> Self {
+        match self {
+            Self::Near => Self::Normal, Self::Normal => Self::Far,
+            Self::Far  => Self::Off,   Self::Off    => Self::Near,
+        }
+    }
 }
 
 
@@ -83,7 +109,7 @@ fn main() {
         gl::Enable(gl::DEPTH_TEST);
 
         // ── World + player (no blocking — menu loads it incrementally) ─────────
-        let mut world  = World::new(4);
+        let mut world  = World::new(12, 0xDEAD_C0DE);
         let mut player = Player::new();
 
         // Kick off background chunk generation around spawn
@@ -104,6 +130,7 @@ fn main() {
         let build_renderer      = BuildMenuRenderer::new();
         let mut console         = ConsoleRenderer::new();
         let mut mp_menu         = MultiplayerMenuRenderer::new();
+        let mut options_menu    = OptionsMenuRenderer::new();
 
         // ── Network state ─────────────────────────────────────────────────────
         let mut net_server: Option<GameServer> = None;
@@ -113,6 +140,7 @@ fn main() {
         // ── Game state ────────────────────────────────────────────────────────
         let mut game_state = GameState::MainMenu;
         let mut menu_yaw: f32 = 0.0; // slowly panning bird's-eye camera
+        let mut menu_reveal_timer: f32 = 0.0; // seconds elapsed since chunks finished loading
 
         let mut chickens: Vec<Chicken> = Vec::new();
         let mut item_entities: Vec<ItemEntity> = Vec::new();
@@ -122,6 +150,9 @@ fn main() {
         let mut bag_open     = false;
         let mut build_open   = false;
         let mut console_open = false;
+        let mut options_open = false;
+        let mut fog_distance = FogDistance::Normal;
+        let mut chunk_radius_idx: usize = 2; // default radius = CHUNK_RADII[2] = 8
         let mut console_swallow_char = false;
         let mut paused = false;
         let mut outline_enabled = true;
@@ -157,7 +188,7 @@ fn main() {
         // How many chunks we want loaded before the menu "feels" ready.
         // The world generates roughly a 6×6 ring of chunks around spawn, so 36
         // is safely achievable and the bar reaches 100 % without stalling.
-        const MENU_CHUNK_TARGET: usize = 36;
+        const MENU_CHUNK_TARGET: usize = 150;
 
         // ── Main loop ─────────────────────────────────────────────────────────
         while !window.should_close() {
@@ -183,11 +214,54 @@ fn main() {
                     }
 
                     glfw::WindowEvent::MouseButton(glfw::MouseButton::Button1, Action::Press, _) => {
-                        match game_state {
+                        // Gameplay only — capture cursor and start digging.
+                        if game_state == GameState::Playing && !paused && !bag_open
+                            && !build_open && !options_open
+                        {
+                            window.set_cursor_mode(glfw::CursorMode::Disabled);
+                            lmb_held = true;
+                        }
+                    }
+
+                    glfw::WindowEvent::MouseButton(glfw::MouseButton::Button1, Action::Release, _) => {
+                        lmb_held = false;
+
+                        // All UI button actions fire on release so dragging off a
+                        // button before releasing cancels the click (standard behaviour).
+                        if options_open {
+                            match options_menu.handle_click(last_mouse_x, last_mouse_y, win_w, win_h) {
+                                Some("fog")     => fog_distance = fog_distance.next(),
+                                Some("chunks")  => {
+                                    chunk_radius_idx = (chunk_radius_idx + 1) % CHUNK_RADII.len();
+                                    world.set_radius(CHUNK_RADII[chunk_radius_idx]);
+                                }
+                                Some("outline") => outline_enabled = !outline_enabled,
+                                Some("res") => {
+                                    hi_res = !hi_res;
+                                    let (nw, nh) = if hi_res { (1600, 1200) } else { (800, 600) };
+                                    window.set_size(nw, nh);
+                                    win_w = nw as f32;
+                                    win_h = nh as f32;
+                                    camera.on_resize(nw as u32, nh as u32);
+                                    gl::Viewport(0, 0, nw, nh);
+                                }
+                                Some("back") => options_open = false,
+                                _ => {}
+                            }
+                        } else { match game_state {
                             GameState::MainMenu => {
                                 let menu_ready = world.chunk_count() >= MENU_CHUNK_TARGET;
                                 match main_menu.handle_click(last_mouse_x, last_mouse_y, win_w, win_h, menu_ready) {
+                                    Some("options") => options_open = true,
                                     Some("singleplayer") => {
+                                        let seed = std::time::SystemTime::now()
+                                            .duration_since(std::time::UNIX_EPOCH)
+                                            .unwrap_or_default().subsec_nanos();
+                                        world = World::new(8, seed);
+                                        world.update([8.5, 0.0, 8.5]);
+                                        chickens.clear();
+                                        item_entities.clear();
+                                        menu_reveal_timer = 0.0;
                                         game_state = GameState::LoadingGame;
                                     }
                                     Some("multiplayer") => game_state = GameState::MultiplayerMenu,
@@ -200,6 +274,14 @@ fn main() {
                                         match GameServer::new(SERVER_PORT) {
                                             Ok(server) => {
                                                 net_server = Some(server);
+                                                let seed = std::time::SystemTime::now()
+                                                    .duration_since(std::time::UNIX_EPOCH)
+                                                    .unwrap_or_default().subsec_nanos();
+                                                world = World::new(8, seed);
+                                                world.update([8.5, 0.0, 8.5]);
+                                                chickens.clear();
+                                                item_entities.clear();
+                                                menu_reveal_timer = 0.0;
                                                 game_state = GameState::LoadingGame;
                                             }
                                             Err(e) => eprintln!("Failed to start server: {}", e),
@@ -215,6 +297,14 @@ fn main() {
                                                 Ok(client) => {
                                                     net_client = Some(client);
                                                     mp_menu.join_mode = false;
+                                                    let seed = std::time::SystemTime::now()
+                                                        .duration_since(std::time::UNIX_EPOCH)
+                                                        .unwrap_or_default().subsec_nanos();
+                                                    world = World::new(8, seed);
+                                                    world.update([8.5, 0.0, 8.5]);
+                                                    chickens.clear();
+                                                    item_entities.clear();
+                                                    menu_reveal_timer = 0.0;
                                                     game_state = GameState::LoadingGame;
                                                 }
                                                 Err(e) => eprintln!("Failed to connect: {}", e),
@@ -236,33 +326,15 @@ fn main() {
                             GameState::Playing => {
                                 if paused {
                                     match menu_renderer.handle_click(last_mouse_x, last_mouse_y, win_w, win_h) {
-                                        Some("exit") => window.set_should_close(true),
-                                        Some("outline") => outline_enabled = !outline_enabled,
-                                        Some("res") => {
-                                            hi_res = !hi_res;
-                                            let (nw, nh) = if hi_res { (1600, 1200) } else { (800, 600) };
-                                            window.set_size(nw, nh);
-                                            win_w = nw as f32;
-                                            win_h = nh as f32;
-                                            camera.on_resize(nw as u32, nh as u32);
-                                            gl::Viewport(0, 0, nw, nh);
-                                        }
+                                        Some("exit")    => window.set_should_close(true),
+                                        Some("options") => options_open = true,
                                         _ => {}
                                     }
                                 } else if build_open {
                                     build_renderer.handle_click(last_mouse_x, last_mouse_y, win_w, win_h);
-                                } else if bag_open {
-                                    // keep cursor visible; bag UI handles its own logic
-                                } else {
-                                    window.set_cursor_mode(glfw::CursorMode::Disabled);
-                                    lmb_held = true;
                                 }
                             }
-                        }
-                    }
-
-                    glfw::WindowEvent::MouseButton(glfw::MouseButton::Button1, Action::Release, _) => {
-                        lmb_held = false;
+                        }} // end else { match game_state
                     }
 
                     glfw::WindowEvent::MouseButton(glfw::MouseButton::Button2, Action::Press, _) => {
@@ -307,7 +379,10 @@ fn main() {
                         match action {
                             Action::Press => {
                                 if key == Key::Escape {
-                                    if console_open {
+                                    if options_open {
+                                        options_open = false;
+                                        // paused state unchanged — stay in ESC menu
+                                    } else if console_open {
                                         console_open = false;
                                         window.set_cursor_mode(glfw::CursorMode::Disabled);
                                         first_mouse = true;
@@ -396,32 +471,26 @@ fn main() {
             // ── State-specific updates ─────────────────────────────────────────
             match game_state {
                 GameState::MainMenu => {
-                    // Let the world generate in the background for the scenic view.
-                    world.finalize_all_pending();
                     world.update([8.0, 28.0, 8.0]);
                 }
 
                 GameState::MultiplayerMenu => {
-                    world.finalize_all_pending();
                     world.update([8.0, 28.0, 8.0]);
                     mp_menu.update_ip(&mp_ip);
                 }
 
                 GameState::LoadingGame => {
-                    // A handful of finalizations per frame — enough to make
-                    // progress without freezing the render loop.
-                    for _ in 0..5 { world.finalize_all_pending(); }
-                    world.update([8.5, 0.0, 8.5]);
+                    // Pump the async pipeline as fast as possible each frame.
+                    for _ in 0..8 { world.update_loading([8.5, 0.0, 8.5]); }
 
-                    // Wait for the spawn chunk centre (8, 8) — safely inside
-                    // chunk (0,0) so no 4-chunk corner ambiguity.
-                    if world.surface_height(8, 8) > 0 {
-                        // Spawn a couple of blocks above the computed surface so the
-                        // player is guaranteed to be in open air — physics then drops
-                        // them cleanly onto the surface, just like the old fall-from-y64 approach.
-                        let spawn_y = world.surface_height(8, 8) + 2;
-                        player.position  = [8.5, spawn_y as f32, 8.5];
-                        player.velocity  = [0.0, 0.0, 0.0]; // clear any accumulated fall
+                    // Wait until the 3×3 chunk area around spawn is fully meshed.
+                    let mut spawn_ready = true;
+                    for dx in -1..=1i32 { for dz in -1..=1i32 {
+                        if !world.is_chunk_meshed(dx, dz) { spawn_ready = false; }
+                    }}
+                    if spawn_ready {
+                        player.position = world.find_spawn_point();
+                        player.velocity = [0.0, 0.0, 0.0];
 
                         // Spawn chickens wherever heights are currently known
                         let scan_radius: i32 = 12;
@@ -645,13 +714,12 @@ fn main() {
             let dir_max          = if altitude >= 0.0 { 0.55 } else { 0.15 };
             let directional_light = dir_max * dir_t;
 
-            // ── Camera (override for non-Playing states) ───────────────────────
-            if game_state != GameState::Playing {
-                // Slow-panning bird's-eye at ~10 player-heights above the terrain
-                menu_yaw += delta_time * 0.15;
-                camera.position = glam::Vec3::new(8.0, 35.0, 8.0);
+            // ── Camera (menu panorama only — not during game loading) ─────────
+            if game_state == GameState::MainMenu || game_state == GameState::MultiplayerMenu {
+                menu_yaw += delta_time * 0.006;
+                camera.position = glam::Vec3::new(8.0, 16.0, 8.0);
                 camera.front    = glam::Vec3::new(
-                    menu_yaw.sin() * 0.75, -0.55, menu_yaw.cos() * 0.75,
+                    menu_yaw.sin(), -0.06, menu_yaw.cos(),
                 ).normalize();
                 camera.up = glam::Vec3::new(0.0, 1.0, 0.0);
             }
@@ -659,51 +727,62 @@ fn main() {
             let view       = camera.view_matrix();
             let projection = camera.projection_matrix();
 
-            // ── 3D render (always — forms the menu background too) ─────────────
+            let menu_ready = world.chunk_count() >= MENU_CHUNK_TARGET;
+            if menu_ready && (game_state == GameState::MainMenu || game_state == GameState::MultiplayerMenu) {
+                menu_reveal_timer += delta_time;
+            }
+            let menu_revealed = menu_reveal_timer >= 2.0;
+            let show_3d = game_state == GameState::Playing || menu_revealed;
+
+            // ── 3D render ─────────────────────────────────────────────────────
             gl::ClearColor(sky_color.x, sky_color.y, sky_color.z, 1.0);
             gl::Clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT);
 
-            sky_renderer.draw(&view, &projection, sky_color, 0.5 + 0.8 * day_w);
+            if show_3d {
+                sky_renderer.draw(&view, &projection, sky_color, 0.5 + 0.8 * day_w);
 
-            let (fb_w, fb_h) = window.get_framebuffer_size();
-            shadow_pass.begin(
-                sun_dir,
-                camera.position, camera.front, camera.up,
-                camera.fov.to_radians(), camera.aspect_ratio,
-                chunk_renderer.texture_atlas(),
-            );
-            for i in 0..NUM_CASCADES {
-                shadow_pass.begin_cascade(i);
-                world.draw_shadow(&shadow_pass);
-                if game_state == GameState::Playing {
-                    entity_renderer.draw_shadows(&chickens, &shadow_pass);
+                let (fb_w, fb_h) = window.get_framebuffer_size();
+                shadow_pass.begin(
+                    sun_dir,
+                    camera.position, camera.front, camera.up,
+                    camera.fov.to_radians(), camera.aspect_ratio,
+                    chunk_renderer.texture_atlas(),
+                );
+                for i in 0..NUM_CASCADES {
+                    shadow_pass.begin_cascade(i);
+                    world.draw_shadow(&shadow_pass);
+                    if game_state == GameState::Playing {
+                        entity_renderer.draw_shadows(&chickens, &shadow_pass);
+                    }
                 }
-            }
-            shadow_pass.end(fb_w, fb_h);
+                shadow_pass.end(fb_w, fb_h);
 
-            if sun_pos.y > 0.0 {
-                let pale = glam::Vec3::new(1.0, 0.95, 0.80);
-                let warm = glam::Vec3::new(1.0, 0.55, 0.30);
-                let t = smoothstep(0.0, 0.25, sun_pos.y);
-                let color = warm + (pale - warm) * t;
-                sun_renderer.draw(&view, &projection, camera.position,
-                    sun_pos.normalize(), 25.0, color);
-            }
-            if moon_pos.y > 0.0 {
-                sun_renderer.draw(&view, &projection, camera.position,
-                    moon_pos.normalize(), 18.0, glam::Vec3::new(0.85, 0.88, 1.0));
-            }
+                if sun_pos.y > 0.0 {
+                    let pale = glam::Vec3::new(1.0, 0.95, 0.80);
+                    let warm = glam::Vec3::new(1.0, 0.55, 0.30);
+                    let t = smoothstep(0.0, 0.25, sun_pos.y);
+                    let color = warm + (pale - warm) * t;
+                    sun_renderer.draw(&view, &projection, camera.position,
+                        sun_pos.normalize(), 25.0, color);
+                }
+                if moon_pos.y > 0.0 {
+                    sun_renderer.draw(&view, &projection, camera.position,
+                        moon_pos.normalize(), 18.0, glam::Vec3::new(0.85, 0.88, 1.0));
+                }
 
-            chunk_renderer.begin_frame(
-                &view, &projection,
-                shadow_pass.depth_texture_array(),
-                shadow_pass.light_space_matrices(),
-                &CASCADE_ENDS,
-                shadow_pass.texel_world_sizes(),
-                sun_dir, sky_color, ambient_light, directional_light,
-            );
-            world.draw(&chunk_renderer, &camera);
-            chunk_renderer.end_frame();
+                let (fog_start, fog_end) = fog_distance.fog_params();
+                chunk_renderer.begin_frame(
+                    &view, &projection,
+                    shadow_pass.depth_texture_array(),
+                    shadow_pass.light_space_matrices(),
+                    &CASCADE_ENDS,
+                    shadow_pass.texel_world_sizes(),
+                    sun_dir, sky_color, ambient_light, directional_light,
+                    fog_start, fog_end,
+                );
+                world.draw(&chunk_renderer, &camera);
+                chunk_renderer.end_frame();
+            }
 
             // ── Playing-only 3D objects ────────────────────────────────────────
             if game_state == GameState::Playing {
@@ -789,38 +868,44 @@ fn main() {
                 if build_open {
                     build_renderer.draw(last_mouse_x / win_w, last_mouse_y / win_h);
                 }
-                if paused     { menu_renderer.draw(outline_enabled, hi_res, win_w, win_h); }
+                if paused && !options_open { menu_renderer.draw(win_w, win_h); }
                 if console_open { console.draw(win_w, win_h); }
             }
 
             // ── Menu / loading UI ──────────────────────────────────────────────
             match game_state {
                 GameState::MainMenu => {
-                    let loaded = world.chunk_count().min(MENU_CHUNK_TARGET);
-                    let progress = loaded as f32 / MENU_CHUNK_TARGET as f32;
-                    main_menu.draw(progress, loaded >= MENU_CHUNK_TARGET, win_w, win_h);
+                    if menu_revealed {
+                        main_menu.draw(1.0, true, win_w, win_h);
+                    } else {
+                        let progress = (world.chunk_count() as f32 / MENU_CHUNK_TARGET as f32).min(1.0);
+                        main_menu.draw_loading_screen(progress, win_w, win_h);
+                    }
                 }
                 GameState::MultiplayerMenu => {
-                    let loaded = world.chunk_count().min(MENU_CHUNK_TARGET);
-                    main_menu.draw(
-                        loaded as f32 / MENU_CHUNK_TARGET as f32,
-                        loaded >= MENU_CHUNK_TARGET,
-                        win_w, win_h,
-                    );
+                    if menu_revealed {
+                        main_menu.draw(1.0, true, win_w, win_h);
+                    } else {
+                        let progress = (world.chunk_count() as f32 / MENU_CHUNK_TARGET as f32).min(1.0);
+                        main_menu.draw_loading_screen(progress, win_w, win_h);
+                    }
                     mp_menu.draw(win_w, win_h);
                 }
                 GameState::LoadingGame => {
-                    // Progress: 9 sample points centred on chunk (0,0) interior
-                    let checks: &[(i32, i32)] = &[
-                        (8,8),(24,8),(-8,8),(8,24),(8,-8),(24,24),(-8,24),(24,-8),(-8,-8),
-                    ];
-                    let loaded = checks.iter()
-                        .filter(|&&(x, z)| world.surface_height(x, z) > 0)
-                        .count();
-                    let progress = loaded as f32 / checks.len() as f32;
+                    // Progress = how many of the 3×3 spawn chunks are meshed.
+                    let mut meshed = 0usize;
+                    for dx in -1..=1i32 { for dz in -1..=1i32 {
+                        if world.is_chunk_meshed(dx, dz) { meshed += 1; }
+                    }}
+                    let progress = meshed as f32 / 9.0;
                     main_menu.draw_loading_screen(progress, win_w, win_h);
                 }
                 GameState::Playing => {}
+            }
+
+            // Options menu overlays on top of everything else.
+            if options_open {
+                options_menu.draw(fog_distance.as_idx(), chunk_radius_idx, outline_enabled, hi_res, win_w, win_h);
             }
 
             window.swap_buffers();

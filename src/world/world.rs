@@ -30,6 +30,7 @@ pub struct World {
     mesh_tx: Sender<MeshReady>,
     mesh_rx: Receiver<MeshReady>,
     loaded_radius: i32,
+    seed: u32,
     player_chunk: [i32; 3],
     pending_water: HashMap<[i32; 3], (f32, u8)>, // position → (countdown, level to place)
     active_water: HashSet<[i32; 3]>,              // water blocks that currently have air below them
@@ -38,7 +39,7 @@ pub struct World {
 }
 
 impl World {
-    pub fn new(loaded_radius: i32) -> Self {
+    pub fn new(loaded_radius: i32, seed: u32) -> Self {
         let (block_tx, block_rx) = mpsc::channel();
         let (mesh_tx, mesh_rx) = mpsc::channel();
         World {
@@ -51,6 +52,7 @@ impl World {
             mesh_tx,
             mesh_rx,
             loaded_radius,
+            seed,
             player_chunk: [i32::MAX; 3],
             pending_water: HashMap::new(),
             active_water: HashSet::new(),
@@ -100,9 +102,10 @@ impl World {
         for pos in to_spawn {
             self.terrain_queue.remove(&pos);
             self.pending_blocks.insert(pos);
-            let tx = self.block_tx.clone();
+            let tx   = self.block_tx.clone();
+            let seed = self.seed;
             thread::spawn(move || {
-                let chunk = Chunk::generate(pos);
+                let chunk = Chunk::generate(pos, seed);
                 let _ = tx.send(BlockReady { position: pos, chunk });
             });
         }
@@ -208,42 +211,6 @@ impl World {
         }
     }
 
-    // Drain all pending during startup
-    pub fn finalize_all_pending(&mut self) {
-        std::thread::sleep(std::time::Duration::from_millis(5));
-        self.dispatch_terrain_threads();
-        // Drain terrain threads
-        while let Ok(ready) = self.block_rx.try_recv() {
-            self.pending_blocks.remove(&ready.position);
-            self.chunks.insert(ready.position, ready.chunk);
-        }
-        // Seed water_levels from all loaded chunks
-        let positions: Vec<[i32; 3]> = self.chunks.keys().copied().collect();
-        for pos in &positions {
-            let [cx, _, cz] = *pos;
-            for ly in 0..16i32 {
-                for lz in 0..16i32 {
-                    for lx in 0..16i32 {
-                        let wx = cx * 16 + lx;
-                        let wz = cz * 16 + lz;
-                        if self.chunks[pos].get_block(lx as usize, ly as usize, lz as usize) == BlockType::Water {
-                            self.water_levels.entry([wx, ly, wz]).or_insert(8);
-                        }
-                    }
-                }
-            }
-        }
-        // Build meshes synchronously (startup, neighbors don't need invalidation)
-        for pos in positions {
-            if !self.chunks[&pos].needs_mesh() { continue; }
-            let [cx, _, cz] = pos;
-            let blocks = self.chunks[&pos].blocks_snapshot();
-            let water_levels: WaterLevels = self.water_levels_snapshot(cx, cz);
-            let edges = self.build_neighbor_edges(cx, cz);
-            let vertices = Chunk::build_vertices(&blocks, &edges, &water_levels);
-            self.chunks.get_mut(&pos).unwrap().finalize_mesh(vertices);
-        }
-    }
 
     /// Updates active_water for the changed position and the one above it.
     /// Call after any set_block and after seeding a new chunk.
@@ -457,6 +424,32 @@ impl World {
 
     /// Returns a reference to the chunk at chunk-grid coordinates (cx, cz).
     /// Used by the minimap to batch block lookups per chunk instead of per block.
+    /// High-throughput update used during game loading — drains the full pipeline
+    /// each call so the spawn area becomes ready as fast as possible.
+    pub fn update_loading(&mut self, player_pos: [f32; 3]) {
+        let new_chunk = [
+            (player_pos[0] / 16.0).floor() as i32,
+            0,
+            (player_pos[2] / 16.0).floor() as i32,
+        ];
+        if new_chunk != self.player_chunk {
+            self.load_chunks_around(new_chunk, self.loaded_radius);
+            self.player_chunk = new_chunk;
+        }
+        self.dispatch_terrain_threads();
+        self.finalize_blocks(64);
+        self.finalize_meshes(64);
+    }
+
+    pub fn set_radius(&mut self, radius: i32) {
+        self.loaded_radius = radius;
+        self.player_chunk = [i32::MAX; 3];
+    }
+
+    pub fn is_chunk_meshed(&self, cx: i32, cz: i32) -> bool {
+        self.chunks.get(&[cx, 0, cz]).map_or(false, |c| c.mesh.is_some())
+    }
+
     pub fn chunk_count(&self) -> usize {
         self.chunks.len()
     }
@@ -488,6 +481,37 @@ impl World {
             }
         }
         0
+    }
+
+    /// Find a safe above-ground spawn position near world coords (8, 8).
+    /// Searches outward in rings, rejecting underwater columns and columns
+    /// where a tree trunk would put the player inside a solid block.
+    pub fn find_spawn_point(&self) -> [f32; 3] {
+        for r in 0..=8i32 {
+            for dx in -r..=r {
+                for dz in -r..=r {
+                    // Only visit the perimeter of each ring (not interior).
+                    if r > 0 && dx.abs() != r && dz.abs() != r { continue; }
+                    let wx = 8 + dx;
+                    let wz = 8 + dz;
+                    let ground = self.surface_height(wx, wz);
+                    if ground == 0 { continue; }
+                    // Reject underwater columns — the player would land on the sea floor.
+                    if self.get_block(wx, ground, wz) == BlockType::Water { continue; }
+                    // Scan upward until two consecutive non-solid blocks are free
+                    // (head + body clearance, clear of any log trunk in range).
+                    for y in ground..15i32 {
+                        if !self.get_block(wx, y, wz).is_solid()
+                            && !self.get_block(wx, y + 1, wz).is_solid()
+                        {
+                            return [wx as f32 + 0.5, y as f32, wz as f32 + 0.5];
+                        }
+                    }
+                }
+            }
+        }
+        // Fallback — should never be reached with a loaded chunk.
+        [8.5, self.surface_height(8, 8) as f32 + 2.0, 8.5]
     }
 
     pub fn raycast(&self, origin: [f32; 3], dir: [f32; 3], max_dist: f32) -> Option<[i32; 3]> {

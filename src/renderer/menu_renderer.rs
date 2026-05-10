@@ -8,31 +8,23 @@ impl MenuRenderer {
     pub fn new() -> Self {
         let mut window = Window::new()
             .with_overlay(0.6)
-            .with_title("PAUSED", (0.30, 0.28, 0.70, 0.38));
+            .with_title("PAUSED", (0.30, 0.24, 0.70, 0.34));
 
-        window.add_button(TextButton::new_toggle(
-            "outline",
-            &["OUTLINE:OFF", "OUTLINE:ON"],
-            (0.30, 0.44, 0.70, 0.52),
-        ));
-        window.add_button(TextButton::new_toggle(
-            "res",
-            &["RES:LO", "RES:HI"],
-            (0.30, 0.56, 0.70, 0.64),
+        window.add_button(TextButton::new(
+            "options",
+            "OPTIONS",
+            (0.30, 0.44, 0.70, 0.54),
         ));
         window.add_button(TextButton::new(
             "exit",
             "EXIT",
-            (0.38, 0.68, 0.62, 0.76),
+            (0.30, 0.58, 0.70, 0.68),
         ));
 
         MenuRenderer { window }
     }
 
-    /// Sync toggle-button labels to current game state, then draw.
-    pub fn draw(&mut self, outline_enabled: bool, hi_res: bool, win_w: f32, win_h: f32) {
-        self.window.button_mut("outline").unwrap().set_label(outline_enabled as usize);
-        self.window.button_mut("res").unwrap().set_label(hi_res as usize);
+    pub fn draw(&mut self, win_w: f32, win_h: f32) {
         self.window.draw(win_w, win_h);
     }
 

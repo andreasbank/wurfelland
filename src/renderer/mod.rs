@@ -62,3 +62,6 @@ pub use main_menu_renderer::MainMenuRenderer;
 
 pub mod multiplayer_menu_renderer;
 pub use multiplayer_menu_renderer::MultiplayerMenuRenderer;
+
+pub mod options_menu_renderer;
+pub use options_menu_renderer::OptionsMenuRenderer;
