@@ -48,41 +48,66 @@ fn should_place_tree(world_x: i32, world_z: i32, freq: u32) -> bool {
     (h.unsigned_abs() % freq) == 0
 }
 
-/// 1-in-`freq` chance per column for tall grass placement.
-fn should_place_grass(world_x: i32, world_z: i32, freq: u32) -> bool {
-    if freq == 0 { return false; }
-    let h = world_x.wrapping_mul(1234567891_i32)
-                   .wrapping_add(world_z.wrapping_mul(987654321_i32));
-    (h.unsigned_abs() % freq) == 0
-}
 
-/// Plants a tree centred on (lx, lz) with base at surf_y.
-/// Only places the tree if the entire shape fits inside the 16-tall chunk.
-fn plant_tree(blocks: &mut Blocks, lx: usize, surf_y: usize, lz: usize) {
+/// Small tree: 4-block trunk, tight 3×3 canopy.
+fn plant_tree_small(blocks: &mut Blocks, lx: usize, surf_y: usize, lz: usize) {
     if lx < 1 || lx > 14 || lz < 1 || lz > 14 { return; }
     if surf_y + 5 >= 16 { return; }
-
-    for dy in 1..=4 {
-        blocks[lx][surf_y + dy][lz] = BlockType::Log;
-    }
-
+    for dy in 1..=4 { blocks[lx][surf_y + dy][lz] = BlockType::Log; }
     for layer in [3usize, 4] {
-        for dx in -1i32..=1 {
-            for dz in -1i32..=1 {
-                let bx = (lx as i32 + dx) as usize;
-                let bz = (lz as i32 + dz) as usize;
-                let by = surf_y + layer;
-                if blocks[bx][by][bz] != BlockType::Log {
-                    blocks[bx][by][bz] = BlockType::Leaves;
-                }
-            }
-        }
+        for dx in -1i32..=1 { for dz in -1i32..=1 {
+            let by = surf_y + layer;
+            let bx = (lx as i32 + dx) as usize;
+            let bz = (lz as i32 + dz) as usize;
+            if blocks[bx][by][bz] != BlockType::Log { blocks[bx][by][bz] = BlockType::Leaves; }
+        }}
     }
+    blocks[lx][surf_y + 5][lz] = BlockType::Leaves;
+}
 
-    let cap_y = surf_y + 5;
-    for (dx, dz) in [(0,0),(1,0),(-1,0),(0,1),(0,-1)] {
-        blocks[(lx as i32 + dx) as usize][cap_y][(lz as i32 + dz) as usize] = BlockType::Leaves;
+/// Medium tree: 5-block trunk, 3×3 canopy + cross top.
+fn plant_tree_medium(blocks: &mut Blocks, lx: usize, surf_y: usize, lz: usize) {
+    if lx < 1 || lx > 14 || lz < 1 || lz > 14 { return; }
+    if surf_y + 7 >= 16 { return; }
+    for dy in 1..=5 { blocks[lx][surf_y + dy][lz] = BlockType::Log; }
+    for layer in [4usize, 5] {
+        for dx in -1i32..=1 { for dz in -1i32..=1 {
+            let by = surf_y + layer;
+            let bx = (lx as i32 + dx) as usize;
+            let bz = (lz as i32 + dz) as usize;
+            if blocks[bx][by][bz] != BlockType::Log { blocks[bx][by][bz] = BlockType::Leaves; }
+        }}
     }
+    for (dx, dz) in [(0i32,0i32),(1,0),(-1,0),(0,1),(0,-1)] {
+        let bx = (lx as i32 + dx) as usize;
+        let bz = (lz as i32 + dz) as usize;
+        if blocks[bx][surf_y + 6][bz] != BlockType::Log { blocks[bx][surf_y + 6][bz] = BlockType::Leaves; }
+    }
+    blocks[lx][surf_y + 7][lz] = BlockType::Leaves;
+}
+
+/// Large tree: 6-block trunk, wide 5×5 canopy layers.
+fn plant_tree_large(blocks: &mut Blocks, lx: usize, surf_y: usize, lz: usize) {
+    if lx < 2 || lx > 13 || lz < 2 || lz > 13 { return; }
+    if surf_y + 8 >= 16 { return; }
+    for dy in 1..=6 { blocks[lx][surf_y + dy][lz] = BlockType::Log; }
+    // Two 5×5 (corners clipped) layers near canopy base
+    for layer in [5usize, 6] {
+        for dx in -2i32..=2 { for dz in -2i32..=2 {
+            if dx.abs() == 2 && dz.abs() == 2 { continue; }
+            let by = surf_y + layer;
+            let bx = (lx as i32 + dx) as usize;
+            let bz = (lz as i32 + dz) as usize;
+            if blocks[bx][by][bz] != BlockType::Log { blocks[bx][by][bz] = BlockType::Leaves; }
+        }}
+    }
+    // 3×3 at trunk top
+    for dx in -1i32..=1 { for dz in -1i32..=1 {
+        let bx = (lx as i32 + dx) as usize;
+        let bz = (lz as i32 + dz) as usize;
+        if blocks[bx][surf_y + 7][bz] != BlockType::Log { blocks[bx][surf_y + 7][bz] = BlockType::Leaves; }
+    }}
+    blocks[lx][surf_y + 8][lz] = BlockType::Leaves;
 }
 
 pub struct Chunk {
@@ -158,25 +183,63 @@ impl Chunk {
                     && surf >= SEA_LEVEL
                     && blocks[x][surf][z] == BlockType::Grass
                 {
-                    plant_tree(&mut blocks, x, surf, z);
+                    // Pick tree size with a separate hash: ~50% small, 35% medium, 15% large.
+                    let sh = (world_x.wrapping_mul(1_723_459)
+                              ^ world_z.wrapping_mul(9_876_543)) as u32;
+                    match sh % 20 {
+                        0..=9  => plant_tree_small (&mut blocks, x, surf, z),
+                        10..=16 => plant_tree_medium(&mut blocks, x, surf, z),
+                        _       => plant_tree_large (&mut blocks, x, surf, z),
+                    }
                 }
             }
         }
 
-        // ── Tall grass ───────────────────────────────────────────────────────
+        // ── Grass (patch-based) ──────────────────────────────────────────────
+        // The world is divided into 6×6-block patches. Each patch is either
+        // active (grass) or empty, decided by a coarse hash. Within an active
+        // patch ~70% of columns get a grass plant; the size (short/medium/tall)
+        // is chosen per-column so patches contain a natural mix.
         for x in 0..16usize {
             for z in 0..16usize {
-                let world_x = position[0] * 16 + x as i32;
-                let world_z = position[2] * 16 + z as i32;
                 let p     = biome_grid[x][z].params();
+                if p.grass_freq == 0 { continue; }
+
                 let surf  = surface[x][z];
                 let above = surf + 1;
-                if above < 16
-                    && blocks[x][surf][z] == BlockType::Grass
-                    && blocks[x][above][z] == BlockType::Air
-                    && should_place_grass(world_x, world_z, p.grass_freq)
-                {
-                    blocks[x][above][z] = BlockType::TallGrass;
+                if above >= 16 { continue; }
+                if blocks[x][surf][z]  != BlockType::Grass { continue; }
+                if blocks[x][above][z] != BlockType::Air   { continue; }
+
+                let world_x = position[0] * 16 + x as i32;
+                let world_z = position[2] * 16 + z as i32;
+
+                // Patch-level hash: same for all columns in the same 6×6 cell.
+                let px = world_x.div_euclid(6);
+                let pz = world_z.div_euclid(6);
+                let ph = (px.wrapping_mul(374_761_393_i32)
+                          ^ pz.wrapping_mul(668_265_263_i32)) as u32;
+                if ph % p.grass_freq != 0 { continue; } // patch inactive
+
+                // Column-level hash: varies within the patch.
+                let ch = (world_x.wrapping_mul(1_234_567_i32)
+                          ^ world_z.wrapping_mul(7_654_321_i32)) as u32;
+                if ch % 10 >= 7 { continue; } // ~70% fill within the patch
+
+                // Size mix: 40% short, 40% medium, 20% full (stacked).
+                match (ch / 10) % 5 {
+                    0 | 1 => {
+                        blocks[x][above][z] = BlockType::GrassShort;
+                    }
+                    2 | 3 => {
+                        blocks[x][above][z] = BlockType::TallGrass;
+                    }
+                    _ => {
+                        blocks[x][above][z] = BlockType::TallGrass;
+                        if above + 1 < 16 && blocks[x][above + 1][z] == BlockType::Air {
+                            blocks[x][above + 1][z] = BlockType::TallGrass;
+                        }
+                    }
                 }
             }
         }
@@ -271,7 +334,11 @@ impl Chunk {
                     }
 
                     if block == BlockType::TallGrass {
-                        vertices.extend(Self::cross_vertices(x as f32, y as f32, z as f32, block));
+                        vertices.extend(Self::cross_vertices(x as f32, y as f32, z as f32, block, 1.0));
+                        continue;
+                    }
+                    if block == BlockType::GrassShort {
+                        vertices.extend(Self::cross_vertices(x as f32, y as f32, z as f32, block, 0.45));
                         continue;
                     }
 
@@ -480,7 +547,7 @@ impl Chunk {
         ao
     }
 
-    fn cross_vertices(x: f32, y: f32, z: f32, block: BlockType) -> Vec<f32> {
+    fn cross_vertices(x: f32, y: f32, z: f32, block: BlockType, height: f32) -> Vec<f32> {
         let [r, g, b] = block.color();
 
         const N: f32 = 16.0;
@@ -488,14 +555,14 @@ impl Chunk {
         let tile_u = block.texture_id(Face::Front) as f32;
         let u0 = tile_u * ts;
         let u1 = (tile_u + 1.0) * ts;
-        let v0 = 0.0_f32;
+        // Map UVs so shorter grass shows only the bottom portion of the tile.
         let v1 = ts;
+        let v0 = v1 - ts * height;
 
         let mut v: Vec<f32> = Vec::new();
 
         let mut quad = |p: [[f32; 3]; 4]| {
             let uvs = [[u0, v1], [u1, v1], [u1, v0], [u0, v0]];
-            // Cross geometry has no meaningful face normal; use up as placeholder.
             let (nx, ny, nz) = (0.0f32, 1.0, 0.0);
             for &i in &[0usize, 1, 2, 0, 2, 3] {
                 v.extend_from_slice(&[p[i][0], p[i][1], p[i][2], r, g, b, uvs[i][0], uvs[i][1], nx, ny, nz]);
@@ -505,17 +572,18 @@ impl Chunk {
             }
         };
 
+        let h = height;
         quad([
-            [x,       y,       z      ],
-            [x + 1.0, y,       z + 1.0],
-            [x + 1.0, y + 1.0, z + 1.0],
-            [x,       y + 1.0, z      ],
+            [x,       y,     z      ],
+            [x + 1.0, y,     z + 1.0],
+            [x + 1.0, y + h, z + 1.0],
+            [x,       y + h, z      ],
         ]);
         quad([
-            [x + 1.0, y,       z      ],
-            [x,       y,       z + 1.0],
-            [x,       y + 1.0, z + 1.0],
-            [x + 1.0, y + 1.0, z      ],
+            [x + 1.0, y,     z      ],
+            [x,       y,     z + 1.0],
+            [x,       y + h, z + 1.0],
+            [x + 1.0, y + h, z      ],
         ]);
 
         v
