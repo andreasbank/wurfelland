@@ -374,14 +374,17 @@ impl Chunk {
     /// For Up: all 4 corners vary. For side faces: corners[1] and [2] are the top pair.
     fn water_face_vertices(x: f32, y: f32, z: f32, face: Face,
                            block_type: BlockType, corners: [f32; 4]) -> Vec<f32> {
+        // Surface water sits 10% below a full block so wave crests never
+        // protrude above neighbouring non-water blocks.
+        const SURFACE_SCALE: f32 = 0.9;
         let mut pos = face.positions(x, y, z);
         match face {
             Face::Up => {
-                for i in 0..4 { pos[i][1] = y + corners[i]; }
+                for i in 0..4 { pos[i][1] = y + corners[i] * SURFACE_SCALE; }
             }
             Face::Right | Face::Left | Face::Front | Face::Back => {
-                pos[1][1] = y + corners[1];
-                pos[2][1] = y + corners[2];
+                pos[1][1] = y + corners[1] * SURFACE_SCALE;
+                pos[2][1] = y + corners[2] * SURFACE_SCALE;
             }
             Face::Down => {}
         }

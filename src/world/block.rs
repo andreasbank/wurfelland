@@ -19,7 +19,7 @@ impl BlockType {
             BlockType::Grass     => [0.47, 0.67, 0.19],
             BlockType::Dirt      => [0.61, 0.44, 0.22],
             BlockType::Stone     => [0.5,  0.5,  0.5 ],
-            BlockType::Water     => [0.25, 0.41, 0.88],
+            BlockType::Water     => [0.247, 0.463, 0.894],
             BlockType::Log       => [0.55, 0.35, 0.17],
             BlockType::Leaves    => [0.25, 0.51, 0.19],
             BlockType::TallGrass => [0.38, 0.70, 0.20],

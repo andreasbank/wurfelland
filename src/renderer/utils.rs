@@ -161,7 +161,7 @@ pub fn create_block_atlas() -> u32 {
         [120, 172,  48], // 0: Grass top
         [156, 112,  57], // 1: Dirt
         [128, 128, 128], // 2: Stone
-        [ 64, 105, 225], // 3: Water
+        [255, 255, 255], // 3: Water (neutral — vertex color provides the tint)
         [156, 112,  57], // 4: Grass side (base dirt, stripe added below)
         [139,  90,  43], // 5: Log side (brown bark)
         [ 58, 120,  42], // 6: Leaves (dark green)
@@ -208,7 +208,7 @@ pub fn create_block_atlas() -> u32 {
                 let alpha: u8 = if tile_idx == 8 {
                     if in_blade { 255 } else { 0 }  // tall grass: cutout
                 } else if tile_idx == 3 {
-                    170  // water: ~67% opaque
+                    160  // water: ~63% opaque
                 } else {
                     255
                 };

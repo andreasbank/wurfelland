@@ -569,19 +569,18 @@ impl World {
         }
     }
 
-    pub fn draw(&self, renderer: &ChunkRenderer, camera: &crate::camera::Camera) {
+    pub fn draw_opaque(&self, renderer: &ChunkRenderer, camera: &crate::camera::Camera) {
         let frustum = camera.frustum();
-
-        // Pass 1: opaque + cutout geometry (full depth writes).
-        // Iterate directly — avoids allocating a Vec<&Chunk> every frame.
         renderer.set_transparent_pass(false);
         for chunk in self.chunks.values() {
             if chunk.mesh.is_some() && chunk.is_in_frustum(&frustum) {
                 renderer.draw_chunk(chunk);
             }
         }
+    }
 
-        // Pass 2: semi-transparent geometry (water) — depth test on, no depth writes.
+    pub fn draw_transparent(&self, renderer: &ChunkRenderer, camera: &crate::camera::Camera) {
+        let frustum = camera.frustum();
         renderer.set_transparent_pass(true);
         for chunk in self.chunks.values() {
             if chunk.mesh.is_some() && chunk.is_in_frustum(&frustum) {

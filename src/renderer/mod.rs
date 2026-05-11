@@ -65,3 +65,6 @@ pub use multiplayer_menu_renderer::MultiplayerMenuRenderer;
 
 pub mod options_menu_renderer;
 pub use options_menu_renderer::OptionsMenuRenderer;
+
+pub mod underwater_renderer;
+pub use underwater_renderer::UnderwaterRenderer;

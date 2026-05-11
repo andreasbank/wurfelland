@@ -22,12 +22,23 @@ struct UniformLocations {
     fog_color: i32,
     ambient_light: i32,
     directional_light: i32,
+    time: i32,
+    camera_pos: i32,
+    depth_sampler: i32,
+    proj_near: i32,
+    proj_far: i32,
+    screen_size: i32,
+    refraction_sampler: i32,
+    water_level: i32,
 }
+
 
 pub struct ChunkRenderer {
     shader: u32,
     texture_atlas: u32,
     uniforms: UniformLocations,
+    depth_tex: u32,
+    refraction_tex: u32,
 }
 
 impl ChunkRenderer {
@@ -49,18 +60,35 @@ impl ChunkRenderer {
                 out vec3 vWorldPos;
                 out vec3 vNormal;
 
-                uniform mat4 model;
-                uniform mat4 view;
-                uniform mat4 projection;
+                uniform mat4  model;
+                uniform mat4  view;
+                uniform mat4  projection;
+                uniform float u_time;
+                uniform bool  transparent_pass;
+
+                float gerstnerY(vec2 xz, vec2 dir, float A, float k, float spd) {
+                    return A * sin(dot(dir, xz) * k + u_time * spd);
+                }
 
                 void main() {
                     vec4 worldPos = model * vec4(aPos, 1.0);
+
+                    // Gerstner wave Y-displacement on the water surface top face.
+                    // Only Y is displaced to avoid visible seams at chunk borders.
+                    if (transparent_pass && aNormal.y > 0.5) {
+                        float dy = 0.0;
+                        dy += gerstnerY(worldPos.xz, vec2( 0.9578,  0.2873), 0.035, 1.5, 1.5);
+                        dy += gerstnerY(worldPos.xz, vec2( 0.0,     1.0),    0.025, 2.0, 1.0);
+                        dy += gerstnerY(worldPos.xz, vec2(-0.848,   0.530),  0.015, 3.0, 2.0);
+                        worldPos.y += dy;
+                    }
+
                     vec4 viewPos = view * worldPos;
-                    gl_Position = projection * viewPos;
-                    ourColor = aColor;
-                    TexCoord = aTexCoord;
-                    fragDist = abs(viewPos.z);
-                    vWorldPos = worldPos.xyz;
+                    gl_Position  = projection * viewPos;
+                    ourColor     = aColor;
+                    TexCoord     = aTexCoord;
+                    fragDist     = abs(viewPos.z);
+                    vWorldPos    = worldPos.xyz;
                     // Chunks are translation-only, so mat3(model) == identity.
                     vNormal = mat3(model) * aNormal;
                 }"#
@@ -78,9 +106,13 @@ impl ChunkRenderer {
                 in vec3 vNormal;
                 out vec4 FragColor;
 
-                uniform sampler2D texture_atlas;
+                uniform sampler2D      texture_atlas;
                 uniform sampler2DArray shadowMaps;
+                uniform sampler2D      u_depth_sampler;
+                uniform sampler2D      u_refraction_sampler;
                 uniform mat4  lightSpaceMatrices[NUM_CASCADES];
+                uniform mat4  view;
+                uniform mat4  projection;
                 uniform float cascadeEnds[NUM_CASCADES];
                 uniform float shadowTexelSizes[NUM_CASCADES];
                 uniform bool  use_textures;
@@ -89,44 +121,43 @@ impl ChunkRenderer {
                 uniform vec3  fog_color;
                 uniform bool  transparent_pass;
                 uniform vec3  lightDir;
-                uniform float ambientLight;     // base illumination, day/night dependent
-                uniform float directionalLight; // sun/moon contribution, gated by shadow
+                uniform float ambientLight;
+                uniform float directionalLight;
+                uniform float u_time;
+                uniform vec3  u_camera_pos;
+                uniform float u_proj_near;
+                uniform float u_proj_far;
+                uniform vec2  u_screen_size;
+                uniform float u_water_level;
+
+                vec2 waveGrad(vec2 pos, vec2 dir, float k, float amp, float speed) {
+                    return dir * (k * amp * cos(dot(dir, pos) * k + u_time * speed));
+                }
+
+                float linearDepth(float depth) {
+                    float z = depth * 2.0 - 1.0;
+                    return (2.0 * u_proj_near * u_proj_far)
+                         / (u_proj_far + u_proj_near - z * (u_proj_far - u_proj_near));
+                }
 
                 float calcShadow(vec3 worldPos, vec3 normal, float viewDist) {
-                    // Back-faces are already in shadow — no map lookup needed.
                     if (dot(normalize(normal), -normalize(lightDir)) <= 0.0) return 1.0;
-
-                    // Pick cascade by view-space distance: closer cascades are
-                    // sharper, farther ones cover more ground.
                     int cascade = NUM_CASCADES - 1;
                     for (int i = 0; i < NUM_CASCADES - 1; i++) {
                         if (viewDist < cascadeEnds[i]) { cascade = i; break; }
                     }
-
-                    // Receiver-side normal offset matched to this cascade's
-                    // texel size — closes contact gaps without depth bias.
                     vec3 offsetWorld = worldPos + normalize(normal) * shadowTexelSizes[cascade];
-                    vec4 fragPosLS = lightSpaceMatrices[cascade] * vec4(offsetWorld, 1.0);
-
-                    vec3 projCoords = fragPosLS.xyz / fragPosLS.w;
-                    projCoords = projCoords * 0.5 + 0.5;
-
+                    vec4 fragPosLS   = lightSpaceMatrices[cascade] * vec4(offsetWorld, 1.0);
+                    vec3 projCoords  = fragPosLS.xyz / fragPosLS.w * 0.5 + 0.5;
                     if (projCoords.z > 1.0) return 0.0;
                     float currentDepth = projCoords.z;
-
-                    // 3x3 PCF in this cascade's depth layer.
-                    // texelSize is constant (MAP_SIZE = 2048), avoids a per-fragment textureSize query.
                     float shadow = 0.0;
                     const vec2 texelSize = vec2(1.0 / 2048.0);
-                    for (int x = -1; x <= 1; ++x) {
+                    for (int x = -1; x <= 1; ++x)
                         for (int y = -1; y <= 1; ++y) {
-                            float pcfDepth = texture(
-                                shadowMaps,
-                                vec3(projCoords.xy + vec2(x, y) * texelSize, cascade)
-                            ).r;
-                            shadow += currentDepth > pcfDepth ? 1.0 : 0.0;
+                            shadow += currentDepth > texture(shadowMaps,
+                                vec3(projCoords.xy + vec2(x, y) * texelSize, cascade)).r ? 1.0 : 0.0;
                         }
-                    }
                     return shadow / 9.0;
                 }
 
@@ -138,16 +169,92 @@ impl ChunkRenderer {
                     } else {
                         texSample = vec4(1.0);
                     }
-                    // Opaque pass: skip semi-transparent fragments.
-                    // Transparent pass: skip fully opaque fragments.
                     if (!transparent_pass && texSample.a < 0.99) discard;
                     if ( transparent_pass && texSample.a >= 0.99) discard;
 
                     float shadow = calcShadow(vWorldPos, vNormal, fragDist);
-                    // Light = ambient + directional * (1 - shadow). At night the
-                    // directional term is small, so shadows naturally fade out.
-                    float light = ambientLight + directionalLight * (1.0 - shadow);
-                    vec3 color = texSample.rgb * ourColor * light;
+                    float light  = ambientLight + directionalLight * (1.0 - shadow);
+                    vec3  color  = texSample.rgb * ourColor * light;
+
+                    // ── Water surface ────────────────────────────────────────────
+                    if (transparent_pass && vNormal.y > 0.5) {
+                        // Multi-layer wave normal
+                        vec2 pos2d = vec2(vWorldPos.x, vWorldPos.z);
+                        vec2 grad  = vec2(0.0);
+                        grad += waveGrad(pos2d, normalize(vec2( 0.7,  0.7)), 1.5, 0.05,  0.8);
+                        grad += waveGrad(pos2d, normalize(vec2( 1.0,  0.0)), 0.4, 0.08,  0.3);
+                        grad += waveGrad(pos2d, normalize(vec2(-0.3,  1.0)), 4.0, 0.015, 1.5);
+                        vec3 wNormal = normalize(vec3(-grad.x, 1.0, -grad.y));
+
+                        // Fresnel (Schlick)
+                        vec3  viewDir = normalize(u_camera_pos - vWorldPos);
+                        float NdotV   = max(0.0, dot(wNormal, viewDir));
+                        float fresnel = 0.02 + 0.98 * pow(1.0 - NdotV, 5.0);
+
+                        // Blinn-Phong specular
+                        vec3  L    = normalize(-lightDir);
+                        vec3  H    = normalize(L + viewDir);
+                        float spec = pow(max(0.0, dot(wNormal, H)), 128.0)
+                                   * directionalLight * (1.0 - shadow);
+
+                        // Water column depth
+                        vec2  screenUV   = gl_FragCoord.xy / u_screen_size;
+                        float rawDepth   = texture(u_depth_sampler, screenUV).r;
+                        float waterDepth = max(0.0, linearDepth(rawDepth) - fragDist);
+                        float depthFade  = 1.0 - exp(-waterDepth * 0.6);
+
+                        // Refraction: distorted underwater view driven by wave normal
+                        vec2 refractUV = clamp(screenUV + wNormal.xz * 0.05, 0.001, 0.999);
+                        if (linearDepth(texture(u_depth_sampler, refractUV).r) < fragDist)
+                            refractUV = screenUV;
+                        vec3 refractColor = texture(u_refraction_sampler, refractUV).rgb;
+
+                        // Water body: refracted terrain tinted by depth and water colour
+                        vec3 waterBody = mix(refractColor, vec3(0.0, 0.1, 0.35) * light, depthFade * 0.6);
+                        waterBody      = mix(waterBody, waterBody * ourColor * 1.4, 0.25);
+
+                        // SSR: ray-march the reflected direction through screen space
+                        vec3  fragViewPos = (view * vec4(vWorldPos, 1.0)).xyz;
+                        vec3  reflViewDir = mat3(view) * reflect(-viewDir, wNormal);
+                        vec3  ssrColor    = fog_color;
+                        float ssrWeight   = 0.0;
+                        for (int i = 1; i <= 16; i++) {
+                            vec3 sVP   = fragViewPos + reflViewDir * (float(i) * 0.5);
+                            vec4 sClip = projection * vec4(sVP, 1.0);
+                            if (sClip.w <= 0.0) break;
+                            vec2 sUV = (sClip.xy / sClip.w) * 0.5 + 0.5;
+                            if (any(lessThan(sUV, vec2(0.01))) || any(greaterThan(sUV, vec2(0.99)))) break;
+                            float rayDepth = -sVP.z;
+                            float sDepth   = linearDepth(texture(u_depth_sampler, sUV).r);
+                            if (rayDepth > sDepth + 0.1 && rayDepth - sDepth < 3.0) {
+                                ssrColor  = texture(u_refraction_sampler, sUV).rgb;
+                                ssrWeight = 1.0;
+                                break;
+                            }
+                        }
+
+                        // Fresnel blends refracted body ↔ SSR/sky
+                        color  = mix(waterBody, mix(fog_color, ssrColor, ssrWeight), fresnel * 0.65);
+                        color += vec3(spec);
+
+                        // Shoreline foam
+                        color = mix(color, vec3(1.0), (1.0 - smoothstep(0.0, 0.7, waterDepth)) * 0.75);
+
+                        // Deepen alpha with water column depth
+                        texSample.a = min(0.92, texSample.a + depthFade * 0.25);
+                    }
+
+                    // ── Caustics on underwater opaque terrain ────────────────────
+                    if (!transparent_pass && vWorldPos.y < u_water_level) {
+                        float causticFade = 1.0 - clamp((u_water_level - vWorldPos.y) / 8.0, 0.0, 1.0);
+                        vec2  wxz = vWorldPos.xz;
+                        float t   = u_time * 1.2;
+                        float c1  = sin(length(wxz - vec2(sin(t*0.6)*3.0, cos(t*0.5)*3.0)) * 5.0 - t*2.0);
+                        float c2  = sin(length(wxz + vec2(cos(t*0.7)*3.0, sin(t*0.8)*3.0)) * 5.0 - t*1.7);
+                        float c3  = sin(length(wxz - vec2(cos(t*0.5)*2.5, sin(t*0.9)*2.5)) * 5.0 - t*2.3);
+                        float caustic = max(0.0, (c1 + c2 + c3) / 3.0) * 0.5;
+                        color += vec3(caustic) * directionalLight * (1.0 - shadow) * 0.4 * causticFade;
+                    }
 
                     float fog_factor = clamp((fragDist - fog_start) / (fog_end - fog_start), 0.0, 1.0);
                     float alpha = mix(texSample.a, 1.0, fog_factor);
@@ -188,12 +295,44 @@ impl ChunkRenderer {
             let fog_color_loc        = gl::GetUniformLocation(shader, c"fog_color".as_ptr());
             let ambient_loc          = gl::GetUniformLocation(shader, c"ambientLight".as_ptr());
             let directional_loc      = gl::GetUniformLocation(shader, c"directionalLight".as_ptr());
+            let time_loc             = gl::GetUniformLocation(shader, c"u_time".as_ptr());
+            let camera_pos_loc       = gl::GetUniformLocation(shader, c"u_camera_pos".as_ptr());
+            let depth_sampler_loc    = gl::GetUniformLocation(shader, c"u_depth_sampler".as_ptr());
+            let proj_near_loc        = gl::GetUniformLocation(shader, c"u_proj_near".as_ptr());
+            let proj_far_loc         = gl::GetUniformLocation(shader, c"u_proj_far".as_ptr());
+            let screen_size_loc         = gl::GetUniformLocation(shader, c"u_screen_size".as_ptr());
+            let refraction_sampler_loc  = gl::GetUniformLocation(shader, c"u_refraction_sampler".as_ptr());
+            let water_level_loc         = gl::GetUniformLocation(shader, c"u_water_level".as_ptr());
 
             let texture_atlas = create_block_atlas();
+
+            // Depth texture for water depth effects (captured after opaque pass).
+            let mut depth_tex = 0u32;
+            gl::GenTextures(1, &mut depth_tex);
+            gl::BindTexture(gl::TEXTURE_2D, depth_tex);
+            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::NEAREST as i32);
+            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::NEAREST as i32);
+            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_S, gl::CLAMP_TO_EDGE as i32);
+            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_T, gl::CLAMP_TO_EDGE as i32);
+            // Disable shadow comparison so we get raw depth values.
+            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_COMPARE_MODE, gl::NONE as i32);
+            gl::BindTexture(gl::TEXTURE_2D, 0);
+
+            // Color (refraction) texture captured alongside depth.
+            let mut refraction_tex = 0u32;
+            gl::GenTextures(1, &mut refraction_tex);
+            gl::BindTexture(gl::TEXTURE_2D, refraction_tex);
+            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::LINEAR as i32);
+            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::LINEAR as i32);
+            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_S, gl::CLAMP_TO_EDGE as i32);
+            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_T, gl::CLAMP_TO_EDGE as i32);
+            gl::BindTexture(gl::TEXTURE_2D, 0);
 
             Ok(ChunkRenderer {
                 shader,
                 texture_atlas,
+                depth_tex,
+                refraction_tex,
                 uniforms: UniformLocations {
                     model: model_loc,
                     view: view_loc,
@@ -210,6 +349,14 @@ impl ChunkRenderer {
                     fog_color: fog_color_loc,
                     ambient_light: ambient_loc,
                     directional_light: directional_loc,
+                    time: time_loc,
+                    camera_pos: camera_pos_loc,
+                    depth_sampler: depth_sampler_loc,
+                    proj_near: proj_near_loc,
+                    proj_far: proj_far_loc,
+                    screen_size: screen_size_loc,
+                    refraction_sampler: refraction_sampler_loc,
+                    water_level: water_level_loc,
                 },
             })
         }
@@ -229,6 +376,13 @@ impl ChunkRenderer {
         directional_light: f32,
         fog_start: f32,
         fog_end: f32,
+        elapsed_time: f32,
+        camera_pos: glam::Vec3,
+        proj_near: f32,
+        proj_far: f32,
+        screen_width: i32,
+        screen_height: i32,
+        water_level: f32,
     ) {
         unsafe {
             gl::UseProgram(self.shader);
@@ -258,12 +412,40 @@ impl ChunkRenderer {
             gl::BindTexture(gl::TEXTURE_2D_ARRAY, shadow_texture_array);
             gl::Uniform1i(self.uniforms.shadow_maps, 1);
             gl::Uniform3f(self.uniforms.light_dir, sun_dir.x, sun_dir.y, sun_dir.z);
+            gl::Uniform1f(self.uniforms.time, elapsed_time);
+            gl::Uniform3f(self.uniforms.camera_pos, camera_pos.x, camera_pos.y, camera_pos.z);
+            gl::Uniform1f(self.uniforms.proj_near, proj_near);
+            gl::Uniform1f(self.uniforms.proj_far, proj_far);
+            gl::Uniform2f(self.uniforms.screen_size, screen_width as f32, screen_height as f32);
+            gl::Uniform1i(self.uniforms.depth_sampler, 2);
+            gl::Uniform1i(self.uniforms.refraction_sampler, 3);
+            gl::Uniform1f(self.uniforms.water_level, water_level);
+            // Bind captured textures to their units up-front; they are
+            // overwritten by capture_scene() after the opaque pass.
+            gl::ActiveTexture(gl::TEXTURE2);
+            gl::BindTexture(gl::TEXTURE_2D, self.depth_tex);
+            gl::ActiveTexture(gl::TEXTURE3);
+            gl::BindTexture(gl::TEXTURE_2D, self.refraction_tex);
             gl::ActiveTexture(gl::TEXTURE0);
             gl::Enable(gl::DEPTH_TEST);
             gl::Enable(gl::CULL_FACE);
             gl::CullFace(gl::BACK);
             gl::Enable(gl::BLEND);
             gl::BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);
+        }
+    }
+
+    /// Copy the depth and color buffers after the opaque pass for water effects.
+    pub fn capture_scene(&self, width: i32, height: i32) {
+        unsafe {
+            gl::BindFramebuffer(gl::READ_FRAMEBUFFER, 0);
+            gl::ActiveTexture(gl::TEXTURE2);
+            gl::BindTexture(gl::TEXTURE_2D, self.depth_tex);
+            gl::CopyTexImage2D(gl::TEXTURE_2D, 0, gl::DEPTH_COMPONENT24, 0, 0, width, height, 0);
+            gl::ActiveTexture(gl::TEXTURE3);
+            gl::BindTexture(gl::TEXTURE_2D, self.refraction_tex);
+            gl::CopyTexImage2D(gl::TEXTURE_2D, 0, gl::RGB8, 0, 0, width, height, 0);
+            gl::ActiveTexture(gl::TEXTURE0);
         }
     }
 
@@ -314,6 +496,8 @@ impl Drop for ChunkRenderer {
         unsafe {
             gl::DeleteProgram(self.shader);
             gl::DeleteTextures(1, &self.texture_atlas);
+            gl::DeleteTextures(1, &self.depth_tex);
+            gl::DeleteTextures(1, &self.refraction_tex);
         }
     }
 }

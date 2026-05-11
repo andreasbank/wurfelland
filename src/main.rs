@@ -37,6 +37,7 @@ use renderer::console_renderer::ConsoleAction;
 use renderer::EntityRenderer;
 use renderer::MultiplayerMenuRenderer;
 use renderer::OptionsMenuRenderer;
+use renderer::UnderwaterRenderer;
 
 mod net;
 use net::{GameServer, GameClient};
@@ -131,6 +132,7 @@ fn main() {
         let mut console         = ConsoleRenderer::new();
         let mut mp_menu         = MultiplayerMenuRenderer::new();
         let mut options_menu    = OptionsMenuRenderer::new();
+        let underwater_renderer = UnderwaterRenderer::new();
 
         // ── Network state ─────────────────────────────────────────────────────
         let mut net_server: Option<GameServer> = None;
@@ -174,6 +176,7 @@ fn main() {
 
         const DAY_LENGTH_SECS: f32 = 300.0;
         let mut sun_angle: f32 = std::f32::consts::FRAC_PI_4;
+        let mut total_time: f32 = 0.0;
 
         // Digging / hit state
         let mut lmb_held = false;
@@ -686,6 +689,7 @@ fn main() {
             }
 
             // ── Sun / sky (common to all states) ──────────────────────────────
+            total_time += delta_time;
             sun_angle += delta_time * (std::f32::consts::TAU / DAY_LENGTH_SECS);
             if sun_angle > std::f32::consts::TAU { sun_angle -= std::f32::consts::TAU; }
 
@@ -779,8 +783,16 @@ fn main() {
                     shadow_pass.texel_world_sizes(),
                     sun_dir, sky_color, ambient_light, directional_light,
                     fog_start, fog_end,
+                    total_time,
+                    camera.position,
+                    camera.near_plane,
+                    camera.far_plane,
+                    fb_w, fb_h,
+                    11.0, // world Y of water surface (SEA_LEVEL=10 + 1 block height)
                 );
-                world.draw(&chunk_renderer, &camera);
+                world.draw_opaque(&chunk_renderer, &camera);
+                chunk_renderer.capture_scene(fb_w, fb_h);
+                world.draw_transparent(&chunk_renderer, &camera);
                 chunk_renderer.end_frame();
             }
 
@@ -843,7 +855,7 @@ fn main() {
                 if world.get_block(eye.x.floor() as i32, eye.y.floor() as i32, eye.z.floor() as i32)
                     == world::BlockType::Water
                 {
-                    hotbar_renderer.draw_fullscreen_tint([0.05, 0.20, 0.60, 0.35], win_w, win_h);
+                    underwater_renderer.draw(total_time, win_w, win_h);
                 }
 
                 crosshair_renderer.draw();
