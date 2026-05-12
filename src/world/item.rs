@@ -29,6 +29,21 @@ impl ItemType {
         }
     }
 
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "stick"        => Some(Self::Stick),
+            "log_block"    => Some(Self::LogBlock),
+            "dirt_clump"   => Some(Self::DirtClump),
+            "stone_chunk"  => Some(Self::StoneChunk),
+            "seeds"        => Some(Self::Seeds),
+            "feather"      => Some(Self::Feather),
+            "egg"          => Some(Self::Egg),
+            "chicken_meat" => Some(Self::ChickenMeat),
+            "pork_chop"    => Some(Self::PorkChop),
+            _              => None,
+        }
+    }
+
     pub fn color(&self) -> [f32; 3] {
         match self {
             ItemType::Stick       => [0.55, 0.35, 0.17],

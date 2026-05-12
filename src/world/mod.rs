@@ -14,5 +14,8 @@ pub use face::Face;
 pub mod item;
 pub use item::{ItemType, ItemEntity};
 
+pub mod entity_def;
+pub use entity_def::{EntityDef, EntityRegistry};
+
 pub mod entity;
 pub use entity::{Chicken, Pig, nearest_entity_hit};

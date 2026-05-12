@@ -10,7 +10,7 @@ mod camera;
 use camera::Camera;
 
 mod world;
-use world::{World, ItemEntity, ItemType, Chicken, Pig, nearest_entity_hit};
+use world::{World, ItemEntity, ItemType, Chicken, Pig, nearest_entity_hit, EntityRegistry};
 
 mod renderer;
 use renderer::ChunkRenderer;
@@ -143,6 +143,8 @@ fn main() {
         let mut game_state = GameState::MainMenu;
         let mut menu_yaw: f32 = 0.0; // slowly panning bird's-eye camera
         let mut menu_reveal_timer: f32 = 0.0; // seconds elapsed since chunks finished loading
+
+        let entity_registry = EntityRegistry::load("assets/entities");
 
         let mut chickens: Vec<Chicken> = Vec::new();
         let mut pigs: Vec<Pig> = Vec::new();
@@ -516,9 +518,11 @@ fn main() {
                                     let bz = base_bz + (i as i32 / 2) * 3;
                                     let sy = world.surface_height(bx, bz);
                                     if sy > 10 {
-                                        chickens.push(Chicken::new(
-                                            bx as f32 + 0.5, sy as f32, bz as f32 + 0.5,
-                                        ));
+                                        if let Some(def) = entity_registry.get("chicken") {
+                                            chickens.push(Chicken::new(
+                                                bx as f32 + 0.5, sy as f32, bz as f32 + 0.5, def,
+                                            ));
+                                        }
                                     }
                                 }
                             }
@@ -542,9 +546,11 @@ fn main() {
                                     let bz = base_bz + (i as i32 / 2) * 3;
                                     let sy = world.surface_height(bx, bz);
                                     if sy > 10 {
-                                        pigs.push(Pig::new(
-                                            bx as f32 + 0.5, sy as f32, bz as f32 + 0.5,
-                                        ));
+                                        if let Some(def) = entity_registry.get("pig") {
+                                            pigs.push(Pig::new(
+                                                bx as f32 + 0.5, sy as f32, bz as f32 + 0.5, def,
+                                            ));
+                                        }
                                     }
                                 }
                             }

@@ -1,0 +1,25 @@
+{
+  "format_version": "1.0",
+  "identifier": "pig",
+  "components": {
+    "habitat": "land",
+    "health": { "max": 10.0 },
+    "physics": {
+      "half_width": 0.28,
+      "height": 0.90,
+      "jump_speed": 7.0,
+      "hit_half_width": 0.38
+    },
+    "movement": { "speed": 1.2 },
+    "wander": {
+      "idle_chance": 0.25,
+      "idle_min_secs": 3.0,
+      "idle_max_secs": 7.0,
+      "walk_min_secs": 6.0,
+      "walk_max_secs": 14.0
+    },
+    "loot": [
+      { "item": "pork_chop", "chance": 1.0 }
+    ]
+  }
+}
