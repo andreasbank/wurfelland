@@ -65,6 +65,8 @@ impl MainMenuRenderer {
     pub fn draw_loading_screen(&self, progress: f32, win_w: f32, win_h: f32) {
         unsafe {
             gl::Disable(gl::DEPTH_TEST);
+            gl::Disable(gl::CULL_FACE);
+            gl::PolygonMode(gl::FRONT_AND_BACK, gl::FILL);
             gl::Enable(gl::BLEND);
             gl::BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);
         }

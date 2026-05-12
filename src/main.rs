@@ -139,7 +139,6 @@ fn main() {
         let mut options_menu    = OptionsMenuRenderer::new();
         let underwater_renderer = UnderwaterRenderer::new();
         let mut load_menu       = LoadMenuRenderer::new();
-        let mut load_saves: Vec<String> = Vec::new();
         let mut pending_load: Option<save::SaveData> = None;
 
         // ── Network state ─────────────────────────────────────────────────────
@@ -282,8 +281,7 @@ fn main() {
                                         game_state = GameState::LoadingGame;
                                     }
                                     Some("load_game") => {
-                                        load_saves = save::list_saves();
-                                        load_menu.refresh(&load_saves);
+                                        load_menu.refresh(&save::list_saves());
                                         game_state = GameState::LoadMenu;
                                     }
                                     Some("multiplayer") => game_state = GameState::MultiplayerMenu,
@@ -1042,10 +1040,22 @@ fn main() {
             let show_3d = game_state == GameState::Playing || menu_revealed;
 
             // ── 3D render ─────────────────────────────────────────────────────
+            // Reset every frame to a fully known GL state.  Any renderer left
+            // over from the previous frame (Playing → LoadingMenu transition in
+            // particular) may leave unusual GL state that prevents 2D UI drawing.
+            let (fb_w, fb_h) = window.get_framebuffer_size();
+            gl::BindFramebuffer(gl::FRAMEBUFFER, 0);
+            gl::Viewport(0, 0, fb_w, fb_h);
+            gl::ColorMask(gl::TRUE, gl::TRUE, gl::TRUE, gl::TRUE);
+            gl::DepthMask(gl::TRUE);
+            gl::Disable(gl::STENCIL_TEST);
+            gl::Disable(gl::SCISSOR_TEST);
+            gl::Disable(gl::BLEND);
+            // Wireframe mode (F12) must not bleed into UI/loading-screen frames.
+            gl::PolygonMode(gl::FRONT_AND_BACK, gl::FILL);
+
             gl::ClearColor(sky_color.x, sky_color.y, sky_color.z, 1.0);
             gl::Clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT);
-
-            let (fb_w, fb_h) = window.get_framebuffer_size();
             let (fog_start, fog_end) = fog_distance.fog_params();
 
             if show_3d {
@@ -1242,7 +1252,6 @@ fn main() {
                     main_menu.draw_loading_screen(progress, win_w, win_h);
                 }
                 GameState::LoadingMenu => {
-                    // Timer-based: 0 → 1 over 1.5 s, guaranteed smooth animation.
                     let progress = (loading_menu_timer / 1.5).min(1.0);
                     main_menu.draw_loading_screen(progress, win_w, win_h);
                 }
