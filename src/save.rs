@@ -64,6 +64,8 @@ pub struct SaveData {
     pub inventory: Vec<InventorySlotSave>,
     #[serde(default)]
     pub selected_slot: usize,
+    #[serde(default)]
+    pub hotbar: Vec<InventorySlotSave>,  // reuses same struct; index = hotbar slot 0–8
 }
 
 impl SaveData {

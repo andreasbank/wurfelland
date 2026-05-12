@@ -7,7 +7,6 @@ mod save;
 
 mod game;
 use game::Player;
-use game::INVENTORY_SIZE;
 
 mod camera;
 use camera::Camera;
@@ -53,6 +52,7 @@ enum GameState {
     LoadMenu,
     MultiplayerMenu,
     LoadingGame,
+    LoadingMenu, // transitioning from Playing back to the main menu
     Playing,
 }
 
@@ -158,8 +158,9 @@ fn main() {
         let mut pigs: Vec<Pig> = Vec::new();
         let mut item_entities: Vec<ItemEntity> = Vec::new();
 
-        let hotbar: [Option<ItemType>; 9] = [None; 9];
+        let mut hotbar: [Option<(ItemType, u32)>; 9] = [None; 9];
         let mut selected_slot: usize = 0;
+        let mut cursor_item: Option<(ItemType, u32)> = None;
         let mut bag_open     = false;
         let mut build_open   = false;
         let mut console_open = false;
@@ -168,6 +169,7 @@ fn main() {
         let mut chunk_radius_idx: usize = 2; // default radius = CHUNK_RADII[2] = 8
         let mut console_swallow_char = false;
         let mut paused = false;
+        let mut loading_menu_timer: f32 = 0.0; // time spent in LoadingMenu state
         let mut outline_enabled = true;
         let mut hi_res = true;
         let mut win_w: f32 = 1600.0;
@@ -364,11 +366,37 @@ fn main() {
                                 }
                             }
                             GameState::LoadingGame => {}
+                            GameState::LoadingMenu => {}
                             GameState::Playing => {
                                 if paused {
                                     match menu_renderer.handle_click(last_mouse_x, last_mouse_y, win_w, win_h) {
-                                        Some("exit")    => window.set_should_close(true),
-                                        Some("options") => options_open = true,
+                                        Some("exit")      => window.set_should_close(true),
+                                        Some("options")   => options_open = true,
+                                        Some("main_menu") => {
+                                            // Tear down the session, then load the panorama world.
+                                            paused       = false;
+                                            bag_open     = false;
+                                            build_open   = false;
+                                            console_open = false;
+                                            cursor_item  = None;
+                                            chickens.clear();
+                                            pigs.clear();
+                                            item_entities.clear();
+                                            player       = Player::new();
+                                            hotbar       = [None; 9];
+                                            net_server   = None;
+                                            net_client   = None;
+                                            // Create the new panorama world but do NOT call
+                                            // world.update() here — it can block for enough time
+                                            // that the next frame's delta_time jumps past the
+                                            // 1.5 s loading-screen threshold, skipping the bar.
+                                            // The LoadingMenu update loop calls update_loading().
+                                            world = World::new(12, 0xDEAD_C0DE);
+                                            loading_menu_timer = 0.0;
+                                            menu_reveal_timer  = 0.0;
+                                            game_state = GameState::LoadingMenu;
+                                            window.set_cursor_mode(glfw::CursorMode::Normal);
+                                        }
                                         Some("save") => {
                                             let name = save::next_save_name();
                                             let block_changes = world.get_block_changes()
@@ -407,6 +435,16 @@ fn main() {
                                                     })
                                                 })
                                                 .collect();
+                                            let hotbar_saves: Vec<save::InventorySlotSave> =
+                                                hotbar.iter().enumerate()
+                                                .filter_map(|(i, slot)| {
+                                                    slot.map(|(item, count)| save::InventorySlotSave {
+                                                        index:   i,
+                                                        item_id: item.tile_index() as u8,
+                                                        count,
+                                                    })
+                                                })
+                                                .collect();
                                             let data = save::SaveData {
                                                 seed: world.seed(),
                                                 sun_angle,
@@ -419,6 +457,7 @@ fn main() {
                                                 items: item_saves,
                                                 inventory: inventory_saves,
                                                 selected_slot,
+                                                hotbar: hotbar_saves,
                                             };
                                             if let Err(e) = save::save(&name, &data) {
                                                 eprintln!("[save] {}", e);
@@ -427,6 +466,31 @@ fn main() {
                                             }
                                         }
                                         _ => {}
+                                    }
+                                } else if bag_open {
+                                    let nx = last_mouse_x / win_w;
+                                    let ny = last_mouse_y / win_h;
+                                    if let Some(inv_idx) = bag_renderer.slot_at_pos(nx, ny) {
+                                        // Swap cursor ↔ inventory slot (stack if same type)
+                                        let slot = &mut player.inventory[inv_idx];
+                                        match (&mut cursor_item, slot) {
+                                            (Some((ci, cc)), Some((si, sc))) if *ci == *si => {
+                                                *sc += *cc;
+                                                cursor_item = None;
+                                            }
+                                            (cursor, slot) => std::mem::swap(cursor, slot),
+                                        }
+                                    } else if let Some(h) = hotbar_renderer.slot_at_pos(
+                                        last_mouse_x, last_mouse_y, win_w, win_h,
+                                    ) {
+                                        // Swap cursor ↔ hotbar slot (stack if same type)
+                                        match (&mut cursor_item, &mut hotbar[h]) {
+                                            (Some((ci, cc)), Some((hi, hc))) if *ci == *hi => {
+                                                *hc += *cc;
+                                                cursor_item = None;
+                                            }
+                                            (cursor, slot) => std::mem::swap(cursor, slot),
+                                        }
                                     }
                                 } else if build_open {
                                     build_renderer.handle_click(last_mouse_x, last_mouse_y, win_w, win_h);
@@ -523,6 +587,15 @@ fn main() {
                                         window.set_cursor_mode(glfw::CursorMode::Normal);
                                         first_mouse = true;
                                     } else {
+                                        // Return any held cursor item to inventory on close
+                                        if let Some(item) = cursor_item.take() {
+                                            if !player.pick_up_stack(item.0, item.1) {
+                                                item_entities.push(ItemEntity::new(
+                                                    player.position[0], player.position[1] + 1.0,
+                                                    player.position[2], item.0,
+                                                ));
+                                            }
+                                        }
                                         window.set_cursor_mode(glfw::CursorMode::Disabled);
                                         first_mouse = true;
                                     }
@@ -576,6 +649,20 @@ fn main() {
             match game_state {
                 GameState::MainMenu => {
                     world.update([8.0, 28.0, 8.0]);
+                }
+
+                GameState::LoadingMenu => {
+                    // Load the panorama world fast in the background.
+                    world.update_loading([8.0, 28.0, 8.0]);
+                    // Cap the per-frame contribution so that a single slow frame
+                    // (e.g. from World::new blocking on the previous frame) cannot
+                    // jump the timer past the threshold and skip the loading screen.
+                    loading_menu_timer += delta_time.min(0.05);
+                    // After 1.5 s the bar is full; skip straight to a revealed menu.
+                    if loading_menu_timer >= 1.5 {
+                        menu_reveal_timer = 2.0; // menu_revealed=true → panorama shows at once
+                        game_state = GameState::MainMenu;
+                    }
                 }
 
                 GameState::LoadMenu => {
@@ -647,6 +734,14 @@ fn main() {
                                 }
                             }
                             selected_slot = data.selected_slot.min(8);
+                            hotbar = [None; 9];
+                            for slot in &data.hotbar {
+                                if slot.index < 9 {
+                                    if let Some(item) = world::ItemType::from_tile_index(slot.item_id as usize) {
+                                        hotbar[slot.index] = Some((item, slot.count));
+                                    }
+                                }
+                            }
                         } else {
                             // ── Fresh game — deterministic entity spawn ────
                             let scan_radius: i32 = 12;
@@ -1101,7 +1196,13 @@ fn main() {
                     camera.front.x, camera.front.z,
                     &minimap_ent_pos, &minimap_ent_col, win_w, win_h);
 
-                if bag_open   { bag_renderer.draw(&player.inventory); }
+                if bag_open {
+                    bag_renderer.draw(&player.inventory, None);
+                    if let Some((item, count)) = cursor_item {
+                        bag_renderer.draw_cursor_item(item, count,
+                            last_mouse_x / win_w, last_mouse_y / win_h);
+                    }
+                }
                 if build_open {
                     build_renderer.draw(last_mouse_x / win_w, last_mouse_y / win_h);
                 }
@@ -1138,6 +1239,11 @@ fn main() {
                         if world.is_chunk_meshed(dx, dz) { meshed += 1; }
                     }}
                     let progress = meshed as f32 / 9.0;
+                    main_menu.draw_loading_screen(progress, win_w, win_h);
+                }
+                GameState::LoadingMenu => {
+                    // Timer-based: 0 → 1 over 1.5 s, guaranteed smooth animation.
+                    let progress = (loading_menu_timer / 1.5).min(1.0);
                     main_menu.draw_loading_screen(progress, win_w, win_h);
                 }
                 GameState::Playing => {}

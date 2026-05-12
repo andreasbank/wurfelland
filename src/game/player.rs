@@ -24,6 +24,8 @@ pub struct Player {
 
 impl Player {
     pub fn new() -> Self {
+        let mut inventory = [None; INVENTORY_SIZE];
+        inventory[0] = Some((ItemType::StoneAxe, 1));
         Player {
             health: 100,
             position: [0.0, 64.0, 0.0],
@@ -31,9 +33,24 @@ impl Player {
             pitch: 0.0,
             velocity: [0.0; 3],
             on_ground: false,
-            inventory: [None; INVENTORY_SIZE],
+            inventory,
             mouse_sensitivity: 0.1,
         }
+    }
+
+    /// Places `count` of `item` in inventory (stacks onto existing, then empty slot).
+    /// Returns true on success, false if inventory is full.
+    pub fn pick_up_stack(&mut self, item: ItemType, count: u32) -> bool {
+        for slot in self.inventory.iter_mut() {
+            if let Some((t, c)) = slot {
+                if *t == item { *c += count; return true; }
+            }
+        }
+        if let Some(slot) = self.inventory.iter_mut().find(|s| s.is_none()) {
+            *slot = Some((item, count));
+            return true;
+        }
+        false
     }
 
     /// Places the item in the first empty inventory slot.

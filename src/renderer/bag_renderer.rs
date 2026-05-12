@@ -208,10 +208,23 @@ impl BagRenderer {
             ItemType::Stick => {
                 let cx = sx + SLOT_SIZE * 0.5;
                 let cy = sy + SLOT_SIZE * 0.5;
-                let hw = SLOT_SIZE * 0.06;
-                let hh = SLOT_SIZE * 0.38;
-                self.draw_rect_rotated(cx, cy, hw, hh,
+                self.draw_rect_rotated(cx, cy, SLOT_SIZE * 0.06, SLOT_SIZE * 0.38,
                     std::f32::consts::FRAC_PI_4, [0.55, 0.35, 0.17, 1.0]);
+            }
+            ItemType::StoneAxe => {
+                let pad = SLOT_SIZE * 0.09;
+                // Stone head (left portion, upper half)
+                self.window.draw_rect(
+                    sx + pad,             sy + pad,
+                    sx + SLOT_SIZE * 0.60, sy + SLOT_SIZE * 0.56,
+                    0.58, 0.58, 0.63, 1.0,
+                );
+                // Wooden handle (right of centre, full height)
+                self.window.draw_rect(
+                    sx + SLOT_SIZE * 0.46, sy + pad,
+                    sx + SLOT_SIZE * 0.58, sy + SLOT_SIZE - pad,
+                    0.55, 0.35, 0.17, 1.0,
+                );
             }
             _ => {
                 let [r, g, b] = item.color();
@@ -232,9 +245,43 @@ impl BagRenderer {
         }
     }
 
+    /// Returns the inventory slot index under normalised screen coords, or None.
+    pub fn slot_at_pos(&self, nx: f32, ny: f32) -> Option<usize> {
+        let grid_w  = COLS as f32 * SLOT_SIZE + (COLS - 1) as f32 * SLOT_GAP;
+        let grid_h  = ROWS as f32 * SLOT_SIZE + (ROWS - 1) as f32 * SLOT_GAP;
+        let panel_w = grid_w + PADDING * 2.0;
+        let panel_h = grid_h + PADDING * 2.0;
+        let grid_x  = (1.0 - panel_w) * 0.5 + PADDING;
+        let grid_y  = (1.0 - panel_h) * 0.5 + PADDING;
+        let lx = nx - grid_x;
+        let ly = ny - grid_y;
+        if lx < 0.0 || ly < 0.0 { return None; }
+        let step = SLOT_SIZE + SLOT_GAP;
+        let col = (lx / step) as usize;
+        let row = (ly / step) as usize;
+        if col >= COLS || row >= ROWS { return None; }
+        if lx - col as f32 * step > SLOT_SIZE { return None; }
+        if ly - row as f32 * step > SLOT_SIZE { return None; }
+        Some(row * COLS + col)
+    }
+
+    /// Draw a floating item icon centred on (nx, ny) in [0,1] screen space.
+    /// Call this after `draw` while blending is already on.
+    pub fn draw_cursor_item(&self, item: ItemType, count: u32, nx: f32, ny: f32) {
+        unsafe {
+            gl::Disable(gl::DEPTH_TEST);
+            gl::Enable(gl::BLEND);
+            gl::BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);
+        }
+        let half = SLOT_SIZE * 0.5;
+        self.draw_item_icon(item, count, nx - half, ny - half);
+        unsafe { gl::Disable(gl::BLEND); gl::Enable(gl::DEPTH_TEST); }
+    }
+
     /// Draws the bag inventory panel. Layout is defined in [0,1] normalised
     /// screen space and scales automatically with window resolution.
-    pub fn draw(&self, inventory: &[Option<(ItemType, u32)>; INVENTORY_SIZE]) {
+    /// `held_slot` highlights the slot that currently has the cursor item lifted from it.
+    pub fn draw(&self, inventory: &[Option<(ItemType, u32)>; INVENTORY_SIZE], held_slot: Option<usize>) {
         let grid_w  = COLS as f32 * SLOT_SIZE + (COLS - 1) as f32 * SLOT_GAP;
         let grid_h  = ROWS as f32 * SLOT_SIZE + (ROWS - 1) as f32 * SLOT_GAP;
         let panel_w = grid_w + PADDING * 2.0;
@@ -264,18 +311,19 @@ impl BagRenderer {
 
         for row in 0..ROWS {
             for col in 0..COLS {
-                let sx = grid_x + col as f32 * (SLOT_SIZE + SLOT_GAP);
-                let sy = grid_y + row as f32 * (SLOT_SIZE + SLOT_GAP);
+                let sx  = grid_x + col as f32 * (SLOT_SIZE + SLOT_GAP);
+                let sy  = grid_y + row as f32 * (SLOT_SIZE + SLOT_GAP);
+                let idx = row * COLS + col;
 
+                let is_held    = held_slot == Some(idx);
+                let border_col = if is_held { [1.0, 0.85, 0.20, 1.0] } else { [0.50, 0.50, 0.50, 1.0] };
                 self.window.draw_rect(
                     sx - BORDER, sy - BORDER,
                     sx + SLOT_SIZE + BORDER, sy + SLOT_SIZE + BORDER,
-                    0.50, 0.50, 0.50, 1.0,
+                    border_col[0], border_col[1], border_col[2], border_col[3],
                 );
                 self.window.draw_rect(sx, sy, sx + SLOT_SIZE, sy + SLOT_SIZE,
                     0.22, 0.22, 0.22, 1.0);
-
-                let idx = row * COLS + col;
                 if let Some((item, count)) = inventory[idx] {
                     self.draw_item_icon(item, count, sx, sy);
                 }

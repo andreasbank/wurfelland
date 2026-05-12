@@ -1,10 +1,11 @@
 use std::mem;
 use std::os::raw::c_void;
 use crate::renderer::utils::{compile_shader, link_program, create_item_atlas};
+use crate::renderer::geo_model::GeoModel;
 use crate::world::item::ItemType;
 use crate::world::ItemEntity;
 
-// Vertex format: [x, y, z, u, v] — 5 floats.
+// Vertex format for atlas items: [x, y, z, u, v] — 5 floats.
 const STRIDE: usize = 5;
 
 // Returns (u_min, u_max, v_top, v_bot) for a tile in the 256×256 item atlas.
@@ -95,20 +96,26 @@ fn upload_vao(mesh: &[f32]) -> u32 {
 }
 
 pub struct ItemRenderer {
-    vao_stick: u32,
-    vao_log: u32,
-    vao_dirt: u32,
-    vao_stone: u32,
-    vao_seeds: u32,
-    shader: u32,
-    mvp_loc: i32,
-    atlas: u32,
+    // Atlas-textured items (Stick, cubes)
+    vao_stick:        u32,
+    vao_log:          u32,
+    vao_dirt:         u32,
+    vao_stone:        u32,
+    vao_seeds:        u32,
+    shader:           u32,
+    mvp_loc:          i32,
+    atlas:            u32,
     stick_vert_count: i32,
-    cube_vert_count: i32,
+    cube_vert_count:  i32,
+    // Colored geo items (StoneAxe loaded from JSON)
+    colored_shader:   u32,
+    colored_mvp_loc:  i32,
+    axe_model:        Option<GeoModel>,
 }
 
 impl ItemRenderer {
     pub fn new() -> Self {
+        // ── Atlas shader ──────────────────────────────────────────────────────
         let vert = compile_shader(gl::VERTEX_SHADER, r#"#version 330 core
             layout(location = 0) in vec3 aPos;
             layout(location = 1) in vec2 aUV;
@@ -134,6 +141,30 @@ impl ItemRenderer {
         let shader = link_program(vert, frag).unwrap();
         let mvp_loc = unsafe { gl::GetUniformLocation(shader, c"mvp".as_ptr()) };
 
+        // ── Colored (vertex-color) shader for geo models ───────────────────────
+        let cv = compile_shader(gl::VERTEX_SHADER, r#"#version 330 core
+            layout(location = 0) in vec3 aPos;
+            layout(location = 1) in vec3 aColor;
+            uniform mat4 mvp;
+            out vec3 vColor;
+            void main() {
+                gl_Position = mvp * vec4(aPos, 1.0);
+                vColor = aColor;
+            }
+        "#).unwrap();
+
+        let cf = compile_shader(gl::FRAGMENT_SHADER, r#"#version 330 core
+            in vec3 vColor;
+            out vec4 FragColor;
+            void main() {
+                FragColor = vec4(vColor, 1.0);
+            }
+        "#).unwrap();
+
+        let colored_shader = link_program(cv, cf).unwrap();
+        let colored_mvp_loc = unsafe { gl::GetUniformLocation(colored_shader, c"mvp".as_ptr()) };
+
+        // ── Atlas meshes ───────────────────────────────────────────────────────
         let stick_mesh = build_stick_mesh();
         let log_mesh   = build_cube_mesh(ItemType::LogBlock.tile_index());
         let dirt_mesh  = build_cube_mesh(ItemType::DirtClump.tile_index());
@@ -141,7 +172,7 @@ impl ItemRenderer {
         let seeds_mesh = build_cube_mesh(ItemType::Seeds.tile_index());
 
         let stick_vert_count = (stick_mesh.len() / STRIDE) as i32;
-        let cube_vert_count  = (log_mesh.len()   / STRIDE) as i32; // same for all cubes
+        let cube_vert_count  = (log_mesh.len()   / STRIDE) as i32;
 
         let vao_stick = upload_vao(&stick_mesh);
         let vao_log   = upload_vao(&log_mesh);
@@ -151,10 +182,18 @@ impl ItemRenderer {
 
         let atlas = create_item_atlas();
 
+        // ── Stone axe geo model ────────────────────────────────────────────────
+        let axe_model = match GeoModel::load("assets/models/stone_axe.geo.json") {
+            Ok(m)  => Some(m),
+            Err(e) => { eprintln!("[item_renderer] stone_axe.geo.json: {e}"); None }
+        };
+
         ItemRenderer {
             vao_stick, vao_log, vao_dirt, vao_stone, vao_seeds,
             shader, mvp_loc, atlas,
             stick_vert_count, cube_vert_count,
+            colored_shader, colored_mvp_loc,
+            axe_model,
         }
     }
 
@@ -165,21 +204,24 @@ impl ItemRenderer {
             gl::Disable(gl::CULL_FACE);
             gl::Enable(gl::BLEND);
             gl::BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);
+
+            // ── Atlas-textured items ───────────────────────────────────────────
             gl::UseProgram(self.shader);
             gl::ActiveTexture(gl::TEXTURE0);
             gl::BindTexture(gl::TEXTURE_2D, self.atlas);
 
             for item in items {
                 let (vao, vert_count) = match item.item {
-                    ItemType::Stick        => (self.vao_stick, self.stick_vert_count),
-                    ItemType::LogBlock     => (self.vao_log,   self.cube_vert_count),
-                    ItemType::DirtClump    => (self.vao_dirt,  self.cube_vert_count),
-                    ItemType::StoneChunk   => (self.vao_stone, self.cube_vert_count),
-                    ItemType::Seeds        => (self.vao_seeds, self.cube_vert_count),
-                    ItemType::Feather      => (self.vao_stone, self.cube_vert_count),
-                    ItemType::Egg          => (self.vao_stone, self.cube_vert_count),
-                    ItemType::ChickenMeat  => (self.vao_stone, self.cube_vert_count),
-                    ItemType::PorkChop     => (self.vao_stone, self.cube_vert_count),
+                    ItemType::Stick       => (self.vao_stick, self.stick_vert_count),
+                    ItemType::LogBlock    => (self.vao_log,   self.cube_vert_count),
+                    ItemType::DirtClump   => (self.vao_dirt,  self.cube_vert_count),
+                    ItemType::StoneChunk  => (self.vao_stone, self.cube_vert_count),
+                    ItemType::Seeds       => (self.vao_seeds, self.cube_vert_count),
+                    ItemType::Feather     => (self.vao_stone, self.cube_vert_count),
+                    ItemType::Egg         => (self.vao_stone, self.cube_vert_count),
+                    ItemType::ChickenMeat => (self.vao_stone, self.cube_vert_count),
+                    ItemType::PorkChop    => (self.vao_stone, self.cube_vert_count),
+                    ItemType::StoneAxe    => continue, // handled by geo pass below
                 };
 
                 let pos = glam::Vec3::new(
@@ -198,6 +240,31 @@ impl ItemRenderer {
 
             gl::BindVertexArray(0);
             gl::BindTexture(gl::TEXTURE_2D, 0);
+
+            // ── Colored geo items (StoneAxe) ───────────────────────────────────
+            if let Some(geo) = &self.axe_model {
+                gl::UseProgram(self.colored_shader);
+
+                for item in items {
+                    if item.item != ItemType::StoneAxe { continue; }
+
+                    let pos = glam::Vec3::new(
+                        item.position[0] + 0.5,
+                        item.visual_y(),
+                        item.position[2] + 0.5,
+                    );
+                    let model = glam::Mat4::from_translation(pos)
+                        * glam::Mat4::from_rotation_y(item.age * 1.5);
+                    let mvp = *projection * *view * model;
+                    gl::UniformMatrix4fv(self.colored_mvp_loc, 1, gl::FALSE, mvp.to_cols_array().as_ptr());
+
+                    gl::BindVertexArray(geo.vao);
+                    gl::DrawArrays(gl::TRIANGLES, 0, geo.vert_count);
+                }
+
+                gl::BindVertexArray(0);
+            }
+
             gl::Disable(gl::BLEND);
             gl::Enable(gl::CULL_FACE);
         }
@@ -214,6 +281,7 @@ impl Drop for ItemRenderer {
             gl::DeleteVertexArrays(1, &self.vao_seeds);
             gl::DeleteTextures(1, &self.atlas);
             gl::DeleteProgram(self.shader);
+            gl::DeleteProgram(self.colored_shader);
         }
     }
 }

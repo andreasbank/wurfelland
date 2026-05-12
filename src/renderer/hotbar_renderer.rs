@@ -102,10 +102,28 @@ impl HotbarRenderer {
         }
     }
 
+    /// Returns which hotbar slot index was hit, or None.
+    /// `mx/my` are raw GLFW pixel coords (Y from top).
+    pub fn slot_at_pos(&self, mx: f32, my: f32, screen_w: f32, screen_h: f32) -> Option<usize> {
+        let bar_w   = NUM_SLOTS as f32 * SLOT_SIZE + (NUM_SLOTS - 1) as f32 * SLOT_GAP;
+        let start_x = (screen_w - bar_w) * 0.5;
+        // Hotbar lives at GL-pixel-y = MARGIN_BOT..MARGIN_BOT+SLOT_SIZE (from bottom).
+        // GLFW y is from top → convert: glfw_y = screen_h - gl_y.
+        let glfw_top = screen_h - (MARGIN_BOT + SLOT_SIZE);
+        let glfw_bot = screen_h - MARGIN_BOT;
+        if my < glfw_top || my > glfw_bot { return None; }
+        let lx = mx - start_x;
+        if lx < 0.0 { return None; }
+        let slot = (lx / (SLOT_SIZE + SLOT_GAP)) as usize;
+        if slot >= NUM_SLOTS { return None; }
+        if lx - slot as f32 * (SLOT_SIZE + SLOT_GAP) > SLOT_SIZE { return None; }
+        Some(slot)
+    }
+
     pub fn draw(
         &self,
         selected: usize,
-        slots: &[Option<ItemType>; NUM_SLOTS],
+        slots: &[Option<(ItemType, u32)>; NUM_SLOTS],
         screen_w: f32,
         screen_h: f32,
     ) {
@@ -146,7 +164,7 @@ impl HotbarRenderer {
                     [0.18, 0.18, 0.18, 0.75], screen);
 
                 // Item icon — a smaller colored square centered in the slot
-                if let Some(item) = slots[i] {
+                if let Some((item, _count)) = slots[i] {
                     let [r, g, b] = item.color();
                     let pad = 7.0;
                     self.draw_rect(

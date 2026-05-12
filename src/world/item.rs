@@ -11,6 +11,7 @@ pub enum ItemType {
     Egg,
     ChickenMeat,
     PorkChop,
+    StoneAxe,
 }
 
 impl ItemType {
@@ -26,6 +27,7 @@ impl ItemType {
             ItemType::Egg          => 6,
             ItemType::ChickenMeat  => 7,
             ItemType::PorkChop     => 8,
+            ItemType::StoneAxe     => 9,
         }
     }
 
@@ -40,6 +42,7 @@ impl ItemType {
             6 => Some(Self::Egg),
             7 => Some(Self::ChickenMeat),
             8 => Some(Self::PorkChop),
+            9 => Some(Self::StoneAxe),
             _ => None,
         }
     }
@@ -55,6 +58,7 @@ impl ItemType {
             "egg"          => Some(Self::Egg),
             "chicken_meat" => Some(Self::ChickenMeat),
             "pork_chop"    => Some(Self::PorkChop),
+            "stone_axe"    => Some(Self::StoneAxe),
             _              => None,
         }
     }
@@ -70,6 +74,7 @@ impl ItemType {
             ItemType::Egg         => [0.95, 0.90, 0.75],
             ItemType::ChickenMeat => [0.85, 0.40, 0.30],
             ItemType::PorkChop    => [0.90, 0.45, 0.32],
+            ItemType::StoneAxe    => [0.58, 0.58, 0.63],
         }
     }
 }

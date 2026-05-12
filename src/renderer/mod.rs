@@ -1,5 +1,6 @@
 pub mod utils;
 pub mod ui;
+pub mod geo_model;
 
 pub mod crosshair_renderer;
 
