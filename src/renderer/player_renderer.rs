@@ -104,6 +104,10 @@ pub struct PlayerRenderer {
     shader: u32,
     mvp_loc: i32,
     tex_id: u32,
+    fog_start_loc: i32,
+    fog_end_loc: i32,
+    screen_size_loc: i32,
+    sky_sampler_loc: i32,
 }
 
 impl PlayerRenderer {
@@ -147,26 +151,41 @@ impl PlayerRenderer {
                 uniform mat4 mvp;
                 out float shade;
                 out vec2 uv;
+                out float fragDist;
                 void main() {
                     gl_Position = mvp * vec4(aPos, 1.0);
                     shade = aShade;
                     uv = aUV;
+                    fragDist = gl_Position.w;
                 }"#).unwrap();
 
             let frag = compile_shader(gl::FRAGMENT_SHADER, r#"#version 330 core
                 in float shade;
                 in vec2 uv;
+                in float fragDist;
                 out vec4 FragColor;
                 uniform sampler2D tex;
+                uniform sampler2D u_sky_sampler;
+                uniform vec2 u_screen_size;
+                uniform float u_fog_start;
+                uniform float u_fog_end;
                 void main() {
-                    FragColor = vec4(texture(tex, uv).rgb * shade, 1.0);
+                    vec3 color = texture(tex, uv).rgb * shade;
+                    vec2 screenUV = gl_FragCoord.xy / u_screen_size;
+                    vec3 skyFog = texture(u_sky_sampler, screenUV).rgb;
+                    float fog_factor = clamp((fragDist - u_fog_start) / (u_fog_end - u_fog_start), 0.0, 1.0);
+                    FragColor = vec4(mix(color, skyFog, fog_factor), 1.0);
                 }"#).unwrap();
 
             let shader = link_program(vert, frag).unwrap();
-            let mvp_loc = gl::GetUniformLocation(shader, c"mvp".as_ptr());
+            let mvp_loc         = gl::GetUniformLocation(shader, c"mvp".as_ptr());
+            let fog_start_loc   = gl::GetUniformLocation(shader, c"u_fog_start".as_ptr());
+            let fog_end_loc     = gl::GetUniformLocation(shader, c"u_fog_end".as_ptr());
+            let screen_size_loc = gl::GetUniformLocation(shader, c"u_screen_size".as_ptr());
+            let sky_sampler_loc = gl::GetUniformLocation(shader, c"u_sky_sampler".as_ptr());
             let tex_id = create_player_texture();
 
-            PlayerRenderer { vao, vbo, shader, mvp_loc, tex_id }
+            PlayerRenderer { vao, vbo, shader, mvp_loc, tex_id, fog_start_loc, fog_end_loc, screen_size_loc, sky_sampler_loc }
         }
     }
 
@@ -174,7 +193,8 @@ impl PlayerRenderer {
     /// `swing_angle`: right-arm rotation in radians around the shoulder (negative = swing forward/down).
     pub fn draw(&self, position: [f32; 3], yaw: f32,
                 view: &glam::Mat4, projection: &glam::Mat4,
-                mode: PlayerDrawMode, swing_angle: f32) {
+                mode: PlayerDrawMode, swing_angle: f32,
+                fog_start: f32, fog_end: f32, screen_w: f32, screen_h: f32, sky_tex: u32) {
         let rot_angle = -(yaw.to_radians() + FRAC_PI_2);
         let model = glam::Mat4::from_translation(glam::Vec3::from(position))
             * glam::Mat4::from_rotation_y(rot_angle);
@@ -183,6 +203,12 @@ impl PlayerRenderer {
         unsafe {
             gl::Disable(gl::CULL_FACE);
             gl::UseProgram(self.shader);
+            gl::Uniform1f(self.fog_start_loc, fog_start);
+            gl::Uniform1f(self.fog_end_loc, fog_end);
+            gl::Uniform2f(self.screen_size_loc, screen_w, screen_h);
+            gl::Uniform1i(self.sky_sampler_loc, 4);
+            gl::ActiveTexture(gl::TEXTURE4);
+            gl::BindTexture(gl::TEXTURE_2D, sky_tex);
             gl::ActiveTexture(gl::TEXTURE0);
             gl::BindTexture(gl::TEXTURE_2D, self.tex_id);
             gl::BindVertexArray(self.vao);

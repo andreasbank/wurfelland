@@ -10,6 +10,7 @@ pub enum ItemType {
     Feather,
     Egg,
     ChickenMeat,
+    PorkChop,
 }
 
 impl ItemType {
@@ -24,6 +25,7 @@ impl ItemType {
             ItemType::Feather      => 5,
             ItemType::Egg          => 6,
             ItemType::ChickenMeat  => 7,
+            ItemType::PorkChop     => 8,
         }
     }
 
@@ -37,6 +39,7 @@ impl ItemType {
             ItemType::Feather     => [0.95, 0.95, 0.90],
             ItemType::Egg         => [0.95, 0.90, 0.75],
             ItemType::ChickenMeat => [0.85, 0.40, 0.30],
+            ItemType::PorkChop    => [0.90, 0.45, 0.32],
         }
     }
 }

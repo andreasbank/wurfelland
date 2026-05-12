@@ -3,7 +3,7 @@ use std::os::raw::c_void;
 use std::f32::consts::FRAC_PI_2;
 use crate::renderer::utils::{compile_shader, link_program};
 use crate::renderer::shadow_pass::ShadowPass;
-use crate::world::entity::Chicken;
+use crate::world::entity::{Chicken, Pig};
 
 // Vertex format: [x, y, z, r, g, b] — 6 floats
 const STRIDE: usize = 6;
@@ -28,7 +28,7 @@ fn add_box(verts: &mut Vec<f32>, x0: f32, y0: f32, z0: f32, x1: f32, y1: f32, z1
     add_face(verts, [[x1,y0,z1],[x1,y0,z0],[x1,y1,z0],[x1,y1,z1]], 0.65, r, g, b); // right +X
 }
 
-// Mesh layout (36 verts per box, 6 faces × 6 verts):
+// Chicken mesh layout (36 verts per box, 6 faces × 6 verts):
 //   [0]   Body
 //   [1]   Head
 //   [2]   Beak
@@ -42,6 +42,43 @@ const BODY_OFF:   i32 = 0;
 const LWING_OFF:  i32 = VPB * 4;
 const RWING_OFF:  i32 = VPB * 5;
 const LLEG_OFF:   i32 = VPB * 6;
+
+// Pig mesh layout:
+//   [0]   Body
+//   [1]   Head
+//   [2]   Snout
+//   [3]   Front-left leg   ← animated
+//   [4]   Front-right leg  ← animated (opposite phase)
+//   [5]   Back-left leg    ← animated (opposite to front-left)
+//   [6]   Back-right leg   ← animated (opposite to front-right)
+const PIG_STATIC_CNT: i32 = VPB * 3; // body + head + snout (drawn as one call)
+const PIG_FL_LEG: i32 = VPB * 3;
+const PIG_FR_LEG: i32 = VPB * 4;
+const PIG_BL_LEG: i32 = VPB * 5;
+const PIG_BR_LEG: i32 = VPB * 6;
+
+fn build_pig_mesh() -> Vec<f32> {
+    let mut v = Vec::new();
+    let pk = [0.90f32, 0.65, 0.60]; // body / head pink
+    let sn = [0.95f32, 0.73, 0.70]; // snout lighter pink
+
+    // Body
+    add_box(&mut v, -0.25, 0.35, -0.35,  0.25, 0.85,  0.35, pk[0], pk[1], pk[2]);
+    // Head (juts forward)
+    add_box(&mut v, -0.22, 0.52, -0.58,  0.22, 0.90, -0.35, pk[0], pk[1], pk[2]);
+    // Snout
+    add_box(&mut v, -0.11, 0.58, -0.66,  0.11, 0.74, -0.58, sn[0], sn[1], sn[2]);
+    // Front-left leg
+    add_box(&mut v, -0.20, 0.00, -0.27, -0.07, 0.35, -0.14, pk[0], pk[1], pk[2]);
+    // Front-right leg
+    add_box(&mut v,  0.07, 0.00, -0.27,  0.20, 0.35, -0.14, pk[0], pk[1], pk[2]);
+    // Back-left leg
+    add_box(&mut v, -0.20, 0.00,  0.14, -0.07, 0.35,  0.27, pk[0], pk[1], pk[2]);
+    // Back-right leg
+    add_box(&mut v,  0.07, 0.00,  0.14,  0.20, 0.35,  0.27, pk[0], pk[1], pk[2]);
+
+    v
+}
 
 fn build_chicken_mesh() -> Vec<f32> {
     let mut v = Vec::new();
@@ -73,13 +110,18 @@ fn build_chicken_mesh() -> Vec<f32> {
 pub struct EntityRenderer {
     vao: u32,
     vbo: u32,
+    pig_vao: u32,
+    pig_vbo: u32,
     shader: u32,
     mvp_loc: i32,
+    fog_start_loc: i32,
+    fog_end_loc: i32,
+    screen_size_loc: i32,
+    sky_sampler_loc: i32,
 }
 
 impl EntityRenderer {
-    pub fn new() -> Self {
-        let mesh = build_chicken_mesh();
+    fn upload_mesh(mesh: &[f32]) -> (u32, u32) {
         unsafe {
             let mut vao = 0u32;
             let mut vbo = 0u32;
@@ -94,43 +136,73 @@ impl EntityRenderer {
                 gl::STATIC_DRAW,
             );
             let stride = (STRIDE * mem::size_of::<f32>()) as i32;
-            // attrib 0: position vec3
             gl::VertexAttribPointer(0, 3, gl::FLOAT, gl::FALSE, stride, std::ptr::null());
             gl::EnableVertexAttribArray(0);
-            // attrib 1: color vec3
             gl::VertexAttribPointer(1, 3, gl::FLOAT, gl::FALSE, stride,
                 (3 * mem::size_of::<f32>()) as *const c_void);
             gl::EnableVertexAttribArray(1);
             gl::BindBuffer(gl::ARRAY_BUFFER, 0);
             gl::BindVertexArray(0);
+            (vao, vbo)
+        }
+    }
+
+    pub fn new() -> Self {
+        let (vao, vbo) = Self::upload_mesh(&build_chicken_mesh());
+        let (pig_vao, pig_vbo) = Self::upload_mesh(&build_pig_mesh());
+
+        unsafe {
 
             let vert = compile_shader(gl::VERTEX_SHADER, r#"#version 330 core
                 layout(location = 0) in vec3 aPos;
                 layout(location = 1) in vec3 aColor;
                 uniform mat4 mvp;
                 out vec3 vColor;
+                out float fragDist;
                 void main() {
                     gl_Position = mvp * vec4(aPos, 1.0);
                     vColor = aColor;
+                    fragDist = gl_Position.w;
                 }"#).unwrap();
 
             let frag = compile_shader(gl::FRAGMENT_SHADER, r#"#version 330 core
                 in vec3 vColor;
+                in float fragDist;
                 out vec4 FragColor;
-                void main() { FragColor = vec4(vColor, 1.0); }
+                uniform sampler2D u_sky_sampler;
+                uniform vec2 u_screen_size;
+                uniform float u_fog_start;
+                uniform float u_fog_end;
+                void main() {
+                    vec2 screenUV = gl_FragCoord.xy / u_screen_size;
+                    vec3 skyFog = texture(u_sky_sampler, screenUV).rgb;
+                    float fog_factor = clamp((fragDist - u_fog_start) / (u_fog_end - u_fog_start), 0.0, 1.0);
+                    FragColor = vec4(mix(vColor, skyFog, fog_factor), 1.0);
+                }
             "#).unwrap();
 
             let shader = link_program(vert, frag).unwrap();
-            let mvp_loc = gl::GetUniformLocation(shader, c"mvp".as_ptr());
+            let mvp_loc          = gl::GetUniformLocation(shader, c"mvp".as_ptr());
+            let fog_start_loc    = gl::GetUniformLocation(shader, c"u_fog_start".as_ptr());
+            let fog_end_loc      = gl::GetUniformLocation(shader, c"u_fog_end".as_ptr());
+            let screen_size_loc  = gl::GetUniformLocation(shader, c"u_screen_size".as_ptr());
+            let sky_sampler_loc  = gl::GetUniformLocation(shader, c"u_sky_sampler".as_ptr());
 
-            EntityRenderer { vao, vbo, shader, mvp_loc }
+            EntityRenderer { vao, vbo, pig_vao, pig_vbo, shader, mvp_loc, fog_start_loc, fog_end_loc, screen_size_loc, sky_sampler_loc }
         }
     }
 
-    pub fn draw_chickens(&self, chickens: &[Chicken], view: &glam::Mat4, projection: &glam::Mat4) {
+    pub fn draw_chickens(&self, chickens: &[Chicken], view: &glam::Mat4, projection: &glam::Mat4,
+                         fog_start: f32, fog_end: f32, screen_w: f32, screen_h: f32, sky_tex: u32) {
         unsafe {
             gl::Disable(gl::CULL_FACE);
             gl::UseProgram(self.shader);
+            gl::Uniform1f(self.fog_start_loc, fog_start);
+            gl::Uniform1f(self.fog_end_loc, fog_end);
+            gl::Uniform2f(self.screen_size_loc, screen_w, screen_h);
+            gl::Uniform1i(self.sky_sampler_loc, 4);
+            gl::ActiveTexture(gl::TEXTURE4);
+            gl::BindTexture(gl::TEXTURE_2D, sky_tex);
             gl::BindVertexArray(self.vao);
 
             for chicken in chickens {
@@ -173,15 +245,92 @@ impl EntityRenderer {
         }
     }
 
+    pub fn draw_pigs(&self, pigs: &[Pig], view: &glam::Mat4, projection: &glam::Mat4,
+                     fog_start: f32, fog_end: f32, screen_w: f32, screen_h: f32, sky_tex: u32) {
+        unsafe {
+            gl::Disable(gl::CULL_FACE);
+            gl::UseProgram(self.shader);
+            gl::Uniform1f(self.fog_start_loc, fog_start);
+            gl::Uniform1f(self.fog_end_loc, fog_end);
+            gl::Uniform2f(self.screen_size_loc, screen_w, screen_h);
+            gl::Uniform1i(self.sky_sampler_loc, 4);
+            gl::ActiveTexture(gl::TEXTURE4);
+            gl::BindTexture(gl::TEXTURE_2D, sky_tex);
+            gl::BindVertexArray(self.pig_vao);
+
+            for pig in pigs {
+                let rot_y = -(pig.yaw.to_radians() + FRAC_PI_2);
+                let model = glam::Mat4::from_translation(glam::Vec3::from(pig.position))
+                    * glam::Mat4::from_rotation_y(rot_y);
+                let mvp = *projection * *view * model;
+
+                // Static parts: body + head + snout
+                gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE, mvp.to_cols_array().as_ptr());
+                gl::DrawArrays(gl::TRIANGLES, 0, PIG_STATIC_CNT);
+
+                // Leg animation: front-left & back-right swing together, front-right & back-left opposite
+                let swing = (pig.anim_time * 6.5 * (pig.move_speed_norm())).sin() * 0.55;
+
+                let pivot_y = 0.35_f32;
+
+                // Front-left leg (pivot at top-center of leg: x=-0.135, y=0.35, z=-0.205)
+                let fl_p = glam::Vec3::new(-0.135, pivot_y, -0.205);
+                let fl_m = glam::Mat4::from_translation(fl_p)
+                    * glam::Mat4::from_rotation_x(swing)
+                    * glam::Mat4::from_translation(-fl_p);
+                gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE,
+                    (*projection * *view * model * fl_m).to_cols_array().as_ptr());
+                gl::DrawArrays(gl::TRIANGLES, PIG_FL_LEG, VPB);
+
+                // Front-right leg (opposite phase)
+                let fr_p = glam::Vec3::new(0.135, pivot_y, -0.205);
+                let fr_m = glam::Mat4::from_translation(fr_p)
+                    * glam::Mat4::from_rotation_x(-swing)
+                    * glam::Mat4::from_translation(-fr_p);
+                gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE,
+                    (*projection * *view * model * fr_m).to_cols_array().as_ptr());
+                gl::DrawArrays(gl::TRIANGLES, PIG_FR_LEG, VPB);
+
+                // Back-left leg (opposite to front-left)
+                let bl_p = glam::Vec3::new(-0.135, pivot_y, 0.205);
+                let bl_m = glam::Mat4::from_translation(bl_p)
+                    * glam::Mat4::from_rotation_x(-swing)
+                    * glam::Mat4::from_translation(-bl_p);
+                gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE,
+                    (*projection * *view * model * bl_m).to_cols_array().as_ptr());
+                gl::DrawArrays(gl::TRIANGLES, PIG_BL_LEG, VPB);
+
+                // Back-right leg (opposite to front-right)
+                let br_p = glam::Vec3::new(0.135, pivot_y, 0.205);
+                let br_m = glam::Mat4::from_translation(br_p)
+                    * glam::Mat4::from_rotation_x(swing)
+                    * glam::Mat4::from_translation(-br_p);
+                gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE,
+                    (*projection * *view * model * br_m).to_cols_array().as_ptr());
+                gl::DrawArrays(gl::TRIANGLES, PIG_BR_LEG, VPB);
+            }
+
+            gl::BindVertexArray(0);
+            gl::Enable(gl::CULL_FACE);
+        }
+    }
+
     /// Render all chickens into the currently active shadow cascade.
-    /// Draws the full static mesh per chicken (wings at rest — shadow detail
-    /// doesn't need the animated wing positions).
     pub fn draw_shadows(&self, chickens: &[Chicken], shadow_pass: &ShadowPass) {
         for chicken in chickens {
             let rot_y = -(chicken.yaw.to_radians() + FRAC_PI_2);
             let model = glam::Mat4::from_translation(glam::Vec3::from(chicken.position))
                 * glam::Mat4::from_rotation_y(rot_y);
             shadow_pass.draw_solid_mesh(self.vao, 0, VPB * 8, &model);
+        }
+    }
+
+    pub fn draw_pig_shadows(&self, pigs: &[Pig], shadow_pass: &ShadowPass) {
+        for pig in pigs {
+            let rot_y = -(pig.yaw.to_radians() + FRAC_PI_2);
+            let model = glam::Mat4::from_translation(glam::Vec3::from(pig.position))
+                * glam::Mat4::from_rotation_y(rot_y);
+            shadow_pass.draw_solid_mesh(self.pig_vao, 0, VPB * 7, &model);
         }
     }
 }
@@ -191,6 +340,8 @@ impl Drop for EntityRenderer {
         unsafe {
             gl::DeleteVertexArrays(1, &self.vao);
             gl::DeleteBuffers(1, &self.vbo);
+            gl::DeleteVertexArrays(1, &self.pig_vao);
+            gl::DeleteBuffers(1, &self.pig_vbo);
             gl::DeleteProgram(self.shader);
         }
     }

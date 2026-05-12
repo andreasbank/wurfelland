@@ -179,6 +179,7 @@ impl ItemRenderer {
                     ItemType::Feather      => (self.vao_stone, self.cube_vert_count),
                     ItemType::Egg          => (self.vao_stone, self.cube_vert_count),
                     ItemType::ChickenMeat  => (self.vao_stone, self.cube_vert_count),
+                    ItemType::PorkChop     => (self.vao_stone, self.cube_vert_count),
                 };
 
                 let pos = glam::Vec3::new(

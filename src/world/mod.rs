@@ -15,4 +15,4 @@ pub mod item;
 pub use item::{ItemType, ItemEntity};
 
 pub mod entity;
-pub use entity::{Chicken, nearest_entity_hit};
+pub use entity::{Chicken, Pig, nearest_entity_hit};

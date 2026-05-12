@@ -10,7 +10,7 @@ mod camera;
 use camera::Camera;
 
 mod world;
-use world::{World, ItemEntity, ItemType, Chicken, nearest_entity_hit};
+use world::{World, ItemEntity, ItemType, Chicken, Pig, nearest_entity_hit};
 
 mod renderer;
 use renderer::ChunkRenderer;
@@ -145,6 +145,7 @@ fn main() {
         let mut menu_reveal_timer: f32 = 0.0; // seconds elapsed since chunks finished loading
 
         let mut chickens: Vec<Chicken> = Vec::new();
+        let mut pigs: Vec<Pig> = Vec::new();
         let mut item_entities: Vec<ItemEntity> = Vec::new();
 
         let hotbar: [Option<ItemType>; 9] = [None; 9];
@@ -263,6 +264,7 @@ fn main() {
                                         world = World::new(8, seed);
                                         world.update([8.5, 0.0, 8.5]);
                                         chickens.clear();
+                                        pigs.clear();
                                         item_entities.clear();
                                         menu_reveal_timer = 0.0;
                                         game_state = GameState::LoadingGame;
@@ -522,6 +524,32 @@ fn main() {
                             }
                         }
 
+                        // Spawn pigs (different hash seed, slightly less frequent)
+                        for cx in -scan_radius..=scan_radius {
+                            for cz in -scan_radius..=scan_radius {
+                                let h = (cx.wrapping_mul(48_271i32)
+                                    ^ cz.wrapping_mul(83_492_791i32)) as u32;
+                                if h % 25 != 0 { continue; }
+                                let center_wx = (cx * 16 + 8) as f64;
+                                let center_wz = (cz * 16 + 8) as f64;
+                                if !world::biome::biome_at_world(center_wx, center_wz)
+                                    .allows_pigs() { continue; }
+                                let family_size = 2 + (h >> 8) % 3; // 2–4 per group
+                                let base_bx = cx * 16 + ((h >> 6) & 0xF) as i32;
+                                let base_bz = cz * 16 + ((h >> 14) & 0xF) as i32;
+                                for i in 0..family_size {
+                                    let bx = base_bx + (i as i32 % 2) * 3;
+                                    let bz = base_bz + (i as i32 / 2) * 3;
+                                    let sy = world.surface_height(bx, bz);
+                                    if sy > 10 {
+                                        pigs.push(Pig::new(
+                                            bx as f32 + 0.5, sy as f32, bz as f32 + 0.5,
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+
                         world.update(player.position); // seed chunk gen at actual spawn
                         minimap.update(&world, player.position[0], player.position[2]);
                         game_state = GameState::Playing;
@@ -570,26 +598,40 @@ fn main() {
                         }
 
                         if lmb_held {
-                            let ent_hit = nearest_entity_hit(&chickens, cam_pos, cam_dir, 5.0);
+                            let chk_hit = nearest_entity_hit(&chickens, cam_pos, cam_dir, 5.0);
+                            let pig_hit = nearest_entity_hit(&pigs,     cam_pos, cam_dir, 5.0);
+                            // Pick whichever entity type is closer
+                            let (ent_hit_t, hit_chicken, hit_pig_idx) = match (chk_hit, pig_hit) {
+                                (Some((ci, ct)), Some((pi, pt))) => if ct <= pt {
+                                    (ct, Some(ci), None)
+                                } else {
+                                    (pt, None, Some(pi))
+                                },
+                                (Some((ci, ct)), None) => (ct, Some(ci), None),
+                                (None, Some((pi, pt))) => (pt, None, Some(pi)),
+                                (None, None)           => (f32::MAX, None, None),
+                            };
                             let blk_hit = world.raycast(cam_pos, cam_dir, 5.0);
 
-                            let hit_entity = match (ent_hit, blk_hit) {
-                                (Some((_, et)), Some(b)) => {
-                                    let dx = b[0] as f32 + 0.5 - cam_pos[0];
-                                    let dy = b[1] as f32 + 0.5 - cam_pos[1];
-                                    let dz = b[2] as f32 + 0.5 - cam_pos[2];
-                                    et < (dx*dx + dy*dy + dz*dz).sqrt()
+                            let hit_entity = if hit_chicken.is_some() || hit_pig_idx.is_some() {
+                                match blk_hit {
+                                    Some(b) => {
+                                        let dx = b[0] as f32 + 0.5 - cam_pos[0];
+                                        let dy = b[1] as f32 + 0.5 - cam_pos[1];
+                                        let dz = b[2] as f32 + 0.5 - cam_pos[2];
+                                        ent_hit_t < (dx*dx + dy*dy + dz*dz).sqrt()
+                                    }
+                                    None => true,
                                 }
-                                (Some(_), None) => true,
-                                _ => false,
-                            };
+                            } else { false };
 
                             if hit_entity {
                                 if entity_hit_cooldown <= 0.0 {
-                                    let (idx, _) = ent_hit.unwrap();
                                     let len = (cam_dir[0]*cam_dir[0] + cam_dir[2]*cam_dir[2])
                                         .sqrt().max(0.001);
-                                    chickens[idx].take_hit([cam_dir[0]/len, 0.0, cam_dir[2]/len]);
+                                    let push = [cam_dir[0]/len, 0.0, cam_dir[2]/len];
+                                    if let Some(ci) = hit_chicken { chickens[ci].take_hit(push); }
+                                    if let Some(pi) = hit_pig_idx { pigs[pi].take_hit(push); }
                                     entity_hit_cooldown = 0.4;
                                 }
                                 dig_target   = None;
@@ -640,6 +682,9 @@ fn main() {
                         for chicken in &mut chickens {
                             chicken.update(delta_time, |x, y, z| world.get_block(x, y, z));
                         }
+                        for pig in &mut pigs {
+                            pig.update(delta_time, |x, y, z| world.get_block(x, y, z));
+                        }
                         for chicken in chickens.iter().filter(|c| c.is_dead()) {
                             for item_type in chicken.drops() {
                                 item_entities.push(ItemEntity::new(
@@ -649,6 +694,15 @@ fn main() {
                             }
                         }
                         chickens.retain(|c| !c.is_dead());
+                        for pig in pigs.iter().filter(|p| p.is_dead()) {
+                            for item_type in pig.drops() {
+                                item_entities.push(ItemEntity::new(
+                                    pig.position[0], pig.position[1] + 0.5,
+                                    pig.position[2], item_type,
+                                ));
+                            }
+                        }
+                        pigs.retain(|p| !p.is_dead());
 
                         item_entities.retain(|entity| {
                             let dx = entity.position[0] + 0.5 - player.position[0];
@@ -742,10 +796,11 @@ fn main() {
             gl::ClearColor(sky_color.x, sky_color.y, sky_color.z, 1.0);
             gl::Clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT);
 
+            let (fb_w, fb_h) = window.get_framebuffer_size();
+            let (fog_start, fog_end) = fog_distance.fog_params();
+
             if show_3d {
                 sky_renderer.draw(&view, &projection, sky_color, 0.5 + 0.8 * day_w);
-
-                let (fb_w, fb_h) = window.get_framebuffer_size();
                 shadow_pass.begin(
                     sun_dir,
                     camera.position, camera.front, camera.up,
@@ -757,6 +812,7 @@ fn main() {
                     world.draw_shadow(&shadow_pass);
                     if game_state == GameState::Playing {
                         entity_renderer.draw_shadows(&chickens, &shadow_pass);
+                        entity_renderer.draw_pig_shadows(&pigs, &shadow_pass);
                     }
                 }
                 shadow_pass.end(fb_w, fb_h);
@@ -774,7 +830,6 @@ fn main() {
                         moon_pos.normalize(), 18.0, glam::Vec3::new(0.85, 0.88, 1.0));
                 }
 
-                let (fog_start, fog_end) = fog_distance.fog_params();
                 chunk_renderer.begin_frame(
                     &view, &projection,
                     shadow_pass.depth_texture_array(),
@@ -790,14 +845,39 @@ fn main() {
                     fb_w, fb_h,
                     11.0, // world Y of water surface (SEA_LEVEL=10 + 1 block height)
                 );
+                chunk_renderer.capture_sky(fb_w, fb_h);
                 world.draw_opaque(&chunk_renderer, &camera);
+
+                // ── Draw world entities before the water pass ──────────────────
+                // This ensures the water surface correctly blends over submerged
+                // portions of entities via depth testing + alpha blending.
+                if game_state == GameState::Playing {
+                    let sky_tex = chunk_renderer.sky_texture();
+                    item_renderer.draw(&item_entities, &view, &projection);
+                    entity_renderer.draw_chickens(&chickens, &view, &projection,
+                        fog_start, fog_end, fb_w as f32, fb_h as f32, sky_tex);
+                    entity_renderer.draw_pigs(&pigs, &view, &projection,
+                        fog_start, fog_end, fb_w as f32, fb_h as f32, sky_tex);
+                    let remote_peers: Vec<([f32; 3], f32)> = if let Some(ref server) = net_server {
+                        server.remote_players()
+                    } else if let Some(ref client) = net_client {
+                        client.remote_players()
+                    } else { vec![] };
+                    for (pos, yaw) in remote_peers {
+                        player_renderer.draw(pos, yaw, &view, &projection, PlayerDrawMode::Full, 0.0,
+                            fog_start, fog_end, fb_w as f32, fb_h as f32, sky_tex);
+                    }
+                }
+
+                // Capture scene (terrain + entities) for water refraction, then draw water
                 chunk_renderer.capture_scene(fb_w, fb_h);
                 world.draw_transparent(&chunk_renderer, &camera);
                 chunk_renderer.end_frame();
             }
 
-            // ── Playing-only 3D objects ────────────────────────────────────────
+            // ── Playing-only overlays (drawn after water) ──────────────────────
             if game_state == GameState::Playing {
+                let sky_tex = chunk_renderer.sky_texture();
                 const SWING_SPEED: f32 = 8.0;
                 const SWING_AMP_BASE: f32 = 1.4;
                 let swing_angle = if lmb_held {
@@ -806,12 +886,18 @@ fn main() {
                     (swing_time * SWING_SPEED).sin().abs() * target
                 } else { 0.0 };
                 player_renderer.draw(player.position, player.yaw, &view, &projection,
-                    PlayerDrawMode::ArmsOnly, swing_angle);
+                    PlayerDrawMode::ArmsOnly, swing_angle,
+                    fog_start, fog_end, fb_w as f32, fb_h as f32, sky_tex);
 
                 if outline_enabled && !paused && !bag_open && !build_open {
                     let ro  = [camera.position.x, camera.position.y, camera.position.z];
                     let rd  = [camera.front.x,    camera.front.y,    camera.front.z];
-                    let ent_dist = nearest_entity_hit(&chickens, ro, rd, 5.0).map(|(_, t)| t);
+                    let chk_dist = nearest_entity_hit(&chickens, ro, rd, 5.0).map(|(_, t)| t);
+                    let pig_dist = nearest_entity_hit(&pigs,     ro, rd, 5.0).map(|(_, t)| t);
+                    let ent_dist = match (chk_dist, pig_dist) {
+                        (Some(a), Some(b)) => Some(a.min(b)),
+                        (a, b) => a.or(b),
+                    };
                     if let Some(block) = world.raycast(ro, rd, 5.0) {
                         let dx = block[0] as f32 + 0.5 - ro[0];
                         let dy = block[1] as f32 + 0.5 - ro[1];
@@ -821,21 +907,6 @@ fn main() {
                             outline_renderer.draw(block, &view, &projection);
                         }
                     }
-                }
-
-                item_renderer.draw(&item_entities, &view, &projection);
-                entity_renderer.draw_chickens(&chickens, &view, &projection);
-
-                // Render remote peers
-                let remote_peers: Vec<([f32; 3], f32)> = if let Some(ref server) = net_server {
-                    server.remote_players()
-                } else if let Some(ref client) = net_client {
-                    client.remote_players()
-                } else {
-                    vec![]
-                };
-                for (pos, yaw) in remote_peers {
-                    player_renderer.draw(pos, yaw, &view, &projection, PlayerDrawMode::Full, 0.0);
                 }
 
                 if lmb_held {

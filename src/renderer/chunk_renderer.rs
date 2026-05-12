@@ -30,6 +30,7 @@ struct UniformLocations {
     screen_size: i32,
     refraction_sampler: i32,
     water_level: i32,
+    sky_sampler: i32,
 }
 
 
@@ -39,6 +40,7 @@ pub struct ChunkRenderer {
     uniforms: UniformLocations,
     depth_tex: u32,
     refraction_tex: u32,
+    sky_tex: u32,
 }
 
 impl ChunkRenderer {
@@ -110,6 +112,7 @@ impl ChunkRenderer {
                 uniform sampler2DArray shadowMaps;
                 uniform sampler2D      u_depth_sampler;
                 uniform sampler2D      u_refraction_sampler;
+                uniform sampler2D      u_sky_sampler;
                 uniform mat4  lightSpaceMatrices[NUM_CASCADES];
                 uniform mat4  view;
                 uniform mat4  projection;
@@ -162,6 +165,10 @@ impl ChunkRenderer {
                 }
 
                 void main() {
+                    // Screen UV and sky colour computed once; used for fog and SSR fallback.
+                    vec2 screenUV = gl_FragCoord.xy / u_screen_size;
+                    vec3 skyFog   = texture(u_sky_sampler, screenUV).rgb;
+
                     vec4 texSample;
                     if (use_textures) {
                         texSample = texture(texture_atlas, TexCoord);
@@ -198,7 +205,6 @@ impl ChunkRenderer {
                                    * directionalLight * (1.0 - shadow);
 
                         // Water column depth
-                        vec2  screenUV   = gl_FragCoord.xy / u_screen_size;
                         float rawDepth   = texture(u_depth_sampler, screenUV).r;
                         float waterDepth = max(0.0, linearDepth(rawDepth) - fragDist);
                         float depthFade  = 1.0 - exp(-waterDepth * 0.6);
@@ -216,7 +222,7 @@ impl ChunkRenderer {
                         // SSR: ray-march the reflected direction through screen space
                         vec3  fragViewPos = (view * vec4(vWorldPos, 1.0)).xyz;
                         vec3  reflViewDir = mat3(view) * reflect(-viewDir, wNormal);
-                        vec3  ssrColor    = fog_color;
+                        vec3  ssrColor    = skyFog;
                         float ssrWeight   = 0.0;
                         for (int i = 1; i <= 16; i++) {
                             vec3 sVP   = fragViewPos + reflViewDir * (float(i) * 0.5);
@@ -234,7 +240,7 @@ impl ChunkRenderer {
                         }
 
                         // Fresnel blends refracted body ↔ SSR/sky
-                        color  = mix(waterBody, mix(fog_color, ssrColor, ssrWeight), fresnel * 0.65);
+                        color  = mix(waterBody, mix(skyFog, ssrColor, ssrWeight), fresnel * 0.65);
                         color += vec3(spec);
 
                         // Shoreline foam
@@ -258,7 +264,7 @@ impl ChunkRenderer {
 
                     float fog_factor = clamp((fragDist - fog_start) / (fog_end - fog_start), 0.0, 1.0);
                     float alpha = mix(texSample.a, 1.0, fog_factor);
-                    FragColor = vec4(mix(color, fog_color, fog_factor), alpha);
+                    FragColor = vec4(mix(color, skyFog, fog_factor), alpha);
                 }"#
             )?;
 
@@ -303,6 +309,7 @@ impl ChunkRenderer {
             let screen_size_loc         = gl::GetUniformLocation(shader, c"u_screen_size".as_ptr());
             let refraction_sampler_loc  = gl::GetUniformLocation(shader, c"u_refraction_sampler".as_ptr());
             let water_level_loc         = gl::GetUniformLocation(shader, c"u_water_level".as_ptr());
+            let sky_sampler_loc         = gl::GetUniformLocation(shader, c"u_sky_sampler".as_ptr());
 
             let texture_atlas = create_block_atlas();
 
@@ -328,11 +335,23 @@ impl ChunkRenderer {
             gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_T, gl::CLAMP_TO_EDGE as i32);
             gl::BindTexture(gl::TEXTURE_2D, 0);
 
+            // Sky texture: framebuffer copy taken after the sky renders, before terrain.
+            // Sampled per-pixel as the fog colour so fog blends into the actual sky.
+            let mut sky_tex = 0u32;
+            gl::GenTextures(1, &mut sky_tex);
+            gl::BindTexture(gl::TEXTURE_2D, sky_tex);
+            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::LINEAR as i32);
+            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::LINEAR as i32);
+            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_S, gl::CLAMP_TO_EDGE as i32);
+            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_T, gl::CLAMP_TO_EDGE as i32);
+            gl::BindTexture(gl::TEXTURE_2D, 0);
+
             Ok(ChunkRenderer {
                 shader,
                 texture_atlas,
                 depth_tex,
                 refraction_tex,
+                sky_tex,
                 uniforms: UniformLocations {
                     model: model_loc,
                     view: view_loc,
@@ -357,6 +376,7 @@ impl ChunkRenderer {
                     screen_size: screen_size_loc,
                     refraction_sampler: refraction_sampler_loc,
                     water_level: water_level_loc,
+                    sky_sampler: sky_sampler_loc,
                 },
             })
         }
@@ -420,18 +440,32 @@ impl ChunkRenderer {
             gl::Uniform1i(self.uniforms.depth_sampler, 2);
             gl::Uniform1i(self.uniforms.refraction_sampler, 3);
             gl::Uniform1f(self.uniforms.water_level, water_level);
-            // Bind captured textures to their units up-front; they are
-            // overwritten by capture_scene() after the opaque pass.
+            gl::Uniform1i(self.uniforms.sky_sampler, 4);
             gl::ActiveTexture(gl::TEXTURE2);
             gl::BindTexture(gl::TEXTURE_2D, self.depth_tex);
             gl::ActiveTexture(gl::TEXTURE3);
             gl::BindTexture(gl::TEXTURE_2D, self.refraction_tex);
+            // Unit 4: sky texture, populated by capture_sky() called right after begin_frame.
+            gl::ActiveTexture(gl::TEXTURE4);
+            gl::BindTexture(gl::TEXTURE_2D, self.sky_tex);
             gl::ActiveTexture(gl::TEXTURE0);
             gl::Enable(gl::DEPTH_TEST);
             gl::Enable(gl::CULL_FACE);
             gl::CullFace(gl::BACK);
             gl::Enable(gl::BLEND);
             gl::BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);
+        }
+    }
+
+    /// Copy the sky framebuffer into sky_tex (unit 4) for per-pixel fog colour.
+    /// Call this after begin_frame() but before world.draw_opaque().
+    pub fn capture_sky(&self, width: i32, height: i32) {
+        unsafe {
+            gl::BindFramebuffer(gl::READ_FRAMEBUFFER, 0);
+            gl::ActiveTexture(gl::TEXTURE4);
+            gl::BindTexture(gl::TEXTURE_2D, self.sky_tex);
+            gl::CopyTexImage2D(gl::TEXTURE_2D, 0, gl::RGB8, 0, 0, width, height, 0);
+            gl::ActiveTexture(gl::TEXTURE0);
         }
     }
 
@@ -449,8 +483,15 @@ impl ChunkRenderer {
         }
     }
 
+    pub fn sky_texture(&self) -> u32 { self.sky_tex }
+
     pub fn set_transparent_pass(&self, enabled: bool) {
         unsafe {
+            // Rebind the chunk shader and block atlas in case another renderer
+            // changed the active program or TEXTURE0 between opaque and transparent.
+            gl::UseProgram(self.shader);
+            gl::ActiveTexture(gl::TEXTURE0);
+            gl::BindTexture(gl::TEXTURE_2D, self.texture_atlas);
             gl::Uniform1i(self.uniforms.transparent_pass, enabled as i32);
             if enabled {
                 gl::DepthMask(gl::FALSE);   // don't write depth for water
@@ -498,6 +539,7 @@ impl Drop for ChunkRenderer {
             gl::DeleteTextures(1, &self.texture_atlas);
             gl::DeleteTextures(1, &self.depth_tex);
             gl::DeleteTextures(1, &self.refraction_tex);
+            gl::DeleteTextures(1, &self.sky_tex);
         }
     }
 }
