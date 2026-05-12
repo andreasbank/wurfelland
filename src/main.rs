@@ -3,8 +3,11 @@ use std::os::raw::c_void;
 use std::ptr;
 use std::time::Instant;
 
+mod save;
+
 mod game;
 use game::Player;
+use game::INVENTORY_SIZE;
 
 mod camera;
 use camera::Camera;
@@ -38,6 +41,7 @@ use renderer::EntityRenderer;
 use renderer::MultiplayerMenuRenderer;
 use renderer::OptionsMenuRenderer;
 use renderer::UnderwaterRenderer;
+use renderer::LoadMenuRenderer;
 
 mod net;
 use net::{GameServer, GameClient};
@@ -46,6 +50,7 @@ use net::messages::{ServerMessage, SERVER_PORT};
 #[derive(PartialEq, Eq)]
 enum GameState {
     MainMenu,
+    LoadMenu,
     MultiplayerMenu,
     LoadingGame,
     Playing,
@@ -133,6 +138,9 @@ fn main() {
         let mut mp_menu         = MultiplayerMenuRenderer::new();
         let mut options_menu    = OptionsMenuRenderer::new();
         let underwater_renderer = UnderwaterRenderer::new();
+        let mut load_menu       = LoadMenuRenderer::new();
+        let mut load_saves: Vec<String> = Vec::new();
+        let mut pending_load: Option<save::SaveData> = None;
 
         // ── Network state ─────────────────────────────────────────────────────
         let mut net_server: Option<GameServer> = None;
@@ -271,8 +279,34 @@ fn main() {
                                         menu_reveal_timer = 0.0;
                                         game_state = GameState::LoadingGame;
                                     }
+                                    Some("load_game") => {
+                                        load_saves = save::list_saves();
+                                        load_menu.refresh(&load_saves);
+                                        game_state = GameState::LoadMenu;
+                                    }
                                     Some("multiplayer") => game_state = GameState::MultiplayerMenu,
                                     _ => {}
+                                }
+                            }
+                            GameState::LoadMenu => {
+                                match load_menu.handle_click(last_mouse_x, last_mouse_y, win_w, win_h) {
+                                    Some("back") => game_state = GameState::MainMenu,
+                                    Some(name) => {
+                                        match save::load(name) {
+                                            Ok(data) => {
+                                                world = World::new(8, data.seed);
+                                                world.update([8.5, 0.0, 8.5]);
+                                                chickens.clear();
+                                                pigs.clear();
+                                                item_entities.clear();
+                                                menu_reveal_timer = 0.0;
+                                                pending_load = Some(data);
+                                                game_state = GameState::LoadingGame;
+                                            }
+                                            Err(e) => eprintln!("[save] Failed to load '{}': {}", name, e),
+                                        }
+                                    }
+                                    None => {}
                                 }
                             }
                             GameState::MultiplayerMenu => {
@@ -335,6 +369,63 @@ fn main() {
                                     match menu_renderer.handle_click(last_mouse_x, last_mouse_y, win_w, win_h) {
                                         Some("exit")    => window.set_should_close(true),
                                         Some("options") => options_open = true,
+                                        Some("save") => {
+                                            let name = save::next_save_name();
+                                            let block_changes = world.get_block_changes()
+                                                .iter()
+                                                .map(|(&[x, y, z], &b)| save::BlockChangeSave {
+                                                    x, y, z, block_id: b.to_net_id(),
+                                                })
+                                                .collect();
+                                            let chicken_saves = chickens.iter()
+                                                .map(|c| save::EntitySave {
+                                                    position: c.position,
+                                                    yaw:      c.yaw,
+                                                    health:   c.health,
+                                                })
+                                                .collect();
+                                            let pig_saves = pigs.iter()
+                                                .map(|p| save::EntitySave {
+                                                    position: p.position,
+                                                    yaw:      p.yaw,
+                                                    health:   p.health,
+                                                })
+                                                .collect();
+                                            let item_saves = item_entities.iter()
+                                                .map(|ie| save::ItemSave {
+                                                    position: ie.position,
+                                                    item_id:  ie.item.tile_index() as u8,
+                                                })
+                                                .collect();
+                                            let inventory_saves: Vec<save::InventorySlotSave> =
+                                                player.inventory.iter().enumerate()
+                                                .filter_map(|(i, slot)| {
+                                                    slot.map(|(item, count)| save::InventorySlotSave {
+                                                        index:   i,
+                                                        item_id: item.tile_index() as u8,
+                                                        count,
+                                                    })
+                                                })
+                                                .collect();
+                                            let data = save::SaveData {
+                                                seed: world.seed(),
+                                                sun_angle,
+                                                player_position: player.position,
+                                                player_yaw: player.yaw,
+                                                player_pitch: player.pitch,
+                                                block_changes,
+                                                chickens: chicken_saves,
+                                                pigs: pig_saves,
+                                                items: item_saves,
+                                                inventory: inventory_saves,
+                                                selected_slot,
+                                            };
+                                            if let Err(e) = save::save(&name, &data) {
+                                                eprintln!("[save] {}", e);
+                                            } else {
+                                                println!("[save] Saved as '{}'", name);
+                                            }
+                                        }
                                         _ => {}
                                     }
                                 } else if build_open {
@@ -372,6 +463,12 @@ fn main() {
                                 } else if key == Key::Backspace && mp_menu.join_mode {
                                     mp_ip.pop();
                                 }
+                            }
+                            continue;
+                        }
+                        if game_state == GameState::LoadMenu {
+                            if key == Key::Escape && action == Action::Press {
+                                game_state = GameState::MainMenu;
                             }
                             continue;
                         }
@@ -481,6 +578,10 @@ fn main() {
                     world.update([8.0, 28.0, 8.0]);
                 }
 
+                GameState::LoadMenu => {
+                    world.update([8.0, 28.0, 8.0]);
+                }
+
                 GameState::MultiplayerMenu => {
                     world.update([8.0, 28.0, 8.0]);
                     mp_menu.update_ip(&mp_ip);
@@ -499,57 +600,104 @@ fn main() {
                         player.position = world.find_spawn_point();
                         player.velocity = [0.0, 0.0, 0.0];
 
-                        // Spawn chickens wherever heights are currently known
-                        let scan_radius: i32 = 12;
-                        for cx in -scan_radius..=scan_radius {
-                            for cz in -scan_radius..=scan_radius {
-                                let h = (cx.wrapping_mul(73_856_093i32)
-                                    ^ cz.wrapping_mul(19_349_663i32)) as u32;
-                                if h % 20 != 0 { continue; }
-                                let center_wx = (cx * 16 + 8) as f64;
-                                let center_wz = (cz * 16 + 8) as f64;
-                                if !world::biome::biome_at_world(center_wx, center_wz)
-                                    .allows_chickens() { continue; }
-                                let family_size = 1 + (h >> 8) % 3;
-                                let base_bx = cx * 16 + ((h >> 4) & 0xF) as i32;
-                                let base_bz = cz * 16 + ((h >> 12) & 0xF) as i32;
-                                for i in 0..family_size {
-                                    let bx = base_bx + (i as i32 % 2) * 3;
-                                    let bz = base_bz + (i as i32 / 2) * 3;
-                                    let sy = world.surface_height(bx, bz);
-                                    if sy > 10 {
-                                        if let Some(def) = entity_registry.get("chicken") {
-                                            chickens.push(Chicken::new(
-                                                bx as f32 + 0.5, sy as f32, bz as f32 + 0.5, def,
-                                            ));
+                        if let Some(data) = pending_load.take() {
+                            // ── Load from save ─────────────────────────────
+                            player.position = data.player_position;
+                            player.yaw      = data.player_yaw;
+                            player.pitch    = data.player_pitch;
+                            sun_angle       = data.sun_angle;
+
+                            // Re-apply player block modifications
+                            world.load_block_changes(data.block_changes_as_map());
+
+                            // Restore entities
+                            for es in &data.chickens {
+                                if let Some(def) = entity_registry.get("chicken") {
+                                    let mut c = Chicken::new(
+                                        es.position[0], es.position[1], es.position[2], def,
+                                    );
+                                    c.yaw    = es.yaw;
+                                    c.health = es.health;
+                                    chickens.push(c);
+                                }
+                            }
+                            for es in &data.pigs {
+                                if let Some(def) = entity_registry.get("pig") {
+                                    let mut p = Pig::new(
+                                        es.position[0], es.position[1], es.position[2], def,
+                                    );
+                                    p.yaw    = es.yaw;
+                                    p.health = es.health;
+                                    pigs.push(p);
+                                }
+                            }
+                            for is in &data.items {
+                                if let Some(item) = world::ItemType::from_tile_index(is.item_id as usize) {
+                                    item_entities.push(ItemEntity::new(
+                                        is.position[0], is.position[1], is.position[2], item,
+                                    ));
+                                }
+                            }
+                            player.inventory = [None; game::INVENTORY_SIZE];
+                            for slot in &data.inventory {
+                                if slot.index < game::INVENTORY_SIZE {
+                                    if let Some(item) = world::ItemType::from_tile_index(slot.item_id as usize) {
+                                        player.inventory[slot.index] = Some((item, slot.count));
+                                    }
+                                }
+                            }
+                            selected_slot = data.selected_slot.min(8);
+                        } else {
+                            // ── Fresh game — deterministic entity spawn ────
+                            let scan_radius: i32 = 12;
+                            for cx in -scan_radius..=scan_radius {
+                                for cz in -scan_radius..=scan_radius {
+                                    let h = (cx.wrapping_mul(73_856_093i32)
+                                        ^ cz.wrapping_mul(19_349_663i32)) as u32;
+                                    if h % 20 != 0 { continue; }
+                                    let center_wx = (cx * 16 + 8) as f64;
+                                    let center_wz = (cz * 16 + 8) as f64;
+                                    if !world::biome::biome_at_world(center_wx, center_wz)
+                                        .allows_chickens() { continue; }
+                                    let family_size = 1 + (h >> 8) % 3;
+                                    let base_bx = cx * 16 + ((h >> 4) & 0xF) as i32;
+                                    let base_bz = cz * 16 + ((h >> 12) & 0xF) as i32;
+                                    for i in 0..family_size {
+                                        let bx = base_bx + (i as i32 % 2) * 3;
+                                        let bz = base_bz + (i as i32 / 2) * 3;
+                                        let sy = world.surface_height(bx, bz);
+                                        if sy > 10 {
+                                            if let Some(def) = entity_registry.get("chicken") {
+                                                chickens.push(Chicken::new(
+                                                    bx as f32 + 0.5, sy as f32, bz as f32 + 0.5, def,
+                                                ));
+                                            }
                                         }
                                     }
                                 }
                             }
-                        }
-
-                        // Spawn pigs (different hash seed, slightly less frequent)
-                        for cx in -scan_radius..=scan_radius {
-                            for cz in -scan_radius..=scan_radius {
-                                let h = (cx.wrapping_mul(48_271i32)
-                                    ^ cz.wrapping_mul(83_492_791i32)) as u32;
-                                if h % 25 != 0 { continue; }
-                                let center_wx = (cx * 16 + 8) as f64;
-                                let center_wz = (cz * 16 + 8) as f64;
-                                if !world::biome::biome_at_world(center_wx, center_wz)
-                                    .allows_pigs() { continue; }
-                                let family_size = 2 + (h >> 8) % 3; // 2–4 per group
-                                let base_bx = cx * 16 + ((h >> 6) & 0xF) as i32;
-                                let base_bz = cz * 16 + ((h >> 14) & 0xF) as i32;
-                                for i in 0..family_size {
-                                    let bx = base_bx + (i as i32 % 2) * 3;
-                                    let bz = base_bz + (i as i32 / 2) * 3;
-                                    let sy = world.surface_height(bx, bz);
-                                    if sy > 10 {
-                                        if let Some(def) = entity_registry.get("pig") {
-                                            pigs.push(Pig::new(
-                                                bx as f32 + 0.5, sy as f32, bz as f32 + 0.5, def,
-                                            ));
+                            for cx in -scan_radius..=scan_radius {
+                                for cz in -scan_radius..=scan_radius {
+                                    let h = (cx.wrapping_mul(48_271i32)
+                                        ^ cz.wrapping_mul(83_492_791i32)) as u32;
+                                    if h % 25 != 0 { continue; }
+                                    let center_wx = (cx * 16 + 8) as f64;
+                                    let center_wz = (cz * 16 + 8) as f64;
+                                    if !world::biome::biome_at_world(center_wx, center_wz)
+                                        .allows_pigs() { continue; }
+                                    let family_size = 2 + (h >> 8) % 3;
+                                    let base_bx = cx * 16 + ((h >> 6) & 0xF) as i32;
+                                    let base_bz = cz * 16 + ((h >> 14) & 0xF) as i32;
+                                    for i in 0..family_size {
+                                        let bx = base_bx + (i as i32 % 2) * 3;
+                                        let bz = base_bz + (i as i32 / 2) * 3;
+                                        let sy = world.surface_height(bx, bz);
+                                        if sy > 10 {
+                                            if let Some(def) = entity_registry.get("pig") {
+                                                pigs.push(Pig::new(
+                                                    bx as f32 + 0.5, sy as f32, bz as f32 + 0.5, def,
+                                                ));
+                                            }
                                         }
                                     }
                                 }
@@ -652,7 +800,7 @@ fn main() {
                                     dig_progress += delta_time;
                                     if dig_progress >= hardness {
                                         let drops = block.drops(target[0], target[1], target[2]);
-                                        world.set_block(target[0], target[1], target[2],
+                                        world.set_block_recorded(target[0], target[1], target[2],
                                             world::BlockType::Air);
                                         if let Some(ref mut server) = net_server {
                                             server.broadcast_block_change(
@@ -779,7 +927,7 @@ fn main() {
             let directional_light = dir_max * dir_t;
 
             // ── Camera (menu panorama only — not during game loading) ─────────
-            if game_state == GameState::MainMenu || game_state == GameState::MultiplayerMenu {
+            if matches!(game_state, GameState::MainMenu | GameState::LoadMenu | GameState::MultiplayerMenu) {
                 menu_yaw += delta_time * 0.006;
                 camera.position = glam::Vec3::new(8.0, 16.0, 8.0);
                 camera.front    = glam::Vec3::new(
@@ -792,7 +940,7 @@ fn main() {
             let projection = camera.projection_matrix();
 
             let menu_ready = world.chunk_count() >= MENU_CHUNK_TARGET;
-            if menu_ready && (game_state == GameState::MainMenu || game_state == GameState::MultiplayerMenu) {
+            if menu_ready && matches!(game_state, GameState::MainMenu | GameState::LoadMenu | GameState::MultiplayerMenu) {
                 menu_reveal_timer += delta_time;
             }
             let menu_revealed = menu_reveal_timer >= 2.0;
@@ -970,6 +1118,9 @@ fn main() {
                         let progress = (world.chunk_count() as f32 / MENU_CHUNK_TARGET as f32).min(1.0);
                         main_menu.draw_loading_screen(progress, win_w, win_h);
                     }
+                }
+                GameState::LoadMenu => {
+                    load_menu.draw(win_w, win_h);
                 }
                 GameState::MultiplayerMenu => {
                     if menu_revealed {

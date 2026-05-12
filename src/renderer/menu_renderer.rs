@@ -11,14 +11,19 @@ impl MenuRenderer {
             .with_title("PAUSED", (0.30, 0.24, 0.70, 0.34));
 
         window.add_button(TextButton::new(
+            "save",
+            "SAVE",
+            (0.30, 0.38, 0.70, 0.47),
+        ));
+        window.add_button(TextButton::new(
             "options",
             "OPTIONS",
-            (0.30, 0.44, 0.70, 0.54),
+            (0.30, 0.51, 0.70, 0.60),
         ));
         window.add_button(TextButton::new(
             "exit",
             "EXIT",
-            (0.30, 0.58, 0.70, 0.68),
+            (0.30, 0.64, 0.70, 0.73),
         ));
 
         MenuRenderer { window }

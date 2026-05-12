@@ -29,6 +29,21 @@ impl ItemType {
         }
     }
 
+    pub fn from_tile_index(i: usize) -> Option<Self> {
+        match i {
+            0 => Some(Self::Stick),
+            1 => Some(Self::LogBlock),
+            2 => Some(Self::DirtClump),
+            3 => Some(Self::StoneChunk),
+            4 => Some(Self::Seeds),
+            5 => Some(Self::Feather),
+            6 => Some(Self::Egg),
+            7 => Some(Self::ChickenMeat),
+            8 => Some(Self::PorkChop),
+            _ => None,
+        }
+    }
+
     pub fn from_name(name: &str) -> Option<Self> {
         match name {
             "stick"        => Some(Self::Stick),

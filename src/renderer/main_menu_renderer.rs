@@ -13,9 +13,10 @@ impl MainMenuRenderer {
         let title   = create_text_texture_scaled("WURFELLAND", 4);
         let loading_label = create_text_texture_scaled("LOADING", 3);
         let buttons = vec![
-            TextButton::new("singleplayer", "SINGLEPLAYER", (0.30, 0.44, 0.70, 0.52)),
-            TextButton::new("multiplayer",  "MULTIPLAYER",  (0.30, 0.57, 0.70, 0.65)),
-            TextButton::new("options",      "OPTIONS",      (0.30, 0.70, 0.70, 0.78)),
+            TextButton::new("singleplayer", "SINGLEPLAYER", (0.30, 0.42, 0.70, 0.50)),
+            TextButton::new("load_game",    "LOAD GAME",    (0.30, 0.53, 0.70, 0.61)),
+            TextButton::new("multiplayer",  "MULTIPLAYER",  (0.30, 0.64, 0.70, 0.72)),
+            TextButton::new("options",      "OPTIONS",      (0.30, 0.75, 0.70, 0.83)),
         ];
         MainMenuRenderer { renderer, title, loading_label, buttons }
     }
@@ -31,7 +32,7 @@ impl MainMenuRenderer {
         }
 
         // Semi-transparent dark panel behind the buttons
-        self.renderer.draw_rect(0.28, 0.38, 0.72, 0.90, 0.0, 0.0, 0.0, 0.58);
+        self.renderer.draw_rect(0.28, 0.36, 0.72, 0.92, 0.0, 0.0, 0.0, 0.58);
 
         // Title
         let tw = self.title.pixel_width  as f32 / win_w;
@@ -46,12 +47,12 @@ impl MainMenuRenderer {
 
         // Dim the buttons while the world is still loading
         if !ready {
-            self.renderer.draw_rect(0.28, 0.42, 0.72, 0.80, 0.0, 0.0, 0.0, 0.50);
+            self.renderer.draw_rect(0.28, 0.40, 0.72, 0.85, 0.0, 0.0, 0.0, 0.50);
         }
 
         // World-loading progress bar — hidden once fully loaded
         if !ready {
-            self.draw_bar(0.32, 0.83, 0.68, 0.88, progress);
+            self.draw_bar(0.32, 0.86, 0.68, 0.91, progress);
         }
 
         unsafe {

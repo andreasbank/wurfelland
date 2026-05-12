@@ -36,6 +36,9 @@ pub struct World {
     active_water: HashSet<[i32; 3]>,              // water blocks that currently have air below them
     active_spread: HashSet<[i32; 3]>,             // water blocks (level>2) that still have air neighbors at same Y
     water_levels: HashMap<[i32; 3], u8>,          // world-coord → water level (1–7 flowing, 8 source)
+    // Player-authored block changes (breaks/placements); applied to newly generated
+    // chunks so loaded saves always see the same terrain modifications.
+    block_changes: HashMap<[i32; 3], BlockType>,
 }
 
 impl World {
@@ -58,7 +61,32 @@ impl World {
             active_water: HashSet::new(),
             active_spread: HashSet::new(),
             water_levels: HashMap::new(),
+            block_changes: HashMap::new(),
         }
+    }
+
+    pub fn seed(&self) -> u32 { self.seed }
+
+    /// Like `set_block` but also records the change so it survives save/load.
+    /// Call this for all player-initiated block breaks and placements.
+    pub fn set_block_recorded(&mut self, wx: i32, wy: i32, wz: i32, block: BlockType) {
+        self.set_block(wx, wy, wz, block);
+        if wy >= 0 && wy < 16 {
+            self.block_changes.insert([wx, wy, wz], block);
+        }
+    }
+
+    pub fn get_block_changes(&self) -> &HashMap<[i32; 3], BlockType> {
+        &self.block_changes
+    }
+
+    /// Replace the recorded block-change table and immediately apply any changes
+    /// that fall inside already-loaded chunks.
+    pub fn load_block_changes(&mut self, changes: HashMap<[i32; 3], BlockType>) {
+        for (&[wx, wy, wz], &block) in &changes {
+            self.set_block(wx, wy, wz, block);
+        }
+        self.block_changes = changes;
     }
 
     pub fn update(&mut self, player_pos: [f32; 3]) {
@@ -125,7 +153,22 @@ impl World {
 
         for ready in arrived {
             self.pending_blocks.remove(&ready.position);
-            self.chunks.insert(ready.position, ready.chunk);
+            let [cx, _, cz] = ready.position;
+            let mut chunk = ready.chunk;
+            // Re-apply any recorded player block changes that fall in this chunk.
+            for (&[wx, wy, wz], &block) in &self.block_changes {
+                if wx.div_euclid(16) == cx && wz.div_euclid(16) == cz
+                    && wy >= 0 && wy < 16
+                {
+                    chunk.set_block(
+                        wx.rem_euclid(16) as usize,
+                        wy as usize,
+                        wz.rem_euclid(16) as usize,
+                        block,
+                    );
+                }
+            }
+            self.chunks.insert(ready.position, chunk);
 
             // Seed water metadata — only touch blocks that are actually water or
             // border water, avoiding a full 4096-iteration scan on the main thread.

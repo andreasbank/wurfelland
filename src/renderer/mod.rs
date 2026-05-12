@@ -68,3 +68,6 @@ pub use options_menu_renderer::OptionsMenuRenderer;
 
 pub mod underwater_renderer;
 pub use underwater_renderer::UnderwaterRenderer;
+
+pub mod load_menu_renderer;
+pub use load_menu_renderer::LoadMenuRenderer;
