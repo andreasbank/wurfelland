@@ -226,6 +226,21 @@ impl BagRenderer {
                     0.55, 0.35, 0.17, 1.0,
                 );
             }
+            ItemType::Torch => {
+                let pad = SLOT_SIZE * 0.09;
+                // Flame / coal head (top, orange)
+                self.window.draw_rect(
+                    sx + SLOT_SIZE * 0.35, sy + pad,
+                    sx + SLOT_SIZE * 0.65, sy + SLOT_SIZE * 0.42,
+                    1.00, 0.47, 0.00, 1.0,
+                );
+                // Wooden stick (centre, brown, lower three-quarters)
+                self.window.draw_rect(
+                    sx + SLOT_SIZE * 0.44, sy + SLOT_SIZE * 0.36,
+                    sx + SLOT_SIZE * 0.56, sy + SLOT_SIZE - pad,
+                    0.55, 0.35, 0.17, 1.0,
+                );
+            }
             _ => {
                 let [r, g, b] = item.color();
                 let pad = SLOT_SIZE * 0.12;

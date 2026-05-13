@@ -2,6 +2,7 @@ use crate::renderer::ChunkMesh;
 use crate::world::face::Face;
 use crate::world::BlockType;
 use crate::world::biome::Biome;
+use crate::world::{SEA_LEVEL, WORLD_HEIGHT_CHUNKS};
 use glam::Vec3;
 use crate::camera::frustum::Frustum;
 use noise::{NoiseFn, Perlin};
@@ -11,31 +12,27 @@ pub type Blocks = [[[BlockType; 16]; 16]; 16];
 /// Per-block water levels for a chunk (0 = not water, 1–7 = flowing, 8 = source).
 pub type WaterLevels = [[[u8; 16]; 16]; 16];
 
-/// The single-block-deep face of an adjacent chunk, needed for border face culling.
-/// `right[y][z]`  = blocks[0][y][z]  of the chunk to our +X
-/// `left[y][z]`   = blocks[15][y][z] of the chunk to our -X
-/// `front[y][x]`  = blocks[x][y][0]  of the chunk to our +Z
-/// `back[y][x]`   = blocks[x][y][15] of the chunk to our -Z
+/// Single-block-deep faces of all six adjacent chunks for border face culling.
+/// Horizontal: `right[y][z]`, `left[y][z]`, `front[y][x]`, `back[y][x]`
+/// Vertical:   `above[x][z]` = bottom face (ly=0) of the chunk above,
+///             `below[x][z]` = top face (ly=15) of the chunk below.
 pub struct NeighborEdges {
     pub right: [[BlockType; 16]; 16],
     pub left:  [[BlockType; 16]; 16],
     pub front: [[BlockType; 16]; 16],
     pub back:  [[BlockType; 16]; 16],
-    /// Water levels at lx=0 of the +X neighbour  [y][z]
+    pub above: [[BlockType; 16]; 16],
+    pub below: [[BlockType; 16]; 16],
     pub wl_right: [[u8; 16]; 16],
-    /// Water levels at lx=15 of the -X neighbour [y][z]
     pub wl_left:  [[u8; 16]; 16],
-    /// Water levels at lz=0 of the +Z neighbour  [y][x]
     pub wl_front: [[u8; 16]; 16],
-    /// Water levels at lz=15 of the -Z neighbour [y][x]
     pub wl_back:  [[u8; 16]; 16],
-    /// Whether each neighbouring chunk was actually loaded when the edges were snapshotted.
-    /// Used so fluid face-visibility can treat an unloaded neighbour as same-fluid
-    /// (avoiding a seam wall) without hiding legitimate faces on solid blocks.
     pub right_loaded: bool,
     pub left_loaded:  bool,
     pub front_loaded: bool,
     pub back_loaded:  bool,
+    pub above_loaded: bool,
+    pub below_loaded: bool,
 }
 
 impl NeighborEdges {}
@@ -127,10 +124,23 @@ impl Chunk {
         let cont    = Perlin::new(seed.wrapping_add(258));
 
         let mut blocks     = [[[BlockType::Air; 16]; 16]; 16];
-        let mut surface    = [[0usize; 16]; 16];
+        let mut surface    = [[0i32; 16]; 16]; // world-Y of surface block per XZ column
         let mut biome_grid = [[Biome::Plains; 16]; 16];
 
-        const SEA_LEVEL: usize = 10;
+        let wy_base = position[1] * 16; // world Y at the bottom of this chunk
+
+        // Max possible surf_y across all biomes — chunks above this are always air.
+        // Mountains: base 66 + amplitude 52 = 118.  Add a small buffer → 130.
+        const MAX_SURF_Y: i32 = 130;
+        let model = glam::Mat4::from_translation(glam::Vec3::new(
+            position[0] as f32 * 16.0,
+            position[1] as f32 * 16.0,
+            position[2] as f32 * 16.0,
+        ));
+        if wy_base > MAX_SURF_Y + 1 {
+            // Entire chunk is above the highest possible terrain — leave all-air.
+            return Chunk { position, blocks, mesh: None, needs_rebuild: true, model };
+        }
 
         // ── Block placement ──────────────────────────────────────────────────
         for x in 0..16usize {
@@ -146,94 +156,119 @@ impl Chunk {
                 biome_grid[x][z] = biome;
                 let p = biome.params();
 
-                let noise_val = (terrain.get([wx * p.scale, wz * p.scale]) + 1.0) / 2.0;
-                let surf_y = (p.base_height + noise_val as f32 * p.amplitude) as usize;
-                let surf_y = surf_y.min(15);
+                // Blend terrain height over a 5-point cross (±16 blocks) so biome
+                // edges fade in gradually instead of creating instant cliffs.
+                // For mountain samples the continentalness value biases the terrain
+                // noise upward so the centre of a mountain biome (high continentalness)
+                // is always the highest point — preventing inverted / hollow mountains.
+                const BLEND_D: f64 = 16.0;
+                let mut blended_surf = 0.0f32;
+                for (ox, oz) in [(0.0f64,0.0f64),(BLEND_D,0.0),(-BLEND_D,0.0),(0.0,BLEND_D),(0.0,-BLEND_D)] {
+                    let sx = wx + ox;
+                    let sz = wz + oz;
+                    let c_raw = cont.get([sx * 0.005, sz * 0.005]);
+                    let b = Biome::from_noise(
+                        temp .get([sx * 0.003, sz * 0.003]),
+                        moist.get([sx * 0.003, sz * 0.003]),
+                        c_raw,
+                    );
+                    let bp = b.params();
+                    let terrain_nv = ((terrain.get([sx * bp.scale, sz * bp.scale]) + 1.0) / 2.0) as f32;
+                    let nv = if b == Biome::Mountains {
+                        // c_t = 0 at the biome edge (cont=0.80), 1 at the deepest centre (cont=1.0).
+                        // Lerp terrain_nv toward 1 as c_t rises so the continentalness peak
+                        // always sits at the top of the mountain.
+                        let c_norm = ((c_raw + 1.0) / 2.0) as f32;
+                        let c_t = ((c_norm - 0.80) / 0.20).clamp(0.0, 1.0);
+                        (terrain_nv * (1.0 - c_t * 0.5) + c_t * 0.6).min(1.0)
+                    } else {
+                        terrain_nv
+                    };
+                    blended_surf += bp.base_height + nv * bp.amplitude;
+                }
+                let surf_y = (blended_surf / 5.0) as i32;
+                let surf_y = surf_y.clamp(1, WORLD_HEIGHT_CHUNKS * 16 - 2);
                 surface[x][z] = surf_y;
 
                 let underwater = surf_y < SEA_LEVEL;
-                for y in 0..16usize {
-                    blocks[x][y][z] = if y < surf_y.saturating_sub(3) {
+
+                for ly in 0..16usize {
+                    let wy = wy_base + ly as i32; // world Y of this block
+                    blocks[x][ly][z] = if wy == 0 {
+                        BlockType::Stone // bedrock row
+                    } else if wy < surf_y - 3 {
                         BlockType::Stone
-                    } else if y < surf_y {
+                    } else if wy < surf_y {
                         p.sub_surface_block
-                    } else if y == surf_y {
+                    } else if wy == surf_y {
                         if underwater { p.sub_surface_block } else { p.surface_block }
+                    } else if underwater && wy <= SEA_LEVEL {
+                        BlockType::Water
                     } else {
                         BlockType::Air
                     };
-                }
-
-                if underwater {
-                    for y in (surf_y + 1)..=SEA_LEVEL {
-                        if y < 16 { blocks[x][y][z] = BlockType::Water; }
-                    }
                 }
             }
         }
 
         // ── Trees ────────────────────────────────────────────────────────────
+        // Only place trees whose surface block falls within this chunk's Y range.
         for x in 0..16usize {
             for z in 0..16usize {
+                let surf_wy = surface[x][z];
+                let local_surf = surf_wy - wy_base;
+                if local_surf < 0 || local_surf >= 16 { continue; }
+                let local_surf = local_surf as usize;
+
                 let world_x = position[0] * 16 + x as i32;
                 let world_z = position[2] * 16 + z as i32;
-                let p    = biome_grid[x][z].params();
-                let surf = surface[x][z];
+                let p = biome_grid[x][z].params();
                 if should_place_tree(world_x, world_z, p.tree_freq)
-                    && surf >= SEA_LEVEL
-                    && blocks[x][surf][z] == BlockType::Grass
+                    && surf_wy > SEA_LEVEL
+                    && blocks[x][local_surf][z] == BlockType::Grass
                 {
-                    // Pick tree size with a separate hash: ~50% small, 35% medium, 15% large.
                     let sh = (world_x.wrapping_mul(1_723_459)
                               ^ world_z.wrapping_mul(9_876_543)) as u32;
                     match sh % 20 {
-                        0..=9  => plant_tree_small (&mut blocks, x, surf, z),
-                        10..=16 => plant_tree_medium(&mut blocks, x, surf, z),
-                        _       => plant_tree_large (&mut blocks, x, surf, z),
+                        0..=9   => plant_tree_small (&mut blocks, x, local_surf, z),
+                        10..=16 => plant_tree_medium(&mut blocks, x, local_surf, z),
+                        _       => plant_tree_large (&mut blocks, x, local_surf, z),
                     }
                 }
             }
         }
 
         // ── Grass (patch-based) ──────────────────────────────────────────────
-        // The world is divided into 6×6-block patches. Each patch is either
-        // active (grass) or empty, decided by a coarse hash. Within an active
-        // patch ~70% of columns get a grass plant; the size (short/medium/tall)
-        // is chosen per-column so patches contain a natural mix.
         for x in 0..16usize {
             for z in 0..16usize {
-                let p     = biome_grid[x][z].params();
+                let p = biome_grid[x][z].params();
                 if p.grass_freq == 0 { continue; }
 
-                let surf  = surface[x][z];
-                let above = surf + 1;
-                if above >= 16 { continue; }
-                if blocks[x][surf][z]  != BlockType::Grass { continue; }
-                if blocks[x][above][z] != BlockType::Air   { continue; }
+                let surf_wy = surface[x][z];
+                let local_surf = surf_wy - wy_base;
+                if local_surf < 0 || local_surf >= 15 { continue; } // need room for above block
+                let local_surf = local_surf as usize;
+                let above = local_surf + 1;
+
+                if blocks[x][local_surf][z] != BlockType::Grass { continue; }
+                if blocks[x][above][z]      != BlockType::Air   { continue; }
 
                 let world_x = position[0] * 16 + x as i32;
                 let world_z = position[2] * 16 + z as i32;
 
-                // Patch-level hash: same for all columns in the same 6×6 cell.
                 let px = world_x.div_euclid(6);
                 let pz = world_z.div_euclid(6);
                 let ph = (px.wrapping_mul(374_761_393_i32)
                           ^ pz.wrapping_mul(668_265_263_i32)) as u32;
-                if ph % p.grass_freq != 0 { continue; } // patch inactive
+                if ph % p.grass_freq != 0 { continue; }
 
-                // Column-level hash: varies within the patch.
                 let ch = (world_x.wrapping_mul(1_234_567_i32)
                           ^ world_z.wrapping_mul(7_654_321_i32)) as u32;
-                if ch % 10 >= 7 { continue; } // ~70% fill within the patch
+                if ch % 10 >= 7 { continue; }
 
-                // Size mix: 40% short, 40% medium, 20% full (stacked).
                 match (ch / 10) % 5 {
-                    0 | 1 => {
-                        blocks[x][above][z] = BlockType::GrassShort;
-                    }
-                    2 | 3 => {
-                        blocks[x][above][z] = BlockType::TallGrass;
-                    }
+                    0 | 1 => { blocks[x][above][z] = BlockType::GrassShort; }
+                    2 | 3 => { blocks[x][above][z] = BlockType::TallGrass; }
                     _ => {
                         blocks[x][above][z] = BlockType::TallGrass;
                         if above + 1 < 16 && blocks[x][above + 1][z] == BlockType::Air {
@@ -244,11 +279,69 @@ impl Chunk {
             }
         }
 
-        let model = glam::Mat4::from_translation(glam::Vec3::new(
-            position[0] as f32 * 16.0,
-            position[1] as f32 * 16.0,
-            position[2] as f32 * 16.0,
-        ));
+        // ── Cave carving ──────────────────────────────────────────────────────
+        //
+        // Three cave types matching Minecraft 1.18+:
+        //
+        //  Spaghetti  – two 3-D noise fields; carve where *both* are near zero.
+        //               The intersection of two near-zero surfaces is a thin tube.
+        //               Slightly higher Y frequency → passages run more horizontal.
+        //
+        //  Cheese     – one 3-D noise field; carve where the value is high.
+        //               Creates large, irregular open caverns.  Only below Y=50.
+        //
+        //  Noodle     – tighter threshold on the same two spaghetti fields;
+        //               produces occasional very narrow "needle" passages.
+        //
+        // Rules:
+        //  • Y=0 is always bedrock — never carved.
+        //  • Never carve within 5 blocks of the surface (prevents sky holes).
+        //  • Non-solid blocks (Air, Water, vegetation) are skipped.
+        let cave1  = Perlin::new(seed.wrapping_add(500));
+        let cave2  = Perlin::new(seed.wrapping_add(501));
+        let cheese = Perlin::new(seed.wrapping_add(502));
+
+        for x in 0..16usize {
+            for z in 0..16usize {
+                let wx_f = (position[0] * 16 + x as i32) as f64;
+                let wz_f = (position[2] * 16 + z as i32) as f64;
+                let surf  = surface[x][z];
+
+                for ly in 0..16usize {
+                    let wy = wy_base + ly as i32;
+                    // Preserve bedrock and a cap near the surface.
+                    if wy <= 0 || wy >= surf - 5 { continue; }
+                    // Only carve solid terrain — leave Air/Water/vegetation alone.
+                    if !blocks[x][ly][z].is_solid() { continue; }
+
+                    let wy_f = wy as f64;
+
+                    // Spaghetti / noodle caves.
+                    let s1 = cave1.get([wx_f * 0.020, wy_f * 0.025, wz_f * 0.020]);
+                    let s2 = cave2.get([wx_f * 0.020, wy_f * 0.025, wz_f * 0.020]);
+                    let sq = s1 * s1 + s2 * s2;
+
+                    // Cheese caves — large voids, deeper only.
+                    let ch = if wy < 50 {
+                        cheese.get([wx_f * 0.008, wy_f * 0.010, wz_f * 0.008])
+                    } else {
+                        -1.0
+                    };
+
+                    // Slightly widen spaghetti tunnels deeper down (more cavernous).
+                    let depth_bonus = ((50 - wy).max(0) as f64) * 0.000_15;
+
+                    let is_cave = sq < 0.020 + depth_bonus   // spaghetti
+                        || sq < 0.006                         // noodle (always)
+                        || ch > 0.55;                         // cheese
+
+                    if is_cave {
+                        blocks[x][ly][z] = BlockType::Air;
+                    }
+                }
+            }
+        }
+
         Chunk { position, blocks, mesh: None, needs_rebuild: true, model }
     }
 
@@ -290,6 +383,20 @@ impl Chunk {
     pub fn edge_back(&self) -> [[BlockType; 16]; 16] {
         let mut e = [[BlockType::Air; 16]; 16];
         for y in 0..16 { for x in 0..16 { e[y][x] = self.blocks[x][y][15]; } }
+        e
+    }
+
+    /// Bottom face (ly=0) — exposed to the chunk below.
+    pub fn edge_bottom(&self) -> [[BlockType; 16]; 16] {
+        let mut e = [[BlockType::Air; 16]; 16];
+        for x in 0..16 { for z in 0..16 { e[x][z] = self.blocks[x][0][z]; } }
+        e
+    }
+
+    /// Top face (ly=15) — exposed to the chunk above.
+    pub fn edge_top(&self) -> [[BlockType; 16]; 16] {
+        let mut e = [[BlockType::Air; 16]; 16];
+        for x in 0..16 { for z in 0..16 { e[x][z] = self.blocks[x][15][z]; } }
         e
     }
 
@@ -496,10 +603,12 @@ impl Chunk {
         // Hide fluid faces at unloaded chunk boundaries to prevent water-wall seams.
         // Solid block faces use Air default (normal behaviour — face is visible).
         if current.is_fluid() {
-            let at_unloaded = (ix < 0 && !edges.left_loaded)
+            let at_unloaded = (ix < 0  && !edges.left_loaded)
                 || (ix >= 16 && !edges.right_loaded)
                 || (iz < 0  && !edges.back_loaded)
-                || (iz >= 16 && !edges.front_loaded);
+                || (iz >= 16 && !edges.front_loaded)
+                || (iy < 0  && !edges.below_loaded)
+                || (iy >= 16 && !edges.above_loaded);
             if at_unloaded { return false; }
         }
 
@@ -511,8 +620,10 @@ impl Chunk {
             edges.back[y][x]
         } else if iz >= 16 {
             edges.front[y][x]
-        } else if iy < 0 || iy >= 16 {
-            BlockType::Air
+        } else if iy < 0 {
+            edges.below[x][z]
+        } else if iy >= 16 {
+            edges.above[x][z]
         } else {
             blocks[ix as usize][iy as usize][iz as usize]
         };

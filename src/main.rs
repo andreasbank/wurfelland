@@ -13,6 +13,7 @@ use camera::Camera;
 
 mod world;
 use world::{World, ItemEntity, ItemType, Chicken, Pig, nearest_entity_hit, EntityRegistry};
+use world::block::BlockType;
 
 mod renderer;
 use renderer::ChunkRenderer;
@@ -41,6 +42,7 @@ use renderer::MultiplayerMenuRenderer;
 use renderer::OptionsMenuRenderer;
 use renderer::UnderwaterRenderer;
 use renderer::LoadMenuRenderer;
+use renderer::StatsRenderer;
 
 mod net;
 use net::{GameServer, GameClient};
@@ -119,7 +121,7 @@ fn main() {
         let mut player = Player::new();
 
         // Kick off background chunk generation around spawn
-        world.update([8.0, 28.0, 8.0]);
+        world.update([8.0, 80.0, 8.0]);
 
         // ── All other renderers ────────────────────────────────────────────────
         let crosshair_renderer  = crosshair_renderer::Crosshair::new();
@@ -139,6 +141,7 @@ fn main() {
         let mut options_menu    = OptionsMenuRenderer::new();
         let underwater_renderer = UnderwaterRenderer::new();
         let mut load_menu       = LoadMenuRenderer::new();
+        let stats_renderer      = StatsRenderer::new();
         let mut pending_load: Option<save::SaveData> = None;
 
         // ── Network state ─────────────────────────────────────────────────────
@@ -163,6 +166,17 @@ fn main() {
         let mut bag_open     = false;
         let mut build_open   = false;
         let mut console_open = false;
+        let mut god_mode = false;
+
+        // ── System stats (CPU / memory) ───────────────────────────────────────
+        let mut sys = sysinfo::System::new();
+        let mut sys_refresh_timer: f32 = 0.0;
+        let mut cpu_pct: f32 = 0.0;
+        let mut mem_mb: u64 = 0;
+        let mut fps_counter: u32 = 0;
+        let mut fps_timer: f32 = 0.0;
+        let mut fps_display: u32 = 0;
+        let mut drawn_chunks: usize = 0;
         let mut options_open = false;
         let mut fog_distance = FogDistance::Normal;
         let mut chunk_radius_idx: usize = 2; // default radius = CHUNK_RADII[2] = 8
@@ -170,6 +184,7 @@ fn main() {
         let mut paused = false;
         let mut loading_menu_timer: f32 = 0.0; // time spent in LoadingMenu state
         let mut outline_enabled = true;
+        let mut stats_enabled = false;
         let mut hi_res = true;
         let mut win_w: f32 = 1600.0;
         let mut win_h: f32 = 1200.0;
@@ -200,16 +215,39 @@ fn main() {
         // Show OS cursor for the main menu
         window.set_cursor_mode(glfw::CursorMode::Normal);
 
-        // How many chunks we want loaded before the menu "feels" ready.
-        // The world generates roughly a 6×6 ring of chunks around spawn, so 36
-        // is safely achievable and the bar reaches 100 % without stalling.
-        const MENU_CHUNK_TARGET: usize = 150;
+        // Target number of meshed chunks in the *surface Y band* (cy 3–6,
+        // world Y 48–111) before revealing the panorama.  Underground solid
+        // chunks and high-altitude air chunks mesh near-instantly and would
+        // swamp a global count, making the bar finish long before the visible
+        // world is ready.  With radius 12 the surface band has up to 25×25×4=
+        // 2 500 slots; 400 covers roughly a 10×10 XZ area — enough for the
+        // camera to see solid terrain in every direction.
+        const MENU_CHUNK_TARGET: usize = 400;
 
         // ── Main loop ─────────────────────────────────────────────────────────
         while !window.should_close() {
             let now = Instant::now();
-            let delta_time = now.duration_since(last_frame).as_secs_f32();
+            let delta_time = now.duration_since(last_frame).as_secs_f32().min(0.1);
             last_frame = now;
+
+            // FPS counter
+            fps_counter += 1;
+            fps_timer += delta_time;
+            if fps_timer >= 1.0 {
+                fps_display = fps_counter;
+                fps_counter = 0;
+                fps_timer -= 1.0;
+            }
+
+            // Refresh CPU/memory at most twice per second
+            sys_refresh_timer += delta_time;
+            if sys_refresh_timer >= 0.5 {
+                sys_refresh_timer = 0.0;
+                sys.refresh_cpu_usage();
+                sys.refresh_memory();
+                cpu_pct = sys.global_cpu_usage();
+                mem_mb  = sys.used_memory() / 1_048_576;
+            }
 
             // ── Events ────────────────────────────────────────────────────────
             glfw.poll_events();
@@ -251,6 +289,7 @@ fn main() {
                                     world.set_radius(CHUNK_RADII[chunk_radius_idx]);
                                 }
                                 Some("outline") => outline_enabled = !outline_enabled,
+                                Some("stats")   => stats_enabled   = !stats_enabled,
                                 Some("res") => {
                                     hi_res = !hi_res;
                                     let (nw, nh) = if hi_res { (1600, 1200) } else { (800, 600) };
@@ -265,7 +304,7 @@ fn main() {
                             }
                         } else { match game_state {
                             GameState::MainMenu => {
-                                let menu_ready = world.chunk_count() >= MENU_CHUNK_TARGET;
+                                let menu_ready = world.meshed_surface_chunk_count() >= MENU_CHUNK_TARGET;
                                 match main_menu.handle_click(last_mouse_x, last_mouse_y, win_w, win_h, menu_ready) {
                                     Some("options") => options_open = true,
                                     Some("singleplayer") => {
@@ -285,6 +324,7 @@ fn main() {
                                         game_state = GameState::LoadMenu;
                                     }
                                     Some("multiplayer") => game_state = GameState::MultiplayerMenu,
+                                    Some("exit") => window.set_should_close(true),
                                     _ => {}
                                 }
                             }
@@ -568,8 +608,17 @@ fn main() {
                                         }
                                     }
                                 } else if console_open && key == Key::Enter {
-                                    if let ConsoleAction::Exit = console.submit() {
-                                        window.set_should_close(true);
+                                    match console.submit() {
+                                        ConsoleAction::Exit => window.set_should_close(true),
+                                        ConsoleAction::GodMode => {
+                                            god_mode = !god_mode;
+                                            if god_mode {
+                                                console.push_line("GOD MODE ENABLED");
+                                            } else {
+                                                console.push_line("GOD MODE DISABLED");
+                                            }
+                                        }
+                                        ConsoleAction::None => {}
                                     }
                                 } else if console_open && key == Key::Backspace {
                                     console.backspace();
@@ -646,12 +695,17 @@ fn main() {
             // ── State-specific updates ─────────────────────────────────────────
             match game_state {
                 GameState::MainMenu => {
-                    world.update([8.0, 28.0, 8.0]);
+                    let menu_ready = world.meshed_surface_chunk_count() >= MENU_CHUNK_TARGET;
+                    if menu_ready {
+                        world.update([8.0, 80.0, 8.0]);
+                    } else {
+                        for _ in 0..8 { world.update_loading([8.0, 80.0, 8.0]); }
+                    }
                 }
 
                 GameState::LoadingMenu => {
                     // Load the panorama world fast in the background.
-                    world.update_loading([8.0, 28.0, 8.0]);
+                    for _ in 0..8 { world.update_loading([8.0, 28.0, 8.0]); }
                     // Cap the per-frame contribution so that a single slow frame
                     // (e.g. from World::new blocking on the previous frame) cannot
                     // jump the timer past the threshold and skip the loading screen.
@@ -664,11 +718,21 @@ fn main() {
                 }
 
                 GameState::LoadMenu => {
-                    world.update([8.0, 28.0, 8.0]);
+                    let menu_ready = world.meshed_surface_chunk_count() >= MENU_CHUNK_TARGET;
+                    if menu_ready {
+                        world.update([8.0, 80.0, 8.0]);
+                    } else {
+                        for _ in 0..8 { world.update_loading([8.0, 80.0, 8.0]); }
+                    }
                 }
 
                 GameState::MultiplayerMenu => {
-                    world.update([8.0, 28.0, 8.0]);
+                    let menu_ready = world.meshed_surface_chunk_count() >= MENU_CHUNK_TARGET;
+                    if menu_ready {
+                        world.update([8.0, 80.0, 8.0]);
+                    } else {
+                        for _ in 0..8 { world.update_loading([8.0, 80.0, 8.0]); }
+                    }
                     mp_menu.update_ip(&mp_ip);
                 }
 
@@ -759,7 +823,7 @@ fn main() {
                                         let bx = base_bx + (i as i32 % 2) * 3;
                                         let bz = base_bz + (i as i32 / 2) * 3;
                                         let sy = world.surface_height(bx, bz);
-                                        if sy > 10 {
+                                        if sy > 63 {
                                             if let Some(def) = entity_registry.get("chicken") {
                                                 chickens.push(Chicken::new(
                                                     bx as f32 + 0.5, sy as f32, bz as f32 + 0.5, def,
@@ -785,7 +849,7 @@ fn main() {
                                         let bx = base_bx + (i as i32 % 2) * 3;
                                         let bz = base_bz + (i as i32 / 2) * 3;
                                         let sy = world.surface_height(bx, bz);
-                                        if sy > 10 {
+                                        if sy > 63 {
                                             if let Some(def) = entity_registry.get("pig") {
                                                 pigs.push(Pig::new(
                                                     bx as f32 + 0.5, sy as f32, bz as f32 + 0.5, def,
@@ -807,6 +871,12 @@ fn main() {
 
                 GameState::Playing => {
                     if !paused && !bag_open && !build_open && !console_open {
+                        let in_water = world.get_block(
+                            player.position[0] as i32,
+                            player.position[1] as i32,
+                            player.position[2] as i32,
+                        ) == BlockType::Water;
+
                         // Player movement
                         player.walk(
                             *keys_pressed.get(&Key::W).unwrap_or(&false),
@@ -814,8 +884,16 @@ fn main() {
                             *keys_pressed.get(&Key::A).unwrap_or(&false),
                             *keys_pressed.get(&Key::D).unwrap_or(&false),
                             *keys_pressed.get(&Key::LeftShift).unwrap_or(&false),
+                            in_water,
                         );
-                        player.apply_physics(delta_time, |x, y, z| world.get_block(x, y, z).is_solid());
+                        if in_water && *keys_pressed.get(&Key::Space).unwrap_or(&false) {
+                            player.swim_up();
+                        }
+                        player.apply_physics(delta_time, in_water, |x, y, z| world.get_block(x, y, z).is_solid());
+                        let fall_dmg = player.tick_fall(in_water);
+                        if !god_mode && fall_dmg > 0 {
+                            player.health = player.health.saturating_sub(fall_dmg);
+                        }
 
                         // Camera follows player
                         camera.update_pitch_yaw(player.pitch, player.yaw);
@@ -1022,7 +1100,7 @@ fn main() {
             // ── Camera (menu panorama only — not during game loading) ─────────
             if matches!(game_state, GameState::MainMenu | GameState::LoadMenu | GameState::MultiplayerMenu) {
                 menu_yaw += delta_time * 0.006;
-                camera.position = glam::Vec3::new(8.0, 16.0, 8.0);
+                camera.position = glam::Vec3::new(8.0, 80.0, 8.0);
                 camera.front    = glam::Vec3::new(
                     menu_yaw.sin(), -0.06, menu_yaw.cos(),
                 ).normalize();
@@ -1032,7 +1110,7 @@ fn main() {
             let view       = camera.view_matrix();
             let projection = camera.projection_matrix();
 
-            let menu_ready = world.chunk_count() >= MENU_CHUNK_TARGET;
+            let menu_ready = world.meshed_surface_chunk_count() >= MENU_CHUNK_TARGET;
             if menu_ready && matches!(game_state, GameState::MainMenu | GameState::LoadMenu | GameState::MultiplayerMenu) {
                 menu_reveal_timer += delta_time;
             }
@@ -1057,6 +1135,39 @@ fn main() {
             gl::ClearColor(sky_color.x, sky_color.y, sky_color.z, 1.0);
             gl::Clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT);
             let (fog_start, fog_end) = fog_distance.fog_params();
+
+            // Determine fog override based on player's environment (playing only).
+            let (fog_override, fog_override_color) = if game_state == GameState::Playing {
+                let eye_y = (player.position[1] + 1.6) as i32;
+                let eye_x = player.position[0] as i32;
+                let eye_z = player.position[2] as i32;
+                if world.get_block(eye_x, eye_y, eye_z) == BlockType::Water {
+                    (1.0f32, glam::Vec3::new(0.02, 0.12, 0.40))
+                } else {
+                    let head_y = (player.position[1] + 1.9) as i32;
+                    let in_cave = (head_y..head_y + 15)
+                        .any(|by| world.get_block(eye_x, by, eye_z).is_solid());
+                    if in_cave { (1.0f32, glam::Vec3::ZERO) } else { (0.0f32, glam::Vec3::ZERO) }
+                }
+            } else {
+                (0.0f32, glam::Vec3::ZERO)
+            };
+
+            let (torch_strength, torch_pos) = if game_state == GameState::Playing {
+                let holding_torch = hotbar[selected_slot].map_or(false, |(item, _)| item == ItemType::Torch);
+                if holding_torch {
+                    let pos = glam::Vec3::new(
+                        player.position[0],
+                        player.position[1] + 1.2,
+                        player.position[2],
+                    );
+                    (1.0f32, pos)
+                } else {
+                    (0.0f32, glam::Vec3::ZERO)
+                }
+            } else {
+                (0.0f32, glam::Vec3::ZERO)
+            };
 
             if show_3d {
                 sky_renderer.draw(&view, &projection, sky_color, 0.5 + 0.8 * day_w);
@@ -1095,17 +1206,17 @@ fn main() {
                     shadow_pass.light_space_matrices(),
                     &CASCADE_ENDS,
                     shadow_pass.texel_world_sizes(),
-                    sun_dir, sky_color, ambient_light, directional_light,
+                    sun_dir, fog_override_color, fog_override, torch_pos, torch_strength, ambient_light, directional_light,
                     fog_start, fog_end,
                     total_time,
                     camera.position,
                     camera.near_plane,
                     camera.far_plane,
                     fb_w, fb_h,
-                    11.0, // world Y of water surface (SEA_LEVEL=10 + 1 block height)
+                    64.0, // world Y of water surface (SEA_LEVEL=63 + 1)
                 );
                 chunk_renderer.capture_sky(fb_w, fb_h);
-                world.draw_opaque(&chunk_renderer, &camera);
+                drawn_chunks = world.draw_opaque(&chunk_renderer, &camera);
 
                 // ── Draw world entities before the water pass ──────────────────
                 // This ensures the water surface correctly blends over submerged
@@ -1114,9 +1225,11 @@ fn main() {
                     let sky_tex = chunk_renderer.sky_texture();
                     item_renderer.draw(&item_entities, &view, &projection);
                     entity_renderer.draw_chickens(&chickens, &view, &projection,
-                        fog_start, fog_end, fb_w as f32, fb_h as f32, sky_tex);
+                        fog_start, fog_end, fb_w as f32, fb_h as f32, sky_tex,
+                        fog_override, fog_override_color);
                     entity_renderer.draw_pigs(&pigs, &view, &projection,
-                        fog_start, fog_end, fb_w as f32, fb_h as f32, sky_tex);
+                        fog_start, fog_end, fb_w as f32, fb_h as f32, sky_tex,
+                        fog_override, fog_override_color);
                     let remote_peers: Vec<([f32; 3], f32)> = if let Some(ref server) = net_server {
                         server.remote_players()
                     } else if let Some(ref client) = net_client {
@@ -1124,7 +1237,8 @@ fn main() {
                     } else { vec![] };
                     for (pos, yaw) in remote_peers {
                         player_renderer.draw(pos, yaw, &view, &projection, PlayerDrawMode::Full, 0.0,
-                            fog_start, fog_end, fb_w as f32, fb_h as f32, sky_tex);
+                            fog_start, fog_end, fb_w as f32, fb_h as f32, sky_tex,
+                            fog_override, fog_override_color);
                     }
                 }
 
@@ -1144,9 +1258,19 @@ fn main() {
                     let target = (SWING_AMP_BASE + pitch_rad).clamp(0.1, std::f32::consts::PI * 0.85);
                     (swing_time * SWING_SPEED).sin().abs() * target
                 } else { 0.0 };
+                let lift_angle = if hotbar[selected_slot].is_some() { -0.9f32 } else { 0.0 };
+                let arm_angle = swing_angle + lift_angle;
                 player_renderer.draw(player.position, player.yaw, &view, &projection,
-                    PlayerDrawMode::ArmsOnly, swing_angle,
-                    fog_start, fog_end, fb_w as f32, fb_h as f32, sky_tex);
+                    PlayerDrawMode::ArmsOnly, arm_angle,
+                    fog_start, fog_end, fb_w as f32, fb_h as f32, sky_tex,
+                    fog_override, fog_override_color);
+
+                // Selected slot → right hand
+                if let Some((item, _)) = hotbar[selected_slot] {
+                    let mvp = player_renderer.hand_item_mvp(
+                        player.position, player.yaw, &view, &projection, arm_angle, true);
+                    item_renderer.draw_held(item, &mvp);
+                }
 
                 if outline_enabled && !paused && !bag_open && !build_open {
                     let ro  = [camera.position.x, camera.position.y, camera.position.z];
@@ -1192,6 +1316,11 @@ fn main() {
                 health_bar.draw(player.health as f32 / 100.0);
                 hotbar_renderer.draw(selected_slot, &hotbar, win_w, win_h);
 
+                if stats_enabled {
+                    let ws = world.world_stats();
+                    stats_renderer.draw(fps_display, cpu_pct, mem_mb, &ws, drawn_chunks, win_w, win_h);
+                }
+
                 let time_of_day = (sun_angle / std::f32::consts::TAU * 24.0 + 6.0).rem_euclid(24.0);
                 let tod_hours   = time_of_day as u32;
                 let tod_minutes = (time_of_day.fract() * 60.0) as u32;
@@ -1226,7 +1355,7 @@ fn main() {
                     if menu_revealed {
                         main_menu.draw(1.0, true, win_w, win_h);
                     } else {
-                        let progress = (world.chunk_count() as f32 / MENU_CHUNK_TARGET as f32).min(1.0);
+                        let progress = (world.meshed_surface_chunk_count() as f32 / MENU_CHUNK_TARGET as f32).min(1.0);
                         main_menu.draw_loading_screen(progress, win_w, win_h);
                     }
                 }
@@ -1237,7 +1366,7 @@ fn main() {
                     if menu_revealed {
                         main_menu.draw(1.0, true, win_w, win_h);
                     } else {
-                        let progress = (world.chunk_count() as f32 / MENU_CHUNK_TARGET as f32).min(1.0);
+                        let progress = (world.meshed_surface_chunk_count() as f32 / MENU_CHUNK_TARGET as f32).min(1.0);
                         main_menu.draw_loading_screen(progress, win_w, win_h);
                     }
                     mp_menu.draw(win_w, win_h);
@@ -1260,7 +1389,7 @@ fn main() {
 
             // Options menu overlays on top of everything else.
             if options_open {
-                options_menu.draw(fog_distance.as_idx(), chunk_radius_idx, outline_enabled, hi_res, win_w, win_h);
+                options_menu.draw(fog_distance.as_idx(), chunk_radius_idx, outline_enabled, stats_enabled, hi_res, win_w, win_h);
             }
 
             window.swap_buffers();

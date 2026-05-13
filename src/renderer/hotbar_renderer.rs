@@ -87,6 +87,75 @@ impl HotbarRenderer {
         }
     }
 
+    /// Draw a recognisable icon for `item` inside the slot whose bottom-left
+    /// pixel corner is `(sx, sy)`.  The hotbar coordinate system has y=0 at the
+    /// bottom of the screen (OpenGL NDC), so all vertical positions are mirrored
+    /// compared to the bag renderer which uses y=0 at the top.
+    fn draw_item_icon(&self, item: ItemType, sx: f32, sy: f32, screen: [f32; 2]) {
+        let pad = SLOT_SIZE * 0.09; // matches bag_renderer proportions
+
+        // Helper: convert bag-style (top_frac, bot_frac) to hotbar (y, h).
+        // bag uses y-from-top; hotbar uses y-from-bottom.
+        //   y = sy + (1 - bot_frac) * SLOT_SIZE
+        //   h =      (bot_frac - top_frac) * SLOT_SIZE
+        match item {
+            ItemType::StoneAxe => {
+                // Stone head (upper-left area)
+                self.draw_rect(
+                    sx + pad,
+                    sy + SLOT_SIZE * 0.44,   // 1 - 0.56
+                    SLOT_SIZE * 0.51,
+                    SLOT_SIZE * 0.47,        // 0.56 - 0.09
+                    [0.58, 0.58, 0.63, 1.0], screen,
+                );
+                // Wooden handle (right of centre, full height)
+                self.draw_rect(
+                    sx + SLOT_SIZE * 0.46,
+                    sy + pad,
+                    SLOT_SIZE * 0.12,
+                    SLOT_SIZE - pad * 2.0,
+                    [0.55, 0.35, 0.17, 1.0], screen,
+                );
+            }
+            ItemType::Torch => {
+                // Flame (top, orange)
+                self.draw_rect(
+                    sx + SLOT_SIZE * 0.35,
+                    sy + SLOT_SIZE * 0.58,   // 1 - 0.42
+                    SLOT_SIZE * 0.30,
+                    SLOT_SIZE * 0.33,        // 0.42 - 0.09
+                    [1.00, 0.47, 0.00, 1.0], screen,
+                );
+                // Stick (lower three-quarters)
+                self.draw_rect(
+                    sx + SLOT_SIZE * 0.44,
+                    sy + pad,
+                    SLOT_SIZE * 0.12,
+                    SLOT_SIZE * 0.55,        // 0.91 - 0.36
+                    [0.55, 0.35, 0.17, 1.0], screen,
+                );
+            }
+            ItemType::Stick => {
+                // Vertical stick (bag draws it rotated 45°; hotbar can't rotate)
+                self.draw_rect(
+                    sx + SLOT_SIZE * 0.44,
+                    sy + SLOT_SIZE * 0.10,
+                    SLOT_SIZE * 0.12,
+                    SLOT_SIZE * 0.80,
+                    [0.55, 0.35, 0.17, 1.0], screen,
+                );
+            }
+            _ => {
+                let [r, g, b] = item.color();
+                self.draw_rect(
+                    sx + pad, sy + pad,
+                    SLOT_SIZE - pad * 2.0, SLOT_SIZE - pad * 2.0,
+                    [r, g, b, 1.0], screen,
+                );
+            }
+        }
+    }
+
     /// Returns which hotbar slot index was hit, or None.
     /// `mx/my` are raw GLFW pixel coords (Y from top).
     pub fn slot_at_pos(&self, mx: f32, my: f32, screen_w: f32, screen_h: f32) -> Option<usize> {
@@ -148,15 +217,9 @@ impl HotbarRenderer {
                 self.draw_rect(sx, sy, SLOT_SIZE, SLOT_SIZE,
                     [0.18, 0.18, 0.18, 0.75], screen);
 
-                // Item icon — a smaller colored square centered in the slot
+                // Item icon
                 if let Some((item, _count)) = slots[i] {
-                    let [r, g, b] = item.color();
-                    let pad = 7.0;
-                    self.draw_rect(
-                        sx + pad, sy + pad,
-                        SLOT_SIZE - pad * 2.0, SLOT_SIZE - pad * 2.0,
-                        [r, g, b, 1.0], screen,
-                    );
+                    self.draw_item_icon(item, sx, sy, screen);
                 }
             }
 

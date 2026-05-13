@@ -12,6 +12,7 @@ pub enum ItemType {
     ChickenMeat,
     PorkChop,
     StoneAxe,
+    Torch,
 }
 
 impl ItemType {
@@ -28,22 +29,24 @@ impl ItemType {
             ItemType::ChickenMeat  => 7,
             ItemType::PorkChop     => 8,
             ItemType::StoneAxe     => 9,
+            ItemType::Torch        => 10,
         }
     }
 
     pub fn from_tile_index(i: usize) -> Option<Self> {
         match i {
-            0 => Some(Self::Stick),
-            1 => Some(Self::LogBlock),
-            2 => Some(Self::DirtClump),
-            3 => Some(Self::StoneChunk),
-            4 => Some(Self::Seeds),
-            5 => Some(Self::Feather),
-            6 => Some(Self::Egg),
-            7 => Some(Self::ChickenMeat),
-            8 => Some(Self::PorkChop),
-            9 => Some(Self::StoneAxe),
-            _ => None,
+            0  => Some(Self::Stick),
+            1  => Some(Self::LogBlock),
+            2  => Some(Self::DirtClump),
+            3  => Some(Self::StoneChunk),
+            4  => Some(Self::Seeds),
+            5  => Some(Self::Feather),
+            6  => Some(Self::Egg),
+            7  => Some(Self::ChickenMeat),
+            8  => Some(Self::PorkChop),
+            9  => Some(Self::StoneAxe),
+            10 => Some(Self::Torch),
+            _  => None,
         }
     }
 
@@ -59,6 +62,7 @@ impl ItemType {
             "chicken_meat" => Some(Self::ChickenMeat),
             "pork_chop"    => Some(Self::PorkChop),
             "stone_axe"    => Some(Self::StoneAxe),
+            "torch"        => Some(Self::Torch),
             _              => None,
         }
     }
@@ -75,6 +79,7 @@ impl ItemType {
             ItemType::ChickenMeat => [0.85, 0.40, 0.30],
             ItemType::PorkChop    => [0.90, 0.45, 0.32],
             ItemType::StoneAxe    => [0.58, 0.58, 0.63],
+            ItemType::Torch       => [1.00, 0.47, 0.00],
         }
     }
 }

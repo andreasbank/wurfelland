@@ -4,9 +4,22 @@ use std::thread;
 
 use crate::world::chunk::{Chunk, Blocks, NeighborEdges, WaterLevels};
 use crate::world::block::BlockType;
+use crate::world::{SEA_LEVEL, WORLD_HEIGHT_CHUNKS};
 use crate::renderer::ChunkRenderer;
 use crate::renderer::ShadowPass;
 use crate::camera::frustum::Frustum;
+
+pub struct WorldStats {
+    pub loaded:           usize,
+    pub meshed:           usize,
+    pub terrain_queued:   usize,
+    pub terrain_inflight: usize,
+    pub mesh_inflight:    usize,
+}
+
+/// Only generate chunks up to this Y level; above is always air.
+/// Mountains peak at ~150, buffer to 11 chunk-layers (Y=0..175).
+const MAX_TERRAIN_CY: i32 = 11;
 
 // Phase 1: terrain data arrives from worker thread
 struct BlockReady {
@@ -71,7 +84,7 @@ impl World {
     /// Call this for all player-initiated block breaks and placements.
     pub fn set_block_recorded(&mut self, wx: i32, wy: i32, wz: i32, block: BlockType) {
         self.set_block(wx, wy, wz, block);
-        if wy >= 0 && wy < 16 {
+        if wy >= 0 && wy < WORLD_HEIGHT_CHUNKS * 16 {
             self.block_changes.insert([wx, wy, wz], block);
         }
     }
@@ -97,25 +110,53 @@ impl World {
         ];
 
         if new_chunk != self.player_chunk {
+            // Inner radius: full pipeline (terrain + mesh).
             self.load_chunks_around(new_chunk, self.loaded_radius);
-            self.unload_distant_chunks(new_chunk, self.loaded_radius);
+            // Outer buffer ring: terrain only — blocks are pre-generated so meshing
+            // is instant the moment the player steps into range.
+            self.load_chunks_around_terrain_only(new_chunk, self.loaded_radius + 2);
+            self.unload_distant_chunks(new_chunk, self.loaded_radius + 2);
             self.player_chunk = new_chunk;
         }
 
         self.dispatch_terrain_threads();
-        self.finalize_blocks(2);
+        self.finalize_blocks(16);
         self.finalize_meshes(4);
     }
 
-    fn load_chunks_around(&mut self, center: [i32; 3], radius: i32) {
+    /// Queue terrain generation for the outer buffer ring (no meshing — data only).
+    /// Queue terrain generation for the outer buffer ring (no meshing — data only).
+    fn load_chunks_around_terrain_only(&mut self, center: [i32; 3], radius: i32) {
+        let r2 = radius * radius;
         for x in -radius..=radius {
             for z in -radius..=radius {
-                let pos = [center[0] + x, 0, center[2] + z];
-                if !self.chunks.contains_key(&pos)
-                    && !self.terrain_queue.contains(&pos)
-                    && !self.pending_blocks.contains(&pos)
-                {
-                    self.terrain_queue.insert(pos);
+                if x * x + z * z > r2 { continue; }
+                for cy in 3..=6 {  // surface band only for the buffer ring
+                    let pos = [center[0] + x, cy, center[2] + z];
+                    if !self.chunks.contains_key(&pos)
+                        && !self.terrain_queue.contains(&pos)
+                        && !self.pending_blocks.contains(&pos)
+                    {
+                        self.terrain_queue.insert(pos);
+                    }
+                }
+            }
+        }
+    }
+
+    fn load_chunks_around(&mut self, center: [i32; 3], radius: i32) {
+        let r2 = radius * radius;
+        for x in -radius..=radius {
+            for z in -radius..=radius {
+                if x * x + z * z > r2 { continue; }
+                for cy in 0..MAX_TERRAIN_CY {
+                    let pos = [center[0] + x, cy, center[2] + z];
+                    if !self.chunks.contains_key(&pos)
+                        && !self.terrain_queue.contains(&pos)
+                        && !self.pending_blocks.contains(&pos)
+                    {
+                        self.terrain_queue.insert(pos);
+                    }
                 }
             }
         }
@@ -124,9 +165,19 @@ impl World {
     /// Promote queued terrain positions to in-flight threads, up to the cap.
     /// pending_blocks = in-flight only; terrain_queue = waiting for a slot.
     fn dispatch_terrain_threads(&mut self) {
-        const MAX_TERRAIN_THREADS: usize = 4;
+        const MAX_TERRAIN_THREADS: usize = 8;
         let slots = MAX_TERRAIN_THREADS.saturating_sub(self.pending_blocks.len());
-        let to_spawn: Vec<[i32; 3]> = self.terrain_queue.iter().copied().take(slots).collect();
+        if slots == 0 { return; }
+        let pc = self.player_chunk;
+        let mut candidates: Vec<[i32; 3]> = self.terrain_queue.iter().copied().collect();
+        candidates.sort_unstable_by_key(|&[x, cy, z]| {
+            let dx = x - pc[0]; let dz = z - pc[2];
+            let xz = dx * dx + dz * dz;
+            // Surface band (cy 3–6, world Y 48–111) loads before bedrock/sky slices.
+            let y_penalty = if cy >= 3 && cy <= 6 { 0 } else { 100_000 };
+            xz + y_penalty
+        });
+        let to_spawn: Vec<[i32; 3]> = candidates.into_iter().take(slots).collect();
         for pos in to_spawn {
             self.terrain_queue.remove(&pos);
             self.pending_blocks.insert(pos);
@@ -153,16 +204,15 @@ impl World {
 
         for ready in arrived {
             self.pending_blocks.remove(&ready.position);
-            let [cx, _, cz] = ready.position;
+            let [cx, cy, cz] = ready.position;
             let mut chunk = ready.chunk;
-            // Re-apply any recorded player block changes that fall in this chunk.
+            // Re-apply recorded player block changes that fall in this chunk.
             for (&[wx, wy, wz], &block) in &self.block_changes {
-                if wx.div_euclid(16) == cx && wz.div_euclid(16) == cz
-                    && wy >= 0 && wy < 16
-                {
+                let bcy = wy.div_euclid(16);
+                if wx.div_euclid(16) == cx && bcy == cy && wz.div_euclid(16) == cz {
                     chunk.set_block(
                         wx.rem_euclid(16) as usize,
-                        wy as usize,
+                        wy.rem_euclid(16) as usize,
                         wz.rem_euclid(16) as usize,
                         block,
                     );
@@ -170,39 +220,31 @@ impl World {
             }
             self.chunks.insert(ready.position, chunk);
 
-            // Seed water metadata — only touch blocks that are actually water or
-            // border water, avoiding a full 4096-iteration scan on the main thread.
-            let [cx, _, cz] = ready.position;
+            // Seed water_levels for rendering. Skip active-simulation sets — terrain
+            // water is static (already fully filled), and seeding thousands of ocean
+            // blocks into the flow simulation is extremely expensive.
             let snapshot = self.chunks[&ready.position].blocks_snapshot();
-            let mut water_positions: Vec<[i32; 3]> = Vec::new();
             for ly in 0..16usize {
                 for lz in 0..16usize {
                     for lx in 0..16usize {
                         if snapshot[lx][ly][lz] == BlockType::Water {
                             let wx = cx * 16 + lx as i32;
-                            let wy = ly as i32;
+                            let wy = cy * 16 + ly as i32;
                             let wz = cz * 16 + lz as i32;
                             self.water_levels.entry([wx, wy, wz]).or_insert(8);
-                            water_positions.push([wx, wy, wz]);
                         }
                     }
                 }
             }
-            // Only call the refresh functions for water blocks and their immediate
-            // vertical neighbors — avoids ~40k get_block calls for a mostly-dry chunk.
-            for [wx, wy, wz] in water_positions {
-                self.refresh_active_water(wx, wy, wz);
-                self.refresh_active_spread(wx, wy, wz);
-            }
 
-            // Invalidate the 4 horizontal neighbors so they get re-meshed with
-            // correct border faces now that this chunk exists.
-            let [cx, _, cz] = ready.position;
+            // Invalidate all six face-adjacent neighbors for correct border culling.
             for npos in [
-                [cx + 1, 0, cz],
-                [cx - 1, 0, cz],
-                [cx, 0, cz + 1],
-                [cx, 0, cz - 1],
+                [cx + 1, cy,     cz    ],
+                [cx - 1, cy,     cz    ],
+                [cx,     cy,     cz + 1],
+                [cx,     cy,     cz - 1],
+                [cx,     cy + 1, cz    ],
+                [cx,     cy - 1, cz    ],
             ] {
                 if let Some(neighbor) = self.chunks.get_mut(&npos) {
                     neighbor.mark_for_rebuild();
@@ -214,19 +256,30 @@ impl World {
         // This prevents dozens of concurrent mesh threads competing for CPU cores.
         const MAX_MESH_THREADS: usize = 4;
         let mesh_slots = MAX_MESH_THREADS.saturating_sub(self.pending_meshes.len());
-        let needs_mesh: Vec<[i32; 3]> = self.chunks.iter()
-            .filter(|(pos, c)| c.needs_mesh() && !self.pending_meshes.contains(*pos))
+        if mesh_slots == 0 { return; }
+        let pc = self.player_chunk;
+        let render_r2 = self.loaded_radius * self.loaded_radius;
+        let mut needs_mesh: Vec<[i32; 3]> = self.chunks.iter()
+            .filter(|(pos, c)| {
+                let dx = pos[0] - pc[0]; let dz = pos[2] - pc[2];
+                c.needs_mesh()
+                    && !self.pending_meshes.contains(*pos)
+                    && dx * dx + dz * dz <= render_r2  // skip buffer-ring chunks
+            })
             .map(|(pos, _)| *pos)
-            .take(mesh_slots)
             .collect();
+        needs_mesh.sort_unstable_by_key(|&[x, _, z]| {
+            let dx = x - pc[0]; let dz = z - pc[2];
+            dx * dx + dz * dz
+        });
+        let needs_mesh: Vec<[i32; 3]> = needs_mesh.into_iter().take(mesh_slots).collect();
 
         for pos in needs_mesh {
-            let [cx, _, cz] = pos;
+            let [cx, cy, cz] = pos;
 
-            // Snapshot block data and neighbor edges — all copies, no borrows held.
             let blocks: Blocks = self.chunks[&pos].blocks_snapshot();
-            let water_levels: WaterLevels = self.water_levels_snapshot(cx, cz);
-            let edges = self.build_neighbor_edges(cx, cz);
+            let water_levels: WaterLevels = self.water_levels_snapshot(cx, cy, cz);
+            let edges = self.build_neighbor_edges(cx, cy, cz);
 
             self.chunks.get_mut(&pos).unwrap().mark_mesh_dispatched();
             self.pending_meshes.insert(pos);
@@ -355,82 +408,87 @@ impl World {
             let dz = pos[2] - center[2];
             dx * dx + dz * dz <= radius * radius
         });
-        // Remove water metadata for unloaded chunks so tick_water doesn't process them.
-        self.water_levels.retain(|&[wx, _, wz], _| {
+        // Remove water metadata for unloaded XZ columns.
+        self.water_levels.retain(|&[wx, wy, wz], _| {
             let cx = wx.div_euclid(16);
+            let cy = wy.div_euclid(16);
             let cz = wz.div_euclid(16);
-            self.chunks.contains_key(&[cx, 0, cz])
+            self.chunks.contains_key(&[cx, cy, cz])
         });
-        self.active_spread.retain(|&[wx, _, wz]| {
+        self.active_spread.retain(|&[wx, wy, wz]| {
             let cx = wx.div_euclid(16);
+            let cy = wy.div_euclid(16);
             let cz = wz.div_euclid(16);
-            self.chunks.contains_key(&[cx, 0, cz])
+            self.chunks.contains_key(&[cx, cy, cz])
         });
     }
 
     /// Replace a block at world coords and mark the chunk (plus border neighbors) for rebuild.
     pub fn set_block(&mut self, wx: i32, wy: i32, wz: i32, block: BlockType) {
-        if wy < 0 || wy >= 16 { return; }
+        if wy < 0 || wy >= WORLD_HEIGHT_CHUNKS * 16 { return; }
         let cx = wx.div_euclid(16);
+        let cy = wy.div_euclid(16);
         let cz = wz.div_euclid(16);
         let lx = wx.rem_euclid(16) as usize;
-        let ly = wy as usize;
+        let ly = wy.rem_euclid(16) as usize;
         let lz = wz.rem_euclid(16) as usize;
 
-        // Sync water_levels: removing a water block clears its entry; placing water
-        // from a non-tick_water source (e.g. future player placement) defaults to level 8.
         if block != BlockType::Water {
             self.water_levels.remove(&[wx, wy, wz]);
         } else {
-            // tick_water pre-inserts the correct level before calling set_block,
-            // so only insert default 8 if nothing is already there.
             self.water_levels.entry([wx, wy, wz]).or_insert(8);
         }
 
-        if let Some(chunk) = self.chunks.get_mut(&[cx, 0, cz]) {
+        if let Some(chunk) = self.chunks.get_mut(&[cx, cy, cz]) {
             chunk.set_block(lx, ly, lz, block);
             chunk.mark_for_rebuild();
         }
-        // If the block sits on a chunk border, the adjacent chunk's face visibility
-        // changes too — mark it dirty so it re-meshes on the next update.
-        if lx == 0  { if let Some(c) = self.chunks.get_mut(&[cx-1, 0, cz]) { c.mark_for_rebuild(); } }
-        if lx == 15 { if let Some(c) = self.chunks.get_mut(&[cx+1, 0, cz]) { c.mark_for_rebuild(); } }
-        if lz == 0  { if let Some(c) = self.chunks.get_mut(&[cx, 0, cz-1]) { c.mark_for_rebuild(); } }
-        if lz == 15 { if let Some(c) = self.chunks.get_mut(&[cx, 0, cz+1]) { c.mark_for_rebuild(); } }
+        if lx == 0  { if let Some(c) = self.chunks.get_mut(&[cx-1, cy, cz]) { c.mark_for_rebuild(); } }
+        if lx == 15 { if let Some(c) = self.chunks.get_mut(&[cx+1, cy, cz]) { c.mark_for_rebuild(); } }
+        if lz == 0  { if let Some(c) = self.chunks.get_mut(&[cx, cy, cz-1]) { c.mark_for_rebuild(); } }
+        if lz == 15 { if let Some(c) = self.chunks.get_mut(&[cx, cy, cz+1]) { c.mark_for_rebuild(); } }
+        if ly == 0  { if let Some(c) = self.chunks.get_mut(&[cx, cy-1, cz]) { c.mark_for_rebuild(); } }
+        if ly == 15 { if let Some(c) = self.chunks.get_mut(&[cx, cy+1, cz]) { c.mark_for_rebuild(); } }
         self.refresh_active_water(wx, wy, wz);
         self.refresh_active_spread(wx, wy, wz);
     }
 
-    fn build_neighbor_edges(&self, cx: i32, cz: i32) -> NeighborEdges {
-        let r_loaded = self.chunks.contains_key(&[cx + 1, 0, cz]);
-        let l_loaded = self.chunks.contains_key(&[cx - 1, 0, cz]);
-        let f_loaded = self.chunks.contains_key(&[cx, 0, cz + 1]);
-        let b_loaded = self.chunks.contains_key(&[cx, 0, cz - 1]);
+    fn build_neighbor_edges(&self, cx: i32, cy: i32, cz: i32) -> NeighborEdges {
+        let r_loaded = self.chunks.contains_key(&[cx + 1, cy, cz]);
+        let l_loaded = self.chunks.contains_key(&[cx - 1, cy, cz]);
+        let f_loaded = self.chunks.contains_key(&[cx, cy, cz + 1]);
+        let b_loaded = self.chunks.contains_key(&[cx, cy, cz - 1]);
+        let a_loaded = self.chunks.contains_key(&[cx, cy + 1, cz]);
+        let d_loaded = self.chunks.contains_key(&[cx, cy - 1, cz]);
         NeighborEdges {
-            right: if r_loaded { self.chunks[&[cx+1,0,cz]].edge_right() } else { [[BlockType::Air; 16]; 16] },
-            left:  if l_loaded { self.chunks[&[cx-1,0,cz]].edge_left()  } else { [[BlockType::Air; 16]; 16] },
-            front: if f_loaded { self.chunks[&[cx,0,cz+1]].edge_front() } else { [[BlockType::Air; 16]; 16] },
-            back:  if b_loaded { self.chunks[&[cx,0,cz-1]].edge_back()  } else { [[BlockType::Air; 16]; 16] },
-            wl_right: if r_loaded { self.water_edge_at_lx(cx+1, cz, 0)  } else { [[0u8; 16]; 16] },
-            wl_left:  if l_loaded { self.water_edge_at_lx(cx-1, cz, 15) } else { [[0u8; 16]; 16] },
-            wl_front: if f_loaded { self.water_edge_at_lz(cx, cz+1, 0)  } else { [[0u8; 16]; 16] },
-            wl_back:  if b_loaded { self.water_edge_at_lz(cx, cz-1, 15) } else { [[0u8; 16]; 16] },
+            right: if r_loaded { self.chunks[&[cx+1,cy,cz]].edge_right()  } else { [[BlockType::Air; 16]; 16] },
+            left:  if l_loaded { self.chunks[&[cx-1,cy,cz]].edge_left()   } else { [[BlockType::Air; 16]; 16] },
+            front: if f_loaded { self.chunks[&[cx,cy,cz+1]].edge_front()  } else { [[BlockType::Air; 16]; 16] },
+            back:  if b_loaded { self.chunks[&[cx,cy,cz-1]].edge_back()   } else { [[BlockType::Air; 16]; 16] },
+            above: if a_loaded { self.chunks[&[cx,cy+1,cz]].edge_bottom() } else { [[BlockType::Air; 16]; 16] },
+            below: if d_loaded { self.chunks[&[cx,cy-1,cz]].edge_top()    } else { [[BlockType::Air; 16]; 16] },
+            wl_right: if r_loaded { self.water_edge_at_lx(cx+1, cy, cz, 0)  } else { [[0u8; 16]; 16] },
+            wl_left:  if l_loaded { self.water_edge_at_lx(cx-1, cy, cz, 15) } else { [[0u8; 16]; 16] },
+            wl_front: if f_loaded { self.water_edge_at_lz(cx, cy, cz+1, 0)  } else { [[0u8; 16]; 16] },
+            wl_back:  if b_loaded { self.water_edge_at_lz(cx, cy, cz-1, 15) } else { [[0u8; 16]; 16] },
             right_loaded: r_loaded,
             left_loaded:  l_loaded,
             front_loaded: f_loaded,
             back_loaded:  b_loaded,
+            above_loaded: a_loaded,
+            below_loaded: d_loaded,
         }
     }
 
     // ── Water level helpers (used when snapshotting data for mesh threads) ───
 
-    /// Copy this chunk's water levels into a WaterLevels array.
-    fn water_levels_snapshot(&self, cx: i32, cz: i32) -> WaterLevels {
+    fn water_levels_snapshot(&self, cx: i32, cy: i32, cz: i32) -> WaterLevels {
         let mut wl = [[[0u8; 16]; 16]; 16];
         for lx in 0..16i32 {
             for ly in 0..16i32 {
                 for lz in 0..16i32 {
-                    if let Some(&lvl) = self.water_levels.get(&[cx * 16 + lx, ly, cz * 16 + lz]) {
+                    let wy = cy * 16 + ly;
+                    if let Some(&lvl) = self.water_levels.get(&[cx * 16 + lx, wy, cz * 16 + lz]) {
                         wl[lx as usize][ly as usize][lz as usize] = lvl;
                     }
                 }
@@ -439,12 +497,12 @@ impl World {
         wl
     }
 
-    /// Water levels at a fixed lx column of chunk (cx, cz), returned as [y][z].
-    fn water_edge_at_lx(&self, cx: i32, cz: i32, lx: i32) -> [[u8; 16]; 16] {
+    fn water_edge_at_lx(&self, cx: i32, cy: i32, cz: i32, lx: i32) -> [[u8; 16]; 16] {
         let mut e = [[0u8; 16]; 16];
         for ly in 0..16i32 {
             for lz in 0..16i32 {
-                if let Some(&lvl) = self.water_levels.get(&[cx * 16 + lx, ly, cz * 16 + lz]) {
+                let wy = cy * 16 + ly;
+                if let Some(&lvl) = self.water_levels.get(&[cx * 16 + lx, wy, cz * 16 + lz]) {
                     e[ly as usize][lz as usize] = lvl;
                 }
             }
@@ -452,12 +510,12 @@ impl World {
         e
     }
 
-    /// Water levels at a fixed lz column of chunk (cx, cz), returned as [y][x].
-    fn water_edge_at_lz(&self, cx: i32, cz: i32, lz: i32) -> [[u8; 16]; 16] {
+    fn water_edge_at_lz(&self, cx: i32, cy: i32, cz: i32, lz: i32) -> [[u8; 16]; 16] {
         let mut e = [[0u8; 16]; 16];
         for ly in 0..16i32 {
             for lx in 0..16i32 {
-                if let Some(&lvl) = self.water_levels.get(&[cx * 16 + lx, ly, cz * 16 + lz]) {
+                let wy = cy * 16 + ly;
+                if let Some(&lvl) = self.water_levels.get(&[cx * 16 + lx, wy, cz * 16 + lz]) {
                     e[ly as usize][lx as usize] = lvl;
                 }
             }
@@ -477,6 +535,7 @@ impl World {
         ];
         if new_chunk != self.player_chunk {
             self.load_chunks_around(new_chunk, self.loaded_radius);
+            self.load_chunks_around_terrain_only(new_chunk, self.loaded_radius + 2);
             self.player_chunk = new_chunk;
         }
         self.dispatch_terrain_threads();
@@ -490,24 +549,42 @@ impl World {
     }
 
     pub fn is_chunk_meshed(&self, cx: i32, cz: i32) -> bool {
-        self.chunks.get(&[cx, 0, cz]).map_or(false, |c| c.mesh.is_some())
+        // Column is considered meshed when the surface chunk (cy=4, world Y 64–79) is ready.
+        let surface_cy = SEA_LEVEL / 16;
+        self.chunks.get(&[cx, surface_cy, cz]).map_or(false, |c| c.mesh.is_some())
     }
 
     pub fn chunk_count(&self) -> usize {
         self.chunks.len()
     }
 
-    pub fn chunk_at(&self, cx: i32, cz: i32) -> Option<&Chunk> {
-        self.chunks.get(&[cx, 0, cz])
+    /// Count meshed chunks in the surface Y band (cy 3–6, world Y 48–111).
+    /// Underground solid chunks and high-altitude air chunks mesh near-instantly
+    /// and swamp the global count; this metric only tracks the visible terrain layers.
+    pub fn meshed_surface_chunk_count(&self) -> usize {
+        self.chunks.iter()
+            .filter(|(pos, c)| pos[1] >= 3 && pos[1] <= 6 && c.mesh.is_some())
+            .count()
+    }
+
+    /// Returns the chunk at (cx, cy, cz) in chunk-grid coordinates.
+    pub fn chunk_at(&self, cx: i32, cy: i32, cz: i32) -> Option<&Chunk> {
+        self.chunks.get(&[cx, cy, cz])
+    }
+
+    /// Returns the chunk containing the surface terrain at (cx, cz) — i.e. the
+    /// chunk at the sea-level Y layer, useful for minimap and entity spawning.
+    pub fn surface_chunk_at(&self, cx: i32, cz: i32) -> Option<&Chunk> {
+        let surface_cy = SEA_LEVEL / 16;
+        self.chunks.get(&[cx, surface_cy, cz])
     }
 
     pub fn get_block(&self, wx: i32, wy: i32, wz: i32) -> BlockType {
-        if wy < 0 || wy >= 16 {
-            return BlockType::Air;
-        }
-        let chunk_pos = [wx.div_euclid(16), 0, wz.div_euclid(16)];
+        if wy < 0 || wy >= WORLD_HEIGHT_CHUNKS * 16 { return BlockType::Air; }
+        let cy = wy.div_euclid(16);
+        let chunk_pos = [wx.div_euclid(16), cy, wz.div_euclid(16)];
         let lx = wx.rem_euclid(16) as usize;
-        let ly = wy as usize;
+        let ly = wy.rem_euclid(16) as usize;
         let lz = wz.rem_euclid(16) as usize;
         if let Some(chunk) = self.chunks.get(&chunk_pos) {
             chunk.get_block(lx, ly, lz)
@@ -517,7 +594,7 @@ impl World {
     }
 
     pub fn surface_height(&self, wx: i32, wz: i32) -> i32 {
-        for y in (0..16).rev() {
+        for y in (0..WORLD_HEIGHT_CHUNKS * 16).rev() {
             let b = self.get_block(wx, y, wz);
             if b.is_solid() && !matches!(b, BlockType::Log | BlockType::Leaves) {
                 return y + 1;
@@ -539,11 +616,9 @@ impl World {
                     let wz = 8 + dz;
                     let ground = self.surface_height(wx, wz);
                     if ground == 0 { continue; }
-                    // Reject underwater columns — the player would land on the sea floor.
                     if self.get_block(wx, ground, wz) == BlockType::Water { continue; }
-                    // Scan upward until two consecutive non-solid blocks are free
-                    // (head + body clearance, clear of any log trunk in range).
-                    for y in ground..15i32 {
+                    let max_y = (WORLD_HEIGHT_CHUNKS * 16 - 2) as i32;
+                    for y in ground..max_y {
                         if !self.get_block(wx, y, wz).is_solid()
                             && !self.get_block(wx, y + 1, wz).is_solid()
                         {
@@ -612,14 +687,27 @@ impl World {
         }
     }
 
-    pub fn draw_opaque(&self, renderer: &ChunkRenderer, camera: &crate::camera::Camera) {
+    pub fn world_stats(&self) -> WorldStats {
+        WorldStats {
+            loaded:           self.chunks.len(),
+            meshed:           self.chunks.values().filter(|c| c.mesh.is_some()).count(),
+            terrain_queued:   self.terrain_queue.len(),
+            terrain_inflight: self.pending_blocks.len(),
+            mesh_inflight:    self.pending_meshes.len(),
+        }
+    }
+
+    pub fn draw_opaque(&self, renderer: &ChunkRenderer, camera: &crate::camera::Camera) -> usize {
         let frustum = camera.frustum();
         renderer.set_transparent_pass(false);
+        let mut drawn = 0;
         for chunk in self.chunks.values() {
             if chunk.mesh.is_some() && chunk.is_in_frustum(&frustum) {
                 renderer.draw_chunk(chunk);
+                drawn += 1;
             }
         }
+        drawn
     }
 
     pub fn draw_transparent(&self, renderer: &ChunkRenderer, camera: &crate::camera::Camera) {

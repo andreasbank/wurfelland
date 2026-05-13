@@ -116,6 +116,8 @@ pub struct EntityRenderer {
     mvp_loc: i32,
     fog_start_loc: i32,
     fog_end_loc: i32,
+    fog_override_loc: i32,
+    fog_color_override_loc: i32,
     screen_size_loc: i32,
     sky_sampler_loc: i32,
 }
@@ -173,32 +175,40 @@ impl EntityRenderer {
                 uniform vec2 u_screen_size;
                 uniform float u_fog_start;
                 uniform float u_fog_end;
+                uniform float u_fog_override;
+                uniform vec3  u_fog_color_override;
                 void main() {
                     vec2 screenUV = gl_FragCoord.xy / u_screen_size;
                     vec3 skyFog = texture(u_sky_sampler, screenUV).rgb;
+                    vec3 fogColor = mix(skyFog, u_fog_color_override, u_fog_override);
                     float fog_factor = clamp((fragDist - u_fog_start) / (u_fog_end - u_fog_start), 0.0, 1.0);
-                    FragColor = vec4(mix(vColor, skyFog, fog_factor), 1.0);
+                    FragColor = vec4(mix(vColor, fogColor, fog_factor), 1.0);
                 }
             "#).unwrap();
 
             let shader = link_program(vert, frag).unwrap();
             let mvp_loc          = gl::GetUniformLocation(shader, c"mvp".as_ptr());
-            let fog_start_loc    = gl::GetUniformLocation(shader, c"u_fog_start".as_ptr());
-            let fog_end_loc      = gl::GetUniformLocation(shader, c"u_fog_end".as_ptr());
-            let screen_size_loc  = gl::GetUniformLocation(shader, c"u_screen_size".as_ptr());
-            let sky_sampler_loc  = gl::GetUniformLocation(shader, c"u_sky_sampler".as_ptr());
+            let fog_start_loc          = gl::GetUniformLocation(shader, c"u_fog_start".as_ptr());
+            let fog_end_loc            = gl::GetUniformLocation(shader, c"u_fog_end".as_ptr());
+            let fog_override_loc       = gl::GetUniformLocation(shader, c"u_fog_override".as_ptr());
+            let fog_color_override_loc = gl::GetUniformLocation(shader, c"u_fog_color_override".as_ptr());
+            let screen_size_loc        = gl::GetUniformLocation(shader, c"u_screen_size".as_ptr());
+            let sky_sampler_loc        = gl::GetUniformLocation(shader, c"u_sky_sampler".as_ptr());
 
-            EntityRenderer { vao, vbo, pig_vao, pig_vbo, shader, mvp_loc, fog_start_loc, fog_end_loc, screen_size_loc, sky_sampler_loc }
+            EntityRenderer { vao, vbo, pig_vao, pig_vbo, shader, mvp_loc, fog_start_loc, fog_end_loc, fog_override_loc, fog_color_override_loc, screen_size_loc, sky_sampler_loc }
         }
     }
 
     pub fn draw_chickens(&self, chickens: &[Chicken], view: &glam::Mat4, projection: &glam::Mat4,
-                         fog_start: f32, fog_end: f32, screen_w: f32, screen_h: f32, sky_tex: u32) {
+                         fog_start: f32, fog_end: f32, screen_w: f32, screen_h: f32, sky_tex: u32,
+                         fog_override: f32, fog_color_override: glam::Vec3) {
         unsafe {
             gl::Disable(gl::CULL_FACE);
             gl::UseProgram(self.shader);
             gl::Uniform1f(self.fog_start_loc, fog_start);
             gl::Uniform1f(self.fog_end_loc, fog_end);
+            gl::Uniform1f(self.fog_override_loc, fog_override);
+            gl::Uniform3f(self.fog_color_override_loc, fog_color_override.x, fog_color_override.y, fog_color_override.z);
             gl::Uniform2f(self.screen_size_loc, screen_w, screen_h);
             gl::Uniform1i(self.sky_sampler_loc, 4);
             gl::ActiveTexture(gl::TEXTURE4);
@@ -246,12 +256,15 @@ impl EntityRenderer {
     }
 
     pub fn draw_pigs(&self, pigs: &[Pig], view: &glam::Mat4, projection: &glam::Mat4,
-                     fog_start: f32, fog_end: f32, screen_w: f32, screen_h: f32, sky_tex: u32) {
+                     fog_start: f32, fog_end: f32, screen_w: f32, screen_h: f32, sky_tex: u32,
+                     fog_override: f32, fog_color_override: glam::Vec3) {
         unsafe {
             gl::Disable(gl::CULL_FACE);
             gl::UseProgram(self.shader);
             gl::Uniform1f(self.fog_start_loc, fog_start);
             gl::Uniform1f(self.fog_end_loc, fog_end);
+            gl::Uniform1f(self.fog_override_loc, fog_override);
+            gl::Uniform3f(self.fog_color_override_loc, fog_color_override.x, fog_color_override.y, fog_color_override.z);
             gl::Uniform2f(self.screen_size_loc, screen_w, screen_h);
             gl::Uniform1i(self.sky_sampler_loc, 4);
             gl::ActiveTexture(gl::TEXTURE4);

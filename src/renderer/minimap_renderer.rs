@@ -188,7 +188,9 @@ impl MinimapRenderer {
     // Paint one 16×16 chunk into the toroidal CPU buffer and upload to GPU.
     // Returns false if the chunk is not yet loaded (pixels left unpainted).
     fn scan_chunk(&mut self, cx: i32, cz: i32, world: &World) -> bool {
-        let Some(chunk) = world.chunk_at(cx, cz) else { return false };
+        use crate::world::WORLD_HEIGHT_CHUNKS;
+        // Need at least the surface chunk loaded.
+        if world.surface_chunk_at(cx, cz).is_none() { return false; }
 
         let chunk_wx = cx * 16;
         let chunk_wz = cz * 16;
@@ -200,15 +202,18 @@ impl MinimapRenderer {
                 let tx = (wx & (MAP_SIZE as i32 - 1)) as usize;
                 let tz = (wz & (MAP_SIZE as i32 - 1)) as usize;
 
-                // Find topmost non-air block
+                // Scan from top of world downward across all chunk Y levels.
                 let mut block = BlockType::Air;
                 let mut height = 0i32;
-                for y in (0..16usize).rev() {
-                    let b = chunk.get_block(lx, y, lz);
-                    if b != BlockType::Air {
-                        block = b;
-                        height = y as i32;
-                        break;
+                'outer: for cy in (0..WORLD_HEIGHT_CHUNKS).rev() {
+                    let Some(chunk) = world.chunk_at(cx, cy, cz) else { continue };
+                    for ly in (0..16usize).rev() {
+                        let b = chunk.get_block(lx, ly, lz);
+                        if b != BlockType::Air {
+                            block  = b;
+                            height = cy * 16 + ly as i32;
+                            break 'outer;
+                        }
                     }
                 }
 

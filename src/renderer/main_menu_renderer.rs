@@ -17,6 +17,7 @@ impl MainMenuRenderer {
             TextButton::new("load_game",    "LOAD GAME",    (0.30, 0.53, 0.70, 0.61)),
             TextButton::new("multiplayer",  "MULTIPLAYER",  (0.30, 0.64, 0.70, 0.72)),
             TextButton::new("options",      "OPTIONS",      (0.30, 0.75, 0.70, 0.83)),
+            TextButton::new("exit",         "QUIT GAME",    (0.30, 0.88, 0.70, 0.96)),
         ];
         MainMenuRenderer { renderer, title, loading_label, buttons }
     }
@@ -32,7 +33,7 @@ impl MainMenuRenderer {
         }
 
         // Semi-transparent dark panel behind the buttons
-        self.renderer.draw_rect(0.28, 0.36, 0.72, 0.92, 0.0, 0.0, 0.0, 0.58);
+        self.renderer.draw_rect(0.28, 0.36, 0.72, 0.99, 0.0, 0.0, 0.0, 0.58);
 
         // Title
         let tw = self.title.pixel_width  as f32 / win_w;
@@ -45,14 +46,14 @@ impl MainMenuRenderer {
             btn.draw(&self.renderer, win_w, win_h);
         }
 
-        // Dim the buttons while the world is still loading
+        // Dim the non-exit buttons while the world is still loading
         if !ready {
             self.renderer.draw_rect(0.28, 0.40, 0.72, 0.85, 0.0, 0.0, 0.0, 0.50);
         }
 
         // World-loading progress bar — hidden once fully loaded
         if !ready {
-            self.draw_bar(0.32, 0.86, 0.68, 0.91, progress);
+            self.draw_bar(0.32, 0.84, 0.68, 0.87, progress);
         }
 
         unsafe {
@@ -71,8 +72,8 @@ impl MainMenuRenderer {
             gl::BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);
         }
 
-        // Dark overlay so the world behind is still faintly visible
-        self.renderer.draw_rect(0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.70);
+        // Solid background — same color regardless of what was rendered behind it
+        self.renderer.draw_rect(0.0, 0.0, 1.0, 1.0, 0.07, 0.10, 0.16, 1.0);
 
         let lw = self.loading_label.pixel_width  as f32 / win_w;
         let lh = self.loading_label.pixel_height as f32 / win_h;
@@ -97,11 +98,10 @@ impl MainMenuRenderer {
     }
 
     pub fn handle_click(&self, mx: f32, my: f32, win_w: f32, win_h: f32, ready: bool) -> Option<&str> {
-        if !ready { return None; }
         let nx = mx / win_w;
         let ny = my / win_h;
-        self.buttons.iter()
-            .find(|b| b.is_hit(nx, ny))
-            .map(|b| b.id.as_str())
+        let hit = self.buttons.iter().find(|b| b.is_hit(nx, ny)).map(|b| b.id.as_str());
+        if !ready && hit != Some("exit") { return None; }
+        hit
     }
 }

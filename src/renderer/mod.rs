@@ -72,3 +72,6 @@ pub use underwater_renderer::UnderwaterRenderer;
 
 pub mod load_menu_renderer;
 pub use load_menu_renderer::LoadMenuRenderer;
+
+pub mod stats_renderer;
+pub use stats_renderer::StatsRenderer;

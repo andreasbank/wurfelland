@@ -107,10 +107,11 @@ pub struct ItemRenderer {
     atlas:            u32,
     stick_vert_count: i32,
     cube_vert_count:  i32,
-    // Colored geo items (StoneAxe loaded from JSON)
+    // Colored geo items (loaded from JSON)
     colored_shader:   u32,
     colored_mvp_loc:  i32,
     axe_model:        Option<GeoModel>,
+    torch_model:      Option<GeoModel>,
 }
 
 impl ItemRenderer {
@@ -182,10 +183,14 @@ impl ItemRenderer {
 
         let atlas = create_item_atlas();
 
-        // ── Stone axe geo model ────────────────────────────────────────────────
+        // ── Geo models ────────────────────────────────────────────────────────
         let axe_model = match GeoModel::load("assets/models/stone_axe.geo.json") {
             Ok(m)  => Some(m),
             Err(e) => { eprintln!("[item_renderer] stone_axe.geo.json: {e}"); None }
+        };
+        let torch_model = match GeoModel::load("assets/models/torch.geo.json") {
+            Ok(m)  => Some(m),
+            Err(e) => { eprintln!("[item_renderer] torch.geo.json: {e}"); None }
         };
 
         ItemRenderer {
@@ -194,6 +199,7 @@ impl ItemRenderer {
             stick_vert_count, cube_vert_count,
             colored_shader, colored_mvp_loc,
             axe_model,
+            torch_model,
         }
     }
 
@@ -222,6 +228,7 @@ impl ItemRenderer {
                     ItemType::ChickenMeat => (self.vao_stone, self.cube_vert_count),
                     ItemType::PorkChop    => (self.vao_stone, self.cube_vert_count),
                     ItemType::StoneAxe    => continue, // handled by geo pass below
+                    ItemType::Torch       => continue, // handled by geo pass below
                 };
 
                 let pos = glam::Vec3::new(
@@ -241,30 +248,73 @@ impl ItemRenderer {
             gl::BindVertexArray(0);
             gl::BindTexture(gl::TEXTURE_2D, 0);
 
-            // ── Colored geo items (StoneAxe) ───────────────────────────────────
-            if let Some(geo) = &self.axe_model {
-                gl::UseProgram(self.colored_shader);
-
-                for item in items {
-                    if item.item != ItemType::StoneAxe { continue; }
-
-                    let pos = glam::Vec3::new(
-                        item.position[0] + 0.5,
-                        item.visual_y(),
-                        item.position[2] + 0.5,
-                    );
-                    let model = glam::Mat4::from_translation(pos)
-                        * glam::Mat4::from_rotation_y(item.age * 1.5);
-                    let mvp = *projection * *view * model;
-                    gl::UniformMatrix4fv(self.colored_mvp_loc, 1, gl::FALSE, mvp.to_cols_array().as_ptr());
-
-                    gl::BindVertexArray(geo.vao);
-                    gl::DrawArrays(gl::TRIANGLES, 0, geo.vert_count);
+            // ── Colored geo items (StoneAxe, Torch, …) ────────────────────────
+            gl::UseProgram(self.colored_shader);
+            let geo_pairs: &[(&Option<GeoModel>, ItemType)] = &[
+                (&self.axe_model,   ItemType::StoneAxe),
+                (&self.torch_model, ItemType::Torch),
+            ];
+            for (model_opt, kind) in geo_pairs {
+                if let Some(geo) = model_opt {
+                    for item in items {
+                        if item.item != *kind { continue; }
+                        let pos = glam::Vec3::new(
+                            item.position[0] + 0.5,
+                            item.visual_y(),
+                            item.position[2] + 0.5,
+                        );
+                        let model = glam::Mat4::from_translation(pos)
+                            * glam::Mat4::from_rotation_y(item.age * 1.5);
+                        let mvp = *projection * *view * model;
+                        gl::UniformMatrix4fv(self.colored_mvp_loc, 1, gl::FALSE, mvp.to_cols_array().as_ptr());
+                        gl::BindVertexArray(geo.vao);
+                        gl::DrawArrays(gl::TRIANGLES, 0, geo.vert_count);
+                    }
+                    gl::BindVertexArray(0);
                 }
-
-                gl::BindVertexArray(0);
             }
 
+            gl::Disable(gl::BLEND);
+            gl::Enable(gl::CULL_FACE);
+        }
+    }
+
+    /// Render a single item held in a player's hand.
+    /// `mvp` comes from `PlayerRenderer::hand_item_mvp`.
+    pub fn draw_held(&self, item: ItemType, mvp: &glam::Mat4) {
+        unsafe {
+            gl::Disable(gl::CULL_FACE);
+            gl::Enable(gl::BLEND);
+            gl::BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);
+
+            // Geo items (vertex-colored models)
+            let geo: Option<&GeoModel> = match item {
+                ItemType::StoneAxe => self.axe_model.as_ref(),
+                ItemType::Torch    => self.torch_model.as_ref(),
+                _                  => None,
+            };
+
+            if let Some(geo) = geo {
+                gl::UseProgram(self.colored_shader);
+                gl::UniformMatrix4fv(self.colored_mvp_loc, 1, gl::FALSE, mvp.to_cols_array().as_ptr());
+                gl::BindVertexArray(geo.vao);
+                gl::DrawArrays(gl::TRIANGLES, 0, geo.vert_count);
+            } else {
+                // Atlas items — render using the appropriate VAO
+                let (vao, count) = match item {
+                    ItemType::Stick => (self.vao_stick, self.stick_vert_count),
+                    _               => (self.vao_stone,  self.cube_vert_count),
+                };
+                gl::UseProgram(self.shader);
+                gl::ActiveTexture(gl::TEXTURE0);
+                gl::BindTexture(gl::TEXTURE_2D, self.atlas);
+                gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE, mvp.to_cols_array().as_ptr());
+                gl::BindVertexArray(vao);
+                gl::DrawArrays(gl::TRIANGLES, 0, count);
+                gl::BindTexture(gl::TEXTURE_2D, 0);
+            }
+
+            gl::BindVertexArray(0);
             gl::Disable(gl::BLEND);
             gl::Enable(gl::CULL_FACE);
         }

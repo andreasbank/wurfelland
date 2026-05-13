@@ -20,6 +20,9 @@ struct UniformLocations {
     shadow_texel_sizes: i32, // base of float array
     light_dir: i32,
     fog_color: i32,
+    fog_override: i32,
+    torch_pos: i32,
+    torch_strength: i32,
     ambient_light: i32,
     directional_light: i32,
     time: i32,
@@ -122,6 +125,7 @@ impl ChunkRenderer {
                 uniform float fog_start;
                 uniform float fog_end;
                 uniform vec3  fog_color;
+                uniform float u_fog_override;
                 uniform bool  transparent_pass;
                 uniform vec3  lightDir;
                 uniform float ambientLight;
@@ -132,6 +136,8 @@ impl ChunkRenderer {
                 uniform float u_proj_far;
                 uniform vec2  u_screen_size;
                 uniform float u_water_level;
+                uniform vec3  u_torch_pos;
+                uniform float u_torch_strength;
 
                 vec2 waveGrad(vec2 pos, vec2 dir, float k, float amp, float speed) {
                     return dir * (k * amp * cos(dot(dir, pos) * k + u_time * speed));
@@ -168,6 +174,7 @@ impl ChunkRenderer {
                     // Screen UV and sky colour computed once; used for fog and SSR fallback.
                     vec2 screenUV = gl_FragCoord.xy / u_screen_size;
                     vec3 skyFog   = texture(u_sky_sampler, screenUV).rgb;
+                    vec3 fogColor = mix(skyFog, fog_color, u_fog_override);
 
                     vec4 texSample;
                     if (use_textures) {
@@ -180,8 +187,12 @@ impl ChunkRenderer {
                     if ( transparent_pass && texSample.a >= 0.99) discard;
 
                     float shadow = calcShadow(vWorldPos, vNormal, fragDist);
-                    float light  = ambientLight + directionalLight * (1.0 - shadow);
-                    vec3  color  = texSample.rgb * ourColor * light;
+                    float sun_light = ambientLight + directionalLight * (1.0 - shadow);
+                    float torch_dist = length(vWorldPos - u_torch_pos);
+                    float torch_atten = max(0.0, 1.0 - torch_dist / 12.0);
+                    torch_atten = torch_atten * torch_atten;
+                    vec3 torch_contrib = torch_atten * u_torch_strength * 3.0 * vec3(1.0, 0.55, 0.10);
+                    vec3  color  = texSample.rgb * ourColor * (vec3(sun_light) + torch_contrib);
 
                     // ── Water surface ────────────────────────────────────────────
                     if (transparent_pass && vNormal.y > 0.5) {
@@ -216,7 +227,7 @@ impl ChunkRenderer {
                         vec3 refractColor = texture(u_refraction_sampler, refractUV).rgb;
 
                         // Water body: refracted terrain tinted by depth and water colour
-                        vec3 waterBody = mix(refractColor, vec3(0.0, 0.1, 0.35) * light, depthFade * 0.6);
+                        vec3 waterBody = mix(refractColor, vec3(0.0, 0.1, 0.35) * sun_light, depthFade * 0.6);
                         waterBody      = mix(waterBody, waterBody * ourColor * 1.4, 0.25);
 
                         // SSR: ray-march the reflected direction through screen space
@@ -251,7 +262,9 @@ impl ChunkRenderer {
                     }
 
                     // ── Caustics on underwater opaque terrain ────────────────────
-                    if (!transparent_pass && vWorldPos.y < u_water_level) {
+                    // Only horizontal (top) faces: caustic light travels downward,
+                    // not sideways, so vertical faces at the shoreline must be excluded.
+                    if (!transparent_pass && vWorldPos.y < u_water_level && vNormal.y > 0.3) {
                         float causticFade = 1.0 - clamp((u_water_level - vWorldPos.y) / 8.0, 0.0, 1.0);
                         vec2  wxz = vWorldPos.xz;
                         float t   = u_time * 1.2;
@@ -264,7 +277,7 @@ impl ChunkRenderer {
 
                     float fog_factor = clamp((fragDist - fog_start) / (fog_end - fog_start), 0.0, 1.0);
                     float alpha = mix(texSample.a, 1.0, fog_factor);
-                    FragColor = vec4(mix(color, skyFog, fog_factor), alpha);
+                    FragColor = vec4(mix(color, fogColor, fog_factor), alpha);
                 }"#
             )?;
 
@@ -299,6 +312,9 @@ impl ChunkRenderer {
             let texel_sizes_loc      = gl::GetUniformLocation(shader, c"shadowTexelSizes[0]".as_ptr());
             let light_dir_loc        = gl::GetUniformLocation(shader, c"lightDir".as_ptr());
             let fog_color_loc        = gl::GetUniformLocation(shader, c"fog_color".as_ptr());
+            let fog_override_loc     = gl::GetUniformLocation(shader, c"u_fog_override".as_ptr());
+            let torch_pos_loc        = gl::GetUniformLocation(shader, c"u_torch_pos".as_ptr());
+            let torch_strength_loc   = gl::GetUniformLocation(shader, c"u_torch_strength".as_ptr());
             let ambient_loc          = gl::GetUniformLocation(shader, c"ambientLight".as_ptr());
             let directional_loc      = gl::GetUniformLocation(shader, c"directionalLight".as_ptr());
             let time_loc             = gl::GetUniformLocation(shader, c"u_time".as_ptr());
@@ -366,6 +382,9 @@ impl ChunkRenderer {
                     shadow_texel_sizes: texel_sizes_loc,
                     light_dir: light_dir_loc,
                     fog_color: fog_color_loc,
+                    fog_override: fog_override_loc,
+                    torch_pos: torch_pos_loc,
+                    torch_strength: torch_strength_loc,
                     ambient_light: ambient_loc,
                     directional_light: directional_loc,
                     time: time_loc,
@@ -392,6 +411,9 @@ impl ChunkRenderer {
         shadow_texel_sizes: &[f32; NUM_CASCADES],
         sun_dir: glam::Vec3,
         fog_color: glam::Vec3,
+        fog_override: f32,
+        torch_pos: glam::Vec3,
+        torch_strength: f32,
         ambient_light: f32,
         directional_light: f32,
         fog_start: f32,
@@ -422,6 +444,9 @@ impl ChunkRenderer {
             gl::Uniform1f(self.uniforms.fog_start, fog_start);
             gl::Uniform1f(self.uniforms.fog_end,   fog_end);
             gl::Uniform3f(self.uniforms.fog_color, fog_color.x, fog_color.y, fog_color.z);
+            gl::Uniform1f(self.uniforms.fog_override, fog_override);
+            gl::Uniform3f(self.uniforms.torch_pos, torch_pos.x, torch_pos.y, torch_pos.z);
+            gl::Uniform1f(self.uniforms.torch_strength, torch_strength);
             gl::Uniform1f(self.uniforms.ambient_light, ambient_light);
             gl::Uniform1f(self.uniforms.directional_light, directional_light);
             // Texture unit 0: block atlas (sampler2D).

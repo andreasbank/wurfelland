@@ -15,6 +15,7 @@ const TEXT_H: f32       = 0.025;
 pub enum ConsoleAction {
     None,
     Exit,
+    GodMode,
 }
 
 pub struct ConsoleRenderer {
@@ -61,10 +62,12 @@ impl ConsoleRenderer {
             "help" => {
                 self.push_line(&format!("{} V{}", GAME_NAME, GAME_VERSION));
                 self.push_line("COMMANDS:");
-                self.push_line("  HELP  -  SHOW THIS MESSAGE");
-                self.push_line("  EXIT  -  QUIT THE GAME");
+                self.push_line("  HELP     -  SHOW THIS MESSAGE");
+                self.push_line("  GODMODE  -  TOGGLE GOD MODE");
+                self.push_line("  EXIT     -  QUIT THE GAME");
             }
             "exit" => return ConsoleAction::Exit,
+            "godmode" => return ConsoleAction::GodMode,
             "" => {}
             _ => {
                 self.push_line(&format!("UNKNOWN COMMAND: {}", cmd.to_uppercase()));
@@ -73,7 +76,7 @@ impl ConsoleRenderer {
         ConsoleAction::None
     }
 
-    fn push_line(&mut self, text: &str) {
+    pub fn push_line(&mut self, text: &str) {
         let tex = make_tex(text);
         self.output_lines.push(tex);
         // Keep a bounded history — anything older than ~14 lines is scrolled away anyway

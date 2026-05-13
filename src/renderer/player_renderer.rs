@@ -106,6 +106,8 @@ pub struct PlayerRenderer {
     tex_id: u32,
     fog_start_loc: i32,
     fog_end_loc: i32,
+    fog_override_loc: i32,
+    fog_color_override_loc: i32,
     screen_size_loc: i32,
     sky_sampler_loc: i32,
 }
@@ -169,24 +171,64 @@ impl PlayerRenderer {
                 uniform vec2 u_screen_size;
                 uniform float u_fog_start;
                 uniform float u_fog_end;
+                uniform float u_fog_override;
+                uniform vec3  u_fog_color_override;
                 void main() {
                     vec3 color = texture(tex, uv).rgb * shade;
                     vec2 screenUV = gl_FragCoord.xy / u_screen_size;
                     vec3 skyFog = texture(u_sky_sampler, screenUV).rgb;
+                    vec3 fogColor = mix(skyFog, u_fog_color_override, u_fog_override);
                     float fog_factor = clamp((fragDist - u_fog_start) / (u_fog_end - u_fog_start), 0.0, 1.0);
-                    FragColor = vec4(mix(color, skyFog, fog_factor), 1.0);
+                    FragColor = vec4(mix(color, fogColor, fog_factor), 1.0);
                 }"#).unwrap();
 
             let shader = link_program(vert, frag).unwrap();
             let mvp_loc         = gl::GetUniformLocation(shader, c"mvp".as_ptr());
-            let fog_start_loc   = gl::GetUniformLocation(shader, c"u_fog_start".as_ptr());
-            let fog_end_loc     = gl::GetUniformLocation(shader, c"u_fog_end".as_ptr());
-            let screen_size_loc = gl::GetUniformLocation(shader, c"u_screen_size".as_ptr());
-            let sky_sampler_loc = gl::GetUniformLocation(shader, c"u_sky_sampler".as_ptr());
+            let fog_start_loc          = gl::GetUniformLocation(shader, c"u_fog_start".as_ptr());
+            let fog_end_loc            = gl::GetUniformLocation(shader, c"u_fog_end".as_ptr());
+            let fog_override_loc       = gl::GetUniformLocation(shader, c"u_fog_override".as_ptr());
+            let fog_color_override_loc = gl::GetUniformLocation(shader, c"u_fog_color_override".as_ptr());
+            let screen_size_loc        = gl::GetUniformLocation(shader, c"u_screen_size".as_ptr());
+            let sky_sampler_loc        = gl::GetUniformLocation(shader, c"u_sky_sampler".as_ptr());
             let tex_id = create_player_texture();
 
-            PlayerRenderer { vao, vbo, shader, mvp_loc, tex_id, fog_start_loc, fog_end_loc, screen_size_loc, sky_sampler_loc }
+            PlayerRenderer { vao, vbo, shader, mvp_loc, tex_id, fog_start_loc, fog_end_loc, fog_override_loc, fog_color_override_loc, screen_size_loc, sky_sampler_loc }
         }
+    }
+
+    /// Returns the MVP matrix that places a held item at the given hand's wrist.
+    /// The right hand has the swing transform applied; the left hand is static.
+    /// `right_hand`: true = right (slot 2), false = left (slot 1).
+    pub fn hand_item_mvp(
+        &self,
+        position: [f32; 3],
+        yaw: f32,
+        view: &glam::Mat4,
+        projection: &glam::Mat4,
+        swing_angle: f32,
+        right_hand: bool,
+    ) -> glam::Mat4 {
+        let rot_angle = -(yaw.to_radians() + FRAC_PI_2);
+        let world_model = glam::Mat4::from_translation(glam::Vec3::from(position))
+            * glam::Mat4::from_rotation_y(rot_angle);
+
+        let hand_x: f32 = if right_hand { 0.275 } else { -0.275 };
+
+        // Arm swing (right arm only)
+        let arm_transform = if right_hand {
+            let pivot = glam::Vec3::new(0.275, 1.45, 0.0);
+            glam::Mat4::from_translation(pivot)
+                * glam::Mat4::from_rotation_x(swing_angle)
+                * glam::Mat4::from_translation(-pivot)
+        } else {
+            glam::Mat4::IDENTITY
+        };
+
+        // Position at the wrist, tilt slightly toward the viewer
+        let item_local = glam::Mat4::from_translation(glam::Vec3::new(hand_x, 0.62, 0.18))
+            * glam::Mat4::from_rotation_x(-0.35);
+
+        *projection * *view * world_model * arm_transform * item_local
     }
 
     /// Draw a player model at `position` (feet coords) rotated by `yaw` (degrees).
@@ -194,7 +236,8 @@ impl PlayerRenderer {
     pub fn draw(&self, position: [f32; 3], yaw: f32,
                 view: &glam::Mat4, projection: &glam::Mat4,
                 mode: PlayerDrawMode, swing_angle: f32,
-                fog_start: f32, fog_end: f32, screen_w: f32, screen_h: f32, sky_tex: u32) {
+                fog_start: f32, fog_end: f32, screen_w: f32, screen_h: f32, sky_tex: u32,
+                fog_override: f32, fog_color_override: glam::Vec3) {
         let rot_angle = -(yaw.to_radians() + FRAC_PI_2);
         let model = glam::Mat4::from_translation(glam::Vec3::from(position))
             * glam::Mat4::from_rotation_y(rot_angle);
@@ -205,6 +248,8 @@ impl PlayerRenderer {
             gl::UseProgram(self.shader);
             gl::Uniform1f(self.fog_start_loc, fog_start);
             gl::Uniform1f(self.fog_end_loc, fog_end);
+            gl::Uniform1f(self.fog_override_loc, fog_override);
+            gl::Uniform3f(self.fog_color_override_loc, fog_color_override.x, fog_color_override.y, fog_color_override.z);
             gl::Uniform2f(self.screen_size_loc, screen_w, screen_h);
             gl::Uniform1i(self.sky_sampler_loc, 4);
             gl::ActiveTexture(gl::TEXTURE4);

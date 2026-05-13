@@ -5,9 +5,13 @@ pub const INVENTORY_ROWS: usize = 6;
 pub const INVENTORY_SIZE: usize = INVENTORY_COLS * INVENTORY_ROWS;
 
 const GRAVITY: f32 = -20.0;
+const WATER_GRAVITY: f32 = -5.0;
 const JUMP_SPEED: f32 = 8.0;
 const MOVE_SPEED: f32 = 5.0;
 const RUN_SPEED: f32 = 10.0;
+const WATER_SPEED: f32 = 2.2;
+const SWIM_UP_SPEED: f32 = 3.5;
+const MAX_WATER_FALL: f32 = -2.0;
 const HALF_WIDTH: f32 = 0.3; // Player is 0.6 wide
 const PLAYER_HEIGHT: f32 = 1.8;
 
@@ -20,12 +24,15 @@ pub struct Player {
     pub on_ground: bool,
     pub inventory: [Option<(ItemType, u32)>; INVENTORY_SIZE],
     mouse_sensitivity: f32,
+    fall_peak_y: f32,
+    prev_on_ground: bool,
 }
 
 impl Player {
     pub fn new() -> Self {
         let mut inventory = [None; INVENTORY_SIZE];
         inventory[0] = Some((ItemType::StoneAxe, 1));
+        inventory[1] = Some((ItemType::Torch, 10));
         Player {
             health: 100,
             position: [0.0, 64.0, 0.0],
@@ -35,6 +42,8 @@ impl Player {
             on_ground: false,
             inventory,
             mouse_sensitivity: 0.1,
+            fall_peak_y: 64.0,
+            prev_on_ground: true,
         }
     }
 
@@ -78,8 +87,12 @@ impl Player {
     }
 
     // Sets horizontal velocity based on input — apply_physics does the actual moving
-    pub fn walk(&mut self, forward: bool, back: bool, left: bool, right: bool, running: bool) {
-        let speed = if running { RUN_SPEED } else { MOVE_SPEED };
+    pub fn swim_up(&mut self) {
+        self.velocity[1] = SWIM_UP_SPEED;
+    }
+
+    pub fn walk(&mut self, forward: bool, back: bool, left: bool, right: bool, running: bool, in_water: bool) {
+        let speed = if in_water { WATER_SPEED } else if running { RUN_SPEED } else { MOVE_SPEED };
         let mut vx = 0.0f32;
         let mut vz = 0.0f32;
 
@@ -111,6 +124,34 @@ impl Player {
         }
     }
 
+    /// Call once per frame after `apply_physics`. Returns fall damage to apply
+    /// (0 if the landing was safe). Caller decides whether to apply it (god mode).
+    pub fn tick_fall(&mut self, in_water: bool) -> u32 {
+        if in_water {
+            self.fall_peak_y = self.position[1];
+            self.prev_on_ground = self.on_ground;
+            return 0;
+        }
+        let damage = if self.on_ground && !self.prev_on_ground {
+            // Just landed — compute how far we fell from the peak
+            let fall_dist = (self.fall_peak_y - self.position[1]).max(0.0);
+            if fall_dist > 3.0 {
+                ((fall_dist - 3.0).floor() as u32).saturating_mul(5)
+            } else {
+                0
+            }
+        } else {
+            0
+        };
+        if self.on_ground {
+            self.fall_peak_y = self.position[1];
+        } else {
+            self.fall_peak_y = self.fall_peak_y.max(self.position[1]);
+        }
+        self.prev_on_ground = self.on_ground;
+        damage
+    }
+
     pub fn jump(&mut self) {
         if self.on_ground {
             self.velocity[1] = JUMP_SPEED;
@@ -118,10 +159,16 @@ impl Player {
         }
     }
 
-    pub fn apply_physics(&mut self, delta_time: f32, is_solid: impl Fn(i32, i32, i32) -> bool) {
-        // Gravity
-        self.velocity[1] += GRAVITY * delta_time;
-        self.velocity[1] = self.velocity[1].max(-50.0);
+    pub fn apply_physics(&mut self, delta_time: f32, in_water: bool, is_solid: impl Fn(i32, i32, i32) -> bool) {
+        if in_water {
+            // Clamp immediately so diving in at terminal velocity doesn't punch through the floor
+            self.velocity[1] = self.velocity[1].max(MAX_WATER_FALL);
+            self.velocity[1] += WATER_GRAVITY * delta_time;
+            self.velocity[1] = self.velocity[1].max(MAX_WATER_FALL);
+        } else {
+            self.velocity[1] += GRAVITY * delta_time;
+            self.velocity[1] = self.velocity[1].max(-50.0);
+        }
 
         // Move X, resolve X collisions
         self.position[0] += self.velocity[0] * delta_time;
