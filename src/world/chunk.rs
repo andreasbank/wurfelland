@@ -12,6 +12,9 @@ pub type Blocks = [[[BlockType; 16]; 16]; 16];
 /// Per-block water levels for a chunk (0 = not water, 1–7 = flowing, 8 = source).
 pub type WaterLevels = [[[u8; 16]; 16]; 16];
 
+/// Per-block sky-light levels (0 = no sky access, 15 = full sky).
+pub type SkyLight = [[[u8; 16]; 16]; 16];
+
 /// Single-block-deep faces of all six adjacent chunks for border face culling.
 /// Horizontal: `right[y][z]`, `left[y][z]`, `front[y][x]`, `back[y][x]`
 /// Vertical:   `above[x][z]` = bottom face (ly=0) of the chunk above,
@@ -33,6 +36,19 @@ pub struct NeighborEdges {
     pub back_loaded:  bool,
     pub above_loaded: bool,
     pub below_loaded: bool,
+    /// Sky-light values at ly=0 of the chunk directly above (0 or 15).
+    /// All-15 when no above chunk is loaded (open sky assumed).
+    pub above_sky: [[u8; 16]; 16],
+    /// Sky-light at lx=0 of the +X neighbor chunk, indexed [y][z].
+    pub right_sky: [[u8; 16]; 16],
+    /// Sky-light at lx=15 of the -X neighbor chunk, indexed [y][z].
+    pub left_sky:  [[u8; 16]; 16],
+    /// Sky-light at lz=0 of the +Z neighbor chunk, indexed [y][x].
+    pub front_sky: [[u8; 16]; 16],
+    /// Sky-light at lz=15 of the -Z neighbor chunk, indexed [y][x].
+    pub back_sky:  [[u8; 16]; 16],
+    /// Sky-light at ly=15 of the -Y neighbor chunk, indexed [x][z].
+    pub below_sky: [[u8; 16]; 16],
 }
 
 impl NeighborEdges {}
@@ -114,6 +130,30 @@ pub struct Chunk {
     needs_rebuild: bool,
     // Precomputed translation matrix — the chunk never moves, so compute once.
     model: glam::Mat4,
+    /// Sky-light per block: 15 = unobstructed sky above, 0 = underground.
+    /// Computed once after generate(); used to seed the chunk below via above_sky.
+    sky_light: Box<SkyLight>,
+}
+
+/// Column-scan sky-light: assumes open sky enters from above this chunk.
+/// Each (x,z) column is lit (=15) from the top down until the first opaque
+/// block; everything at or below that block is 0.
+fn compute_sky_light(blocks: &Blocks) -> Box<SkyLight> {
+    let mut sky = Box::new([[[0u8; 16]; 16]; 16]);
+    for x in 0..16usize {
+        for z in 0..16usize {
+            let mut lit = true;
+            for y in (0..16usize).rev() {
+                if lit {
+                    sky[x][y][z] = 15;
+                    if blocks[x][y][z].is_opaque() {
+                        lit = false;
+                    }
+                }
+            }
+        }
+    }
+    sky
 }
 
 impl Chunk {
@@ -139,7 +179,8 @@ impl Chunk {
         ));
         if wy_base > MAX_SURF_Y + 1 {
             // Entire chunk is above the highest possible terrain — leave all-air.
-            return Chunk { position, blocks, mesh: None, needs_rebuild: true, model };
+            let sky_light = compute_sky_light(&blocks);
+            return Chunk { position, blocks, mesh: None, needs_rebuild: true, model, sky_light };
         }
 
         // ── Block placement ──────────────────────────────────────────────────
@@ -342,7 +383,8 @@ impl Chunk {
             }
         }
 
-        Chunk { position, blocks, mesh: None, needs_rebuild: true, model }
+        let sky_light = compute_sky_light(&blocks);
+        Chunk { position, blocks, mesh: None, needs_rebuild: true, model, sky_light }
     }
 
     pub fn get_block(&self, x: usize, y: usize, z: usize) -> BlockType {
@@ -386,6 +428,39 @@ impl Chunk {
         e
     }
 
+    /// Sky-light edges — mirror the block edge_* methods so NeighborEdges can
+    /// look up sky values across chunk boundaries in every direction.
+    pub fn sky_light_bottom(&self) -> [[u8; 16]; 16] {   // ly=0  → above_sky for chunk below
+        let mut e = [[0u8; 16]; 16];
+        for x in 0..16 { for z in 0..16 { e[x][z] = self.sky_light[x][0][z]; } }
+        e
+    }
+    pub fn sky_light_edge_top(&self) -> [[u8; 16]; 16] { // ly=15 → below_sky for chunk above
+        let mut e = [[0u8; 16]; 16];
+        for x in 0..16 { for z in 0..16 { e[x][z] = self.sky_light[x][15][z]; } }
+        e
+    }
+    pub fn sky_light_edge_right(&self) -> [[u8; 16]; 16] { // lx=0  → for left neighbor
+        let mut e = [[0u8; 16]; 16];
+        for y in 0..16 { for z in 0..16 { e[y][z] = self.sky_light[0][y][z]; } }
+        e
+    }
+    pub fn sky_light_edge_left(&self) -> [[u8; 16]; 16] {  // lx=15 → for right neighbor
+        let mut e = [[0u8; 16]; 16];
+        for y in 0..16 { for z in 0..16 { e[y][z] = self.sky_light[15][y][z]; } }
+        e
+    }
+    pub fn sky_light_edge_front(&self) -> [[u8; 16]; 16] { // lz=0  → for back neighbor
+        let mut e = [[0u8; 16]; 16];
+        for y in 0..16 { for x in 0..16 { e[y][x] = self.sky_light[x][y][0]; } }
+        e
+    }
+    pub fn sky_light_edge_back(&self) -> [[u8; 16]; 16] {  // lz=15 → for front neighbor
+        let mut e = [[0u8; 16]; 16];
+        for y in 0..16 { for x in 0..16 { e[y][x] = self.sky_light[x][y][15]; } }
+        e
+    }
+
     /// Bottom face (ly=0) — exposed to the chunk below.
     pub fn edge_bottom(&self) -> [[BlockType; 16]; 16] {
         let mut e = [[BlockType::Air; 16]; 16];
@@ -417,6 +492,33 @@ impl Chunk {
         self.needs_rebuild = false;
     }
 
+    /// Replace stored sky-light with the corrected values from the last mesh build.
+    pub fn update_sky_light(&mut self, new_sky: Box<SkyLight>) {
+        self.sky_light = new_sky;
+    }
+
+    /// Returns true if any edge face of `new_sky` differs from the current stored sky_light.
+    /// Only edges matter because that is what neighbour chunks read.
+    pub fn sky_edges_changed(&self, new_sky: &SkyLight) -> bool {
+        for y in 0..16usize {
+            for z in 0..16usize {
+                if self.sky_light[0][y][z]  != new_sky[0][y][z]  { return true; }
+                if self.sky_light[15][y][z] != new_sky[15][y][z] { return true; }
+            }
+            for x in 0..16usize {
+                if self.sky_light[x][y][0]  != new_sky[x][y][0]  { return true; }
+                if self.sky_light[x][y][15] != new_sky[x][y][15] { return true; }
+            }
+        }
+        for x in 0..16usize {
+            for z in 0..16usize {
+                if self.sky_light[x][0][z]  != new_sky[x][0][z]  { return true; }
+                if self.sky_light[x][15][z] != new_sky[x][15][z] { return true; }
+            }
+        }
+        false
+    }
+
     pub fn finalize_mesh(&mut self, vertices: Vec<f32>) {
         self.mesh = Some(ChunkMesh::from_vertices(&vertices));
         // Do not clear needs_rebuild here. mark_mesh_dispatched already cleared it at
@@ -424,28 +526,103 @@ impl Chunk {
         // flight (e.g. a neighbor arrived), that pending rebuild must be preserved.
     }
 
+    /// Sky-light (0.0–1.0) of the block adjacent to face `f` of block (x,y,z).
+    /// Uses the full set of neighbor sky edges for all 6 boundaries.
+    fn neighbor_sky(sky: &SkyLight, edges: &NeighborEdges,
+                    x: i32, y: i32, z: i32, f: Face) -> f32 {
+        let (nx, ny, nz) = match f {
+            Face::Up    => (x,     y + 1, z    ),
+            Face::Down  => (x,     y - 1, z    ),
+            Face::Right => (x + 1, y,     z    ),
+            Face::Left  => (x - 1, y,     z    ),
+            Face::Front => (x,     y,     z + 1),
+            Face::Back  => (x,     y,     z - 1),
+        };
+        // Each face changes exactly one coordinate, so only one branch fires.
+        if nx <  0  { return edges.left_sky [ny as usize][nz as usize] as f32 / 15.0; }
+        if nx >= 16 { return edges.right_sky[ny as usize][nz as usize] as f32 / 15.0; }
+        if nz <  0  { return edges.back_sky [ny as usize][nx as usize] as f32 / 15.0; }
+        if nz >= 16 { return edges.front_sky[ny as usize][nx as usize] as f32 / 15.0; }
+        if ny <  0  { return edges.below_sky[nx as usize][nz as usize] as f32 / 15.0; }
+        if ny >= 16 { return edges.above_sky[nx as usize][nz as usize] as f32 / 15.0; }
+        sky[nx as usize][ny as usize][nz as usize] as f32 / 15.0
+    }
+
     /// Build vertex data off the main thread.
-    /// Takes a block snapshot + pre-extracted neighbor edge slices + water level snapshot.
-    pub fn build_vertices(blocks: &Blocks, edges: &NeighborEdges, water_levels: &WaterLevels) -> Vec<f32> {
+    /// Returns vertices and the corrected sky-light array (seeded from above_sky) so the
+    /// chunk can update its stored sky_light and neighbours can read correct edge values.
+    pub fn build_vertices(blocks: &Blocks, edges: &NeighborEdges, water_levels: &WaterLevels) -> (Vec<f32>, Box<SkyLight>) {
         // Rough estimate: ~10% of blocks are surface blocks with ~3 visible faces on average.
-        // 16³ * 0.10 * 3 faces * 6 verts * 11 floats ≈ 8192. Sized to avoid early reallocs.
-        let mut vertices = Vec::with_capacity(8192);
+        // 16³ * 0.10 * 3 faces * 6 verts * 12 floats ≈ 8748. Sized to avoid early reallocs.
+        let mut vertices = Vec::with_capacity(9216);
+
+        // Sky-light flood fill: seed from all six neighbour edges, then BFS through
+        // non-opaque blocks. This correctly lights any cavity connected to open sky
+        // via a sideways opening, not just vertically exposed columns.
+        let mut sky = [[[0u8; 16]; 16]; 16];
+        let mut queue: std::collections::VecDeque<(usize, usize, usize)> = std::collections::VecDeque::new();
+
+        macro_rules! seed {
+            ($x:expr, $y:expr, $z:expr) => {
+                if !blocks[$x][$y][$z].is_opaque() && sky[$x][$y][$z] == 0 {
+                    sky[$x][$y][$z] = 15;
+                    queue.push_back(($x, $y, $z));
+                }
+            };
+        }
+
+        for x in 0..16usize {
+            for z in 0..16usize {
+                if edges.above_sky[x][z] > 0 { seed!(x, 15, z); }
+                if edges.below_sky[x][z] > 0 { seed!(x,  0, z); }
+            }
+        }
+        for y in 0..16usize {
+            for z in 0..16usize {
+                if edges.left_sky [y][z] > 0 { seed!( 0, y, z); }
+                if edges.right_sky[y][z] > 0 { seed!(15, y, z); }
+            }
+            for x in 0..16usize {
+                if edges.back_sky [y][x] > 0 { seed!(x, y,  0); }
+                if edges.front_sky[y][x] > 0 { seed!(x, y, 15); }
+            }
+        }
+
+        while let Some((x, y, z)) = queue.pop_front() {
+            macro_rules! spread {
+                ($nx:expr, $ny:expr, $nz:expr) => {
+                    let (nx, ny, nz) = ($nx as usize, $ny as usize, $nz as usize);
+                    if !blocks[nx][ny][nz].is_opaque() && sky[nx][ny][nz] == 0 {
+                        sky[nx][ny][nz] = 15;
+                        queue.push_back((nx, ny, nz));
+                    }
+                };
+            }
+            if x > 0  { spread!(x - 1, y, z); }
+            if x < 15 { spread!(x + 1, y, z); }
+            if y > 0  { spread!(x, y - 1, z); }
+            if y < 15 { spread!(x, y + 1, z); }
+            if z > 0  { spread!(x, y, z - 1); }
+            if z < 15 { spread!(x, y, z + 1); }
+        }
 
         for x in 0..16usize {
             for y in 0..16usize {
                 for z in 0..16usize {
                     let block = blocks[x][y][z];
+                    // Block's own sky_light — used for vegetation/water that are always outdoors.
+                    let own_sl = sky[x][y][z] as f32 / 15.0;
 
                     if block == BlockType::Air {
                         continue;
                     }
 
                     if block == BlockType::TallGrass {
-                        vertices.extend(Self::cross_vertices(x as f32, y as f32, z as f32, block, 1.0));
+                        vertices.extend(Self::cross_vertices(x as f32, y as f32, z as f32, block, 1.0, own_sl));
                         continue;
                     }
                     if block == BlockType::GrassShort {
-                        vertices.extend(Self::cross_vertices(x as f32, y as f32, z as f32, block, 0.45));
+                        vertices.extend(Self::cross_vertices(x as f32, y as f32, z as f32, block, 0.45, own_sl));
                         continue;
                     }
 
@@ -458,8 +635,6 @@ impl Chunk {
                             if !Self::is_face_visible(blocks, x, y, z, face, edges) { continue; }
                             let corners: [f32; 4] = match face {
                                 Face::Up => [
-                                    // v0=front-left (x,z+1), v1=front-right (x+1,z+1)
-                                    // v2=back-right (x+1,z), v3=back-left  (x,z)
                                     Self::water_corner_h(lxi,   lyi, lzi+1, blocks, water_levels, edges),
                                     Self::water_corner_h(lxi+1, lyi, lzi+1, blocks, water_levels, edges),
                                     Self::water_corner_h(lxi+1, lyi, lzi,   blocks, water_levels, edges),
@@ -484,7 +659,7 @@ impl Chunk {
                                 Face::Down => [0.0; 4],
                             };
                             vertices.extend(Self::water_face_vertices(
-                                x as f32, y as f32, z as f32, face, block, corners,
+                                x as f32, y as f32, z as f32, face, block, corners, own_sl,
                             ));
                         }
                         continue;
@@ -492,9 +667,12 @@ impl Chunk {
 
                     for face in [Face::Right, Face::Left, Face::Up, Face::Down, Face::Front, Face::Back] {
                         if Self::is_face_visible(blocks, x, y, z, face, edges) {
+                            // Use sky_light of the adjacent open block, not this block's own value.
+                            // A cliff side-face looks into outdoor air (sky=15) and must be lit.
+                            let sl = Self::neighbor_sky(&sky, edges, x as i32, y as i32, z as i32, face);
                             let ao = Self::compute_ao(blocks, x as i32, y as i32, z as i32, face);
                             vertices.extend(Self::face_vertices_real_(
-                                x as f32, y as f32, z as f32, face, block, ao,
+                                x as f32, y as f32, z as f32, face, block, ao, sl,
                             ));
                         }
                     }
@@ -502,7 +680,7 @@ impl Chunk {
             }
         }
 
-        vertices
+        (vertices, Box::new(sky))
     }
 
     // ── Water helpers ────────────────────────────────────────────────────────
@@ -547,7 +725,7 @@ impl Chunk {
     /// `corners[i]` is the Y offset (0.0–1.0) for vertex i above the block's base Y.
     /// For Up: all 4 corners vary. For side faces: corners[1] and [2] are the top pair.
     fn water_face_vertices(x: f32, y: f32, z: f32, face: Face,
-                           block_type: BlockType, corners: [f32; 4]) -> Vec<f32> {
+                           block_type: BlockType, corners: [f32; 4], sky_light: f32) -> Vec<f32> {
         // Surface water sits 10% below a full block so wave crests never
         // protrude above neighbouring non-water blocks.
         const SURFACE_SCALE: f32 = 0.9;
@@ -584,6 +762,7 @@ impl Chunk {
             verts.push(normal[0]);
             verts.push(normal[1]);
             verts.push(normal[2]);
+            verts.push(sky_light);
         }
         verts
     }
@@ -658,7 +837,7 @@ impl Chunk {
         ao
     }
 
-    fn cross_vertices(x: f32, y: f32, z: f32, block: BlockType, height: f32) -> Vec<f32> {
+    fn cross_vertices(x: f32, y: f32, z: f32, block: BlockType, height: f32, sky_light: f32) -> Vec<f32> {
         let [r, g, b] = block.color();
 
         const N: f32 = 16.0;
@@ -676,10 +855,10 @@ impl Chunk {
             let uvs = [[u0, v1], [u1, v1], [u1, v0], [u0, v0]];
             let (nx, ny, nz) = (0.0f32, 1.0, 0.0);
             for &i in &[0usize, 1, 2, 0, 2, 3] {
-                v.extend_from_slice(&[p[i][0], p[i][1], p[i][2], r, g, b, uvs[i][0], uvs[i][1], nx, ny, nz]);
+                v.extend_from_slice(&[p[i][0], p[i][1], p[i][2], r, g, b, uvs[i][0], uvs[i][1], nx, ny, nz, sky_light]);
             }
             for &i in &[2usize, 1, 0, 3, 2, 0] {
-                v.extend_from_slice(&[p[i][0], p[i][1], p[i][2], r, g, b, uvs[i][0], uvs[i][1], nx, ny, nz]);
+                v.extend_from_slice(&[p[i][0], p[i][1], p[i][2], r, g, b, uvs[i][0], uvs[i][1], nx, ny, nz, sky_light]);
             }
         };
 
@@ -700,7 +879,7 @@ impl Chunk {
         v
     }
 
-    fn face_vertices_real_(x: f32, y: f32, z: f32, face: Face, block_type: BlockType, ao: [f32; 4]) -> Vec<f32> {
+    fn face_vertices_real_(x: f32, y: f32, z: f32, face: Face, block_type: BlockType, ao: [f32; 4], sky_light: f32) -> Vec<f32> {
         let mut vertices = Vec::new();
         let positions  = face.positions(x, y, z);
         let tex_coords = face.texture_coords(block_type.texture_id(face), 16);
@@ -714,7 +893,7 @@ impl Chunk {
             Face::Left  | Face::Right => 0.65,
         };
 
-        // Vertex layout: [x, y, z,  r, g, b,  u, v,  nx, ny, nz] = 11 floats
+        // Vertex layout: [x, y, z,  r, g, b,  u, v,  nx, ny, nz,  sky_light] = 12 floats
         for &vertex_idx in &[0usize, 1, 2, 0, 2, 3] {
             let light = brightness * ao[vertex_idx];
             vertices.push(positions[vertex_idx][0]);
@@ -728,6 +907,7 @@ impl Chunk {
             vertices.push(normal[0]);
             vertices.push(normal[1]);
             vertices.push(normal[2]);
+            vertices.push(sky_light);
         }
 
         vertices

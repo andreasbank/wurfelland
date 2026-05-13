@@ -58,12 +58,14 @@ impl ChunkRenderer {
                 layout(location = 1) in vec3 aColor;
                 layout(location = 2) in vec2 aTexCoord;
                 layout(location = 3) in vec3 aNormal;
+                layout(location = 4) in float aSkyLight;
 
                 out vec3 ourColor;
                 out vec2 TexCoord;
                 out float fragDist;
                 out vec3 vWorldPos;
                 out vec3 vNormal;
+                out float vSkyLight;
 
                 uniform mat4  model;
                 uniform mat4  view;
@@ -95,7 +97,8 @@ impl ChunkRenderer {
                     fragDist     = abs(viewPos.z);
                     vWorldPos    = worldPos.xyz;
                     // Chunks are translation-only, so mat3(model) == identity.
-                    vNormal = mat3(model) * aNormal;
+                    vNormal      = mat3(model) * aNormal;
+                    vSkyLight    = aSkyLight;
                 }"#
             )?;
 
@@ -109,6 +112,7 @@ impl ChunkRenderer {
                 in float fragDist;
                 in vec3 vWorldPos;
                 in vec3 vNormal;
+                in float vSkyLight;
                 out vec4 FragColor;
 
                 uniform sampler2D      texture_atlas;
@@ -187,11 +191,14 @@ impl ChunkRenderer {
                     if ( transparent_pass && texSample.a >= 0.99) discard;
 
                     float shadow = calcShadow(vWorldPos, vNormal, fragDist);
-                    float sun_light = ambientLight + directionalLight * (1.0 - shadow);
+                    float outdoor_sun = ambientLight + directionalLight * (1.0 - shadow);
+                    // Caves receive a fraction of ambient only; no directional sun.
+                    float cave_ambient = ambientLight * 0.25;
+                    float sun_light = mix(cave_ambient, outdoor_sun, vSkyLight);
                     float torch_dist = length(vWorldPos - u_torch_pos);
                     float torch_atten = max(0.0, 1.0 - torch_dist / 12.0);
-                    torch_atten = torch_atten * torch_atten;
-                    vec3 torch_contrib = torch_atten * u_torch_strength * 3.0 * vec3(1.0, 0.55, 0.10);
+                    torch_atten = torch_atten * sqrt(torch_atten);
+                    vec3 torch_contrib = torch_atten * u_torch_strength * 1.8 * vec3(1.0, 0.82, 0.55);
                     vec3  color  = texSample.rgb * ourColor * (vec3(sun_light) + torch_contrib);
 
                     // ── Water surface ────────────────────────────────────────────

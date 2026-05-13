@@ -43,6 +43,7 @@ use renderer::OptionsMenuRenderer;
 use renderer::UnderwaterRenderer;
 use renderer::LoadMenuRenderer;
 use renderer::StatsRenderer;
+use renderer::ChunkOutlineRenderer;
 
 mod net;
 use net::{GameServer, GameClient};
@@ -96,6 +97,7 @@ fn main() {
     window.set_cursor_pos_polling(true);
     window.set_mouse_button_polling(true);
     window.set_char_polling(true);
+    window.set_scroll_polling(true);
 
     gl::load_with(|symbol| {
         if let Some(addr) = window.get_proc_address(symbol) {
@@ -141,7 +143,9 @@ fn main() {
         let mut options_menu    = OptionsMenuRenderer::new();
         let underwater_renderer = UnderwaterRenderer::new();
         let mut load_menu       = LoadMenuRenderer::new();
-        let stats_renderer      = StatsRenderer::new();
+        let stats_renderer         = StatsRenderer::new();
+        let chunk_outline_renderer = ChunkOutlineRenderer::new();
+        let mut chunk_outlines     = false;
         let mut pending_load: Option<save::SaveData> = None;
 
         // ── Network state ─────────────────────────────────────────────────────
@@ -547,6 +551,10 @@ fn main() {
                         }
                     }
 
+                    glfw::WindowEvent::Key(Key::F3, _, Action::Press, _) => {
+                        chunk_outlines = !chunk_outlines;
+                    }
+
                     glfw::WindowEvent::Key(Key::F12, _, Action::Press, _) => {
                         wireframe_mode = !wireframe_mode;
                         if wireframe_mode { gl::PolygonMode(gl::FRONT_AND_BACK, gl::LINE); }
@@ -685,6 +693,16 @@ fn main() {
                         } else if game_state == GameState::Playing && console_open {
                             if console_swallow_char { console_swallow_char = false; }
                             else { console.type_char(c); }
+                        }
+                    }
+
+                    glfw::WindowEvent::Scroll(_, y) => {
+                        if game_state == GameState::Playing && !bag_open && !console_open {
+                            if y < 0.0 {
+                                selected_slot = (selected_slot + 1) % 9;
+                            } else if y > 0.0 {
+                                selected_slot = (selected_slot + 8) % 9;
+                            }
                         }
                     }
 
@@ -1242,6 +1260,14 @@ fn main() {
                     }
                 }
 
+                // Chunk boundary debug overlay — outlines the chunk the player stands in
+                if chunk_outlines {
+                    let cx = player.position[0].div_euclid(16.0) as i32;
+                    let cy = player.position[1].div_euclid(16.0) as i32;
+                    let cz = player.position[2].div_euclid(16.0) as i32;
+                    chunk_outline_renderer.draw_chunks(&[[cx, cy, cz]], &camera.view_matrix(), &projection);
+                }
+
                 // Capture scene (terrain + entities) for water refraction, then draw water
                 chunk_renderer.capture_scene(fb_w, fb_h);
                 world.draw_transparent(&chunk_renderer, &camera);
@@ -1264,13 +1290,6 @@ fn main() {
                     PlayerDrawMode::ArmsOnly, arm_angle,
                     fog_start, fog_end, fb_w as f32, fb_h as f32, sky_tex,
                     fog_override, fog_override_color);
-
-                // Selected slot → right hand
-                if let Some((item, _)) = hotbar[selected_slot] {
-                    let mvp = player_renderer.hand_item_mvp(
-                        player.position, player.yaw, &view, &projection, arm_angle, true);
-                    item_renderer.draw_held(item, &mvp);
-                }
 
                 if outline_enabled && !paused && !bag_open && !build_open {
                     let ro  = [camera.position.x, camera.position.y, camera.position.z];
@@ -1300,6 +1319,20 @@ fn main() {
                             crack_renderer.draw(target, stage, &view, &projection);
                         }
                     }
+                }
+
+                // FPV arm + held item — view/camera space, always visible.
+                // Depth clear so they render on top of world geometry.
+                if let Some((item, _)) = hotbar[selected_slot] {
+                    let cycle = (swing_time * 3.0_f32) % 1.0;
+                    let swing_t = if lmb_held {
+                        if cycle < 0.30 { (cycle / 0.30_f32).sqrt() }
+                        else { 1.0 - (cycle - 0.30) / 0.70 }
+                    } else { 0.0 };
+                    gl::Clear(gl::DEPTH_BUFFER_BIT);
+                    player_renderer.draw_fpv_arm(swing_t, &projection, fb_w as f32, fb_h as f32, sky_tex);
+                    let mvp = PlayerRenderer::hand_item_mvp_fpv(swing_t, &projection);
+                    item_renderer.draw_held(item, &mvp);
                 }
 
                 // ── HUD ───────────────────────────────────────────────────────

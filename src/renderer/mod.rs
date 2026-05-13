@@ -75,3 +75,6 @@ pub use load_menu_renderer::LoadMenuRenderer;
 
 pub mod stats_renderer;
 pub use stats_renderer::StatsRenderer;
+
+pub mod chunk_outline_renderer;
+pub use chunk_outline_renderer::ChunkOutlineRenderer;

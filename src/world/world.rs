@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 
-use crate::world::chunk::{Chunk, Blocks, NeighborEdges, WaterLevels};
+use crate::world::chunk::{Chunk, Blocks, NeighborEdges, WaterLevels, SkyLight};
 use crate::world::block::BlockType;
 use crate::world::{SEA_LEVEL, WORLD_HEIGHT_CHUNKS};
 use crate::renderer::ChunkRenderer;
@@ -31,6 +31,7 @@ struct BlockReady {
 struct MeshReady {
     position: [i32; 3],
     vertices: Vec<f32>,
+    sky: Box<SkyLight>,
 }
 
 pub struct World {
@@ -286,23 +287,44 @@ impl World {
 
             let tx = self.mesh_tx.clone();
             thread::spawn(move || {
-                let vertices = Chunk::build_vertices(&blocks, &edges, &water_levels);
-                let _ = tx.send(MeshReady { position: pos, vertices });
+                let (vertices, sky) = Chunk::build_vertices(&blocks, &edges, &water_levels);
+                let _ = tx.send(MeshReady { position: pos, vertices, sky });
             });
         }
     }
 
     /// Upload finished vertex buffers to the GPU (main thread only).
+    /// Also stores the corrected sky-light back onto the chunk. If any edge values
+    /// changed, affected neighbours are marked for rebuild so they read the correct
+    /// sky edge data on their next pass. Sky values can only go from 15→0 (never
+    /// the reverse), so this cascade converges in at most 2 passes per chunk.
     fn finalize_meshes(&mut self, max: usize) {
+        let mut to_rebuild: Vec<[i32; 3]> = Vec::new();
         for _ in 0..max {
             match self.mesh_rx.try_recv() {
                 Ok(ready) => {
                     self.pending_meshes.remove(&ready.position);
                     if let Some(chunk) = self.chunks.get_mut(&ready.position) {
+                        let sky_changed = chunk.sky_edges_changed(&ready.sky);
                         chunk.finalize_mesh(ready.vertices);
+                        chunk.update_sky_light(ready.sky);
+                        if sky_changed {
+                            to_rebuild.push(ready.position);
+                        }
                     }
                 }
                 Err(_) => break,
+            }
+        }
+        for [cx, cy, cz] in to_rebuild {
+            for npos in [
+                [cx+1,cy,cz],[cx-1,cy,cz],
+                [cx,cy,cz+1],[cx,cy,cz-1],
+                [cx,cy+1,cz],[cx,cy-1,cz],
+            ] {
+                if let Some(n) = self.chunks.get_mut(&npos) {
+                    n.mark_for_rebuild();
+                }
             }
         }
     }
@@ -467,6 +489,12 @@ impl World {
             back:  if b_loaded { self.chunks[&[cx,cy,cz-1]].edge_back()   } else { [[BlockType::Air; 16]; 16] },
             above: if a_loaded { self.chunks[&[cx,cy+1,cz]].edge_bottom() } else { [[BlockType::Air; 16]; 16] },
             below: if d_loaded { self.chunks[&[cx,cy-1,cz]].edge_top()    } else { [[BlockType::Air; 16]; 16] },
+            above_sky: if a_loaded { self.chunks[&[cx,cy+1,cz]].sky_light_bottom()      } else { [[15u8; 16]; 16] },
+            right_sky: if r_loaded { self.chunks[&[cx+1,cy,cz]].sky_light_edge_right()  } else { [[15u8; 16]; 16] },
+            left_sky:  if l_loaded { self.chunks[&[cx-1,cy,cz]].sky_light_edge_left()   } else { [[15u8; 16]; 16] },
+            front_sky: if f_loaded { self.chunks[&[cx,cy,cz+1]].sky_light_edge_front()  } else { [[15u8; 16]; 16] },
+            back_sky:  if b_loaded { self.chunks[&[cx,cy,cz-1]].sky_light_edge_back()   } else { [[15u8; 16]; 16] },
+            below_sky: if d_loaded { self.chunks[&[cx,cy-1,cz]].sky_light_edge_top()    } else { [[0u8;  16]; 16] },
             wl_right: if r_loaded { self.water_edge_at_lx(cx+1, cy, cz, 0)  } else { [[0u8; 16]; 16] },
             wl_left:  if l_loaded { self.water_edge_at_lx(cx-1, cy, cz, 15) } else { [[0u8; 16]; 16] },
             wl_front: if f_loaded { self.water_edge_at_lz(cx, cy, cz+1, 0)  } else { [[0u8; 16]; 16] },
@@ -558,7 +586,7 @@ impl World {
         self.chunks.len()
     }
 
-    /// Count meshed chunks in the surface Y band (cy 3–6, world Y 48–111).
+/// Count meshed chunks in the surface Y band (cy 3–6, world Y 48–111).
     /// Underground solid chunks and high-altitude air chunks mesh near-instantly
     /// and swamp the global count; this metric only tracks the visible terrain layers.
     pub fn meshed_surface_chunk_count(&self) -> usize {

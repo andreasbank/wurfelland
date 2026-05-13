@@ -110,6 +110,9 @@ pub struct PlayerRenderer {
     fog_color_override_loc: i32,
     screen_size_loc: i32,
     sky_sampler_loc: i32,
+    fpv_arm_vao: u32,
+    fpv_arm_vbo: u32,
+    fpv_arm_verts: i32,
 }
 
 impl PlayerRenderer {
@@ -192,43 +195,88 @@ impl PlayerRenderer {
             let sky_sampler_loc        = gl::GetUniformLocation(shader, c"u_sky_sampler".as_ptr());
             let tex_id = create_player_texture();
 
-            PlayerRenderer { vao, vbo, shader, mvp_loc, tex_id, fog_start_loc, fog_end_loc, fog_override_loc, fog_color_override_loc, screen_size_loc, sky_sampler_loc }
+            // FPV forearm: wrist at y=0, elbow at y=0.25
+            let mut arm_v: Vec<f32> = Vec::new();
+            add_box(&mut arm_v, -0.045, 0.0, -0.055, 0.045, 0.25, 0.055);
+            let fpv_arm_verts = (arm_v.len() / STRIDE) as i32;
+            let (mut fpv_arm_vao, mut fpv_arm_vbo) = (0u32, 0u32);
+            gl::GenVertexArrays(1, &mut fpv_arm_vao);
+            gl::GenBuffers(1, &mut fpv_arm_vbo);
+            gl::BindVertexArray(fpv_arm_vao);
+            gl::BindBuffer(gl::ARRAY_BUFFER, fpv_arm_vbo);
+            gl::BufferData(gl::ARRAY_BUFFER,
+                (arm_v.len() * mem::size_of::<f32>()) as isize,
+                arm_v.as_ptr() as *const c_void, gl::STATIC_DRAW);
+            gl::VertexAttribPointer(0, 3, gl::FLOAT, gl::FALSE, stride, std::ptr::null());
+            gl::EnableVertexAttribArray(0);
+            gl::VertexAttribPointer(1, 1, gl::FLOAT, gl::FALSE, stride,
+                (3 * mem::size_of::<f32>()) as *const c_void);
+            gl::EnableVertexAttribArray(1);
+            gl::VertexAttribPointer(2, 2, gl::FLOAT, gl::FALSE, stride,
+                (4 * mem::size_of::<f32>()) as *const c_void);
+            gl::EnableVertexAttribArray(2);
+            gl::BindBuffer(gl::ARRAY_BUFFER, 0);
+            gl::BindVertexArray(0);
+
+            PlayerRenderer { vao, vbo, shader, mvp_loc, tex_id, fog_start_loc, fog_end_loc, fog_override_loc, fog_color_override_loc, screen_size_loc, sky_sampler_loc, fpv_arm_vao, fpv_arm_vbo, fpv_arm_verts }
         }
     }
 
-    /// Returns the MVP matrix that places a held item at the given hand's wrist.
-    /// The right hand has the swing transform applied; the left hand is static.
-    /// `right_hand`: true = right (slot 2), false = left (slot 1).
-    pub fn hand_item_mvp(
-        &self,
-        position: [f32; 3],
-        yaw: f32,
-        view: &glam::Mat4,
-        projection: &glam::Mat4,
-        swing_angle: f32,
-        right_hand: bool,
-    ) -> glam::Mat4 {
-        let rot_angle = -(yaw.to_radians() + FRAC_PI_2);
-        let world_model = glam::Mat4::from_translation(glam::Vec3::from(position))
-            * glam::Mat4::from_rotation_y(rot_angle);
+    /// MVP for the held item rendered in view (camera) space — always visible in
+    /// the bottom-right of the screen regardless of world position.
+    /// `swing_t`: 0.0 = resting, 1.0 = impact (item swung toward crosshair).
+    pub fn hand_item_mvp_fpv(swing_t: f32, projection: &glam::Mat4) -> glam::Mat4 {
+        // Camera space: +X right, +Y up, -Z into screen.
+        // Item is partially off-screen to the right at rest; swings left+up on hit.
+        let rest   = glam::Vec3::new( 0.30, -0.14, -0.50);
+        let impact = glam::Vec3::new( 0.13, -0.03, -0.50);
+        let pos    = rest.lerp(impact, swing_t);
 
-        let hand_x: f32 = if right_hand { 0.275 } else { -0.275 };
+        let rot_x = -0.28 - swing_t * 0.38;
+        let rot_z =  0.30 - swing_t * 0.22;
 
-        // Arm swing (right arm only)
-        let arm_transform = if right_hand {
-            let pivot = glam::Vec3::new(0.275, 1.45, 0.0);
-            glam::Mat4::from_translation(pivot)
-                * glam::Mat4::from_rotation_x(swing_angle)
-                * glam::Mat4::from_translation(-pivot)
-        } else {
-            glam::Mat4::IDENTITY
-        };
+        *projection
+            * glam::Mat4::from_translation(pos)
+            * glam::Mat4::from_rotation_x(rot_x)
+            * glam::Mat4::from_rotation_z(rot_z)
+    }
 
-        // Position at the wrist, tilt slightly toward the viewer
-        let item_local = glam::Mat4::from_translation(glam::Vec3::new(hand_x, 0.62, 0.18))
-            * glam::Mat4::from_rotation_x(-0.35);
+    /// Draw a blocky forearm in view/camera space so the player looks like they
+    /// are holding the item. Call this before `draw_held` with the same `swing_t`.
+    pub fn draw_fpv_arm(&self, swing_t: f32, projection: &glam::Mat4,
+                        screen_w: f32, screen_h: f32, sky_tex: u32) {
+        // Wrist position matches the item handle area; elbow exits off-screen right.
+        let rest_pos   = glam::Vec3::new(0.33, -0.22, -0.50);
+        let impact_pos = glam::Vec3::new(0.18, -0.10, -0.50);
+        let pos = rest_pos.lerp(impact_pos, swing_t);
+        let swing_rx = swing_t * -0.28;
 
-        *projection * *view * world_model * arm_transform * item_local
+        // translate to wrist, then tilt arm so elbow exits upper-right of screen
+        let model = glam::Mat4::from_translation(pos)
+            * glam::Mat4::from_rotation_z(-0.55)
+            * glam::Mat4::from_rotation_x(-0.15 + swing_rx);
+        let mvp = *projection * model;
+
+        unsafe {
+            gl::Disable(gl::CULL_FACE);
+            gl::UseProgram(self.shader);
+            gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE, mvp.to_cols_array().as_ptr());
+            // No fog on the FPV arm (view-space; set fog very far away)
+            gl::Uniform1f(self.fog_start_loc, 1000.0);
+            gl::Uniform1f(self.fog_end_loc,   2000.0);
+            gl::Uniform1f(self.fog_override_loc, 0.0);
+            gl::Uniform3f(self.fog_color_override_loc, 0.0, 0.0, 0.0);
+            gl::Uniform2f(self.screen_size_loc, screen_w, screen_h);
+            gl::Uniform1i(self.sky_sampler_loc, 4);
+            gl::ActiveTexture(gl::TEXTURE4);
+            gl::BindTexture(gl::TEXTURE_2D, sky_tex);
+            gl::ActiveTexture(gl::TEXTURE0);
+            gl::BindTexture(gl::TEXTURE_2D, self.tex_id);
+            gl::BindVertexArray(self.fpv_arm_vao);
+            gl::DrawArrays(gl::TRIANGLES, 0, self.fpv_arm_verts);
+            gl::BindVertexArray(0);
+            gl::Enable(gl::CULL_FACE);
+        }
     }
 
     /// Draw a player model at `position` (feet coords) rotated by `yaw` (degrees).
@@ -305,6 +353,8 @@ impl Drop for PlayerRenderer {
         unsafe {
             gl::DeleteVertexArrays(1, &self.vao);
             gl::DeleteBuffers(1, &self.vbo);
+            gl::DeleteVertexArrays(1, &self.fpv_arm_vao);
+            gl::DeleteBuffers(1, &self.fpv_arm_vbo);
             gl::DeleteProgram(self.shader);
             gl::DeleteTextures(1, &self.tex_id);
         }
