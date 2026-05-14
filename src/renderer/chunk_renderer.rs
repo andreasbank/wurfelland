@@ -271,8 +271,8 @@ impl ChunkRenderer {
                     // ── Caustics on underwater opaque terrain ────────────────────
                     // Only horizontal (top) faces: caustic light travels downward,
                     // not sideways, so vertical faces at the shoreline must be excluded.
-                    if (!transparent_pass && vWorldPos.y < u_water_level && vNormal.y > 0.3) {
-                        float causticFade = 1.0 - clamp((u_water_level - vWorldPos.y) / 8.0, 0.0, 1.0);
+                    if (!transparent_pass && vWorldPos.y < u_water_level - 0.5 && vNormal.y > 0.3) {
+                        float causticFade = 1.0 - clamp((u_water_level - 0.5 - vWorldPos.y) / 8.0, 0.0, 1.0);
                         vec2  wxz = vWorldPos.xz;
                         float t   = u_time * 1.2;
                         float c1  = sin(length(wxz - vec2(sin(t*0.6)*3.0, cos(t*0.5)*3.0)) * 5.0 - t*2.0);

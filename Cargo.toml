@@ -13,7 +13,8 @@ glm = "0.3.0"
 log = "0.4.29"
 nalgebra-glm = "0.20.0"
 noise = "0.9"
-image = { version = "0.25", default-features = false, features = ["hdr"] }
+image = { version = "0.25", default-features = false, features = ["hdr", "png"] }
+gltf  = { version = "1", features = ["image"] }
 renet = "2.0.0"
 renet_netcode = "2.0.0"
 bincode = "1"

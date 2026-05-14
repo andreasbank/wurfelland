@@ -699,6 +699,39 @@ impl World {
         }
     }
 
+    /// Like raycast but also returns the adjacent (air) block position where a new block would be placed.
+    pub fn raycast_face(&self, origin: [f32; 3], dir: [f32; 3], max_dist: f32) -> Option<([i32;3], [i32;3])> {
+        let dx = dir[0]; let dy = dir[1]; let dz = dir[2];
+        let mut bx = origin[0].floor() as i32;
+        let mut by = origin[1].floor() as i32;
+        let mut bz = origin[2].floor() as i32;
+        let step_x: i32 = if dx >= 0.0 { 1 } else { -1 };
+        let step_y: i32 = if dy >= 0.0 { 1 } else { -1 };
+        let step_z: i32 = if dz >= 0.0 { 1 } else { -1 };
+        let t_delta_x = if dx.abs() < 1e-9 { f32::INFINITY } else { 1.0 / dx.abs() };
+        let t_delta_y = if dy.abs() < 1e-9 { f32::INFINITY } else { 1.0 / dy.abs() };
+        let t_delta_z = if dz.abs() < 1e-9 { f32::INFINITY } else { 1.0 / dz.abs() };
+        let mut t_max_x = if dx >= 0.0 { (bx as f32 + 1.0 - origin[0]) / dx.abs() } else { (origin[0] - bx as f32) / dx.abs() };
+        let mut t_max_y = if dy >= 0.0 { (by as f32 + 1.0 - origin[1]) / dy.abs() } else { (origin[1] - by as f32) / dy.abs() };
+        let mut t_max_z = if dz >= 0.0 { (bz as f32 + 1.0 - origin[2]) / dz.abs() } else { (origin[2] - bz as f32) / dz.abs() };
+        let mut adj = [bx, by, bz];
+        loop {
+            let t = t_max_x.min(t_max_y).min(t_max_z);
+            if t > max_dist { return None; }
+            if self.get_block(bx, by, bz).is_targetable() {
+                return Some(([bx, by, bz], adj));
+            }
+            adj = [bx, by, bz];
+            if t_max_x <= t_max_y && t_max_x <= t_max_z {
+                bx += step_x; t_max_x += t_delta_x;
+            } else if t_max_y <= t_max_z {
+                by += step_y; t_max_y += t_delta_y;
+            } else {
+                bz += step_z; t_max_z += t_delta_z;
+            }
+        }
+    }
+
     /// Render chunks into the active shadow cascade, culling against the cascade's
     /// own orthographic frustum. This eliminates most chunks from the tight near
     /// cascades (cascade 0 covers only 12 m, yet there are 81 loaded chunks).

@@ -1,0 +1,23 @@
+{
+  "format_version": "1.0",
+  "identifier": "penguin",
+  "components": {
+    "habitat": "land",
+    "health": { "max": 6.0 },
+    "physics": {
+      "half_width": 0.22,
+      "height": 1.0,
+      "jump_speed": 7.0,
+      "hit_half_width": 0.32
+    },
+    "movement": { "speed": 0.8 },
+    "wander": {
+      "idle_chance": 0.50,
+      "idle_min_secs": 3.0,
+      "idle_max_secs": 8.0,
+      "walk_min_secs": 4.0,
+      "walk_max_secs": 10.0
+    },
+    "loot": []
+  }
+}

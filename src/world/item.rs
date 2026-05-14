@@ -13,6 +13,7 @@ pub enum ItemType {
     PorkChop,
     StoneAxe,
     Torch,
+    Bed,
 }
 
 impl ItemType {
@@ -30,6 +31,7 @@ impl ItemType {
             ItemType::PorkChop     => 8,
             ItemType::StoneAxe     => 9,
             ItemType::Torch        => 10,
+            ItemType::Bed          => 11,
         }
     }
 
@@ -46,6 +48,7 @@ impl ItemType {
             8  => Some(Self::PorkChop),
             9  => Some(Self::StoneAxe),
             10 => Some(Self::Torch),
+            11 => Some(Self::Bed),
             _  => None,
         }
     }
@@ -63,6 +66,7 @@ impl ItemType {
             "pork_chop"    => Some(Self::PorkChop),
             "stone_axe"    => Some(Self::StoneAxe),
             "torch"        => Some(Self::Torch),
+            "bed"          => Some(Self::Bed),
             _              => None,
         }
     }
@@ -80,6 +84,7 @@ impl ItemType {
             ItemType::PorkChop    => [0.90, 0.45, 0.32],
             ItemType::StoneAxe    => [0.58, 0.58, 0.63],
             ItemType::Torch       => [1.00, 0.47, 0.00],
+            ItemType::Bed         => [0.80, 0.35, 0.25],
         }
     }
 }

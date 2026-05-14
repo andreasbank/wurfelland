@@ -53,12 +53,32 @@ pub struct NeighborEdges {
 
 impl NeighborEdges {}
 
-/// 1-in-`freq` chance per column for tree placement.
+/// Minecraft-style cell-based tree placement.
+/// The world is divided into CELL×CELL blocks; each cell holds at most one tree
+/// at a random position. `freq` = 1-in-N cells has a tree.
+/// This eliminates the diagonal-stripe artifact of per-column linear hashes.
 fn should_place_tree(world_x: i32, world_z: i32, freq: u32) -> bool {
     if freq == 0 { return false; }
-    let h = world_x.wrapping_mul(374761393_i32)
-                   .wrapping_add(world_z.wrapping_mul(668265263_i32));
-    (h.unsigned_abs() % freq) == 0
+    const CELL: i32 = 8;
+    let cell_x = world_x.div_euclid(CELL);
+    let cell_z = world_z.div_euclid(CELL);
+
+    // Well-mixed hash of the cell coordinates.
+    let mut h = (cell_x as u32).wrapping_mul(1_664_525)
+        .wrapping_add((cell_z as u32).wrapping_mul(1_013_904_223));
+    h ^= h >> 16;
+    h = h.wrapping_mul(0x45d9f3b);
+    h ^= h >> 16;
+
+    if h % freq != 0 { return false; }
+
+    // Pick a deterministic random offset within the cell.
+    let h2 = h.wrapping_mul(22_695_477).wrapping_add(1_013_904_223);
+    let tx = (h2 % CELL as u32) as i32;
+    let h3 = h2.wrapping_mul(22_695_477).wrapping_add(1_013_904_223);
+    let tz = (h3 % CELL as u32) as i32;
+
+    world_x.rem_euclid(CELL) == tx && world_z.rem_euclid(CELL) == tz
 }
 
 

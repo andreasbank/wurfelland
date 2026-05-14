@@ -11,6 +11,7 @@ pub enum BlockType {
     GrassShort,
     Sand,
     Snow,
+    Bed,
 }
 
 impl BlockType {
@@ -27,6 +28,7 @@ impl BlockType {
             BlockType::GrassShort => [0.38, 0.70, 0.20],
             BlockType::Sand       => [0.96, 0.87, 0.60],
             BlockType::Snow       => [0.90, 0.94, 1.00],
+            BlockType::Bed        => [0.80, 0.35, 0.25],
         }
     }
     
@@ -34,6 +36,7 @@ impl BlockType {
         match self {
             BlockType::Air | BlockType::Water | BlockType::Leaves
             | BlockType::TallGrass | BlockType::GrassShort => false,
+            BlockType::Bed => true,
             _ => true,
         }
     }
@@ -72,6 +75,7 @@ impl BlockType {
             BlockType::Sand       => Some(0.5),
             BlockType::Log        => Some(1.5),
             BlockType::Stone      => Some(3.0),
+            BlockType::Bed        => Some(0.5),
         }
     }
 
@@ -93,6 +97,7 @@ impl BlockType {
                 if hash % 20 == 0 { vec![ItemType::Seeds] } else { vec![] }
             }
             BlockType::Stone => vec![ItemType::StoneChunk],
+            BlockType::Bed   => vec![ItemType::Bed],
             _ => vec![],
         }
     }
@@ -111,6 +116,7 @@ impl BlockType {
             BlockType::Sand       => 8,
             BlockType::Snow       => 9,
             BlockType::GrassShort => 10,
+            BlockType::Bed        => 11,
         }
     }
 
@@ -126,6 +132,7 @@ impl BlockType {
             8  => Self::Sand,
             9  => Self::Snow,
             10 => Self::GrassShort,
+            11 => Self::Bed,
             _  => Self::Air,
         }
     }
@@ -150,6 +157,7 @@ impl BlockType {
             BlockType::GrassShort => 8, // reuses the same atlas tile, rendered shorter
             BlockType::Sand       => 14,
             BlockType::Snow       => 15,
+            BlockType::Bed        => 5,  // reuse log-side texture (brown)
         }
     }
 

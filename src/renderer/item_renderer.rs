@@ -49,6 +49,24 @@ fn build_stick_mesh() -> Vec<f32> {
     v
 }
 
+// ── Flat bed slab (1.0×0.25×0.5, base at Y=0) ──
+fn build_bed_mesh() -> Vec<f32> {
+    let (u0, u1, vt, vb) = tile_uv(ItemType::Bed.tile_index());
+    let uv = [[u0,vb],[u1,vb],[u1,vt],[u0,vt]];
+    let mut v = Vec::new();
+    const W: f32 = 0.5;   // half-width  (X)
+    const H: f32 = 0.06;  // half-height (Y)
+    const D: f32 = 0.25;  // half-depth  (Z)
+    const CY: f32 = H;
+    push_quad(&mut v, [[-W,CY+H,-D],[W,CY+H,-D],[W,CY+H,D],[-W,CY+H,D]],   uv); // top
+    push_quad(&mut v, [[-W,CY-H,D],[W,CY-H,D],[W,CY-H,-D],[-W,CY-H,-D]],   uv); // bottom
+    push_quad(&mut v, [[-W,CY-H,D],[W,CY-H,D],[W,CY+H,D],[-W,CY+H,D]],     uv); // front
+    push_quad(&mut v, [[W,CY-H,-D],[-W,CY-H,-D],[-W,CY+H,-D],[W,CY+H,-D]], uv); // back
+    push_quad(&mut v, [[-W,CY-H,-D],[-W,CY-H,D],[-W,CY+H,D],[-W,CY+H,-D]], uv); // left
+    push_quad(&mut v, [[W,CY-H,D],[W,CY-H,-D],[W,CY+H,-D],[W,CY+H,D]],     uv); // right
+    v
+}
+
 // ── Small cube (0.35³, base at Y=0): all 6 faces map the same tile ──
 fn build_cube_mesh(tile_idx: usize) -> Vec<f32> {
     let (u0, u1, vt, vb) = tile_uv(tile_idx);
@@ -102,11 +120,13 @@ pub struct ItemRenderer {
     vao_dirt:         u32,
     vao_stone:        u32,
     vao_seeds:        u32,
+    vao_bed:          u32,
     shader:           u32,
     mvp_loc:          i32,
     atlas:            u32,
     stick_vert_count: i32,
     cube_vert_count:  i32,
+    bed_vert_count:   i32,
     // Colored geo items (loaded from JSON)
     colored_shader:   u32,
     colored_mvp_loc:  i32,
@@ -171,15 +191,18 @@ impl ItemRenderer {
         let dirt_mesh  = build_cube_mesh(ItemType::DirtClump.tile_index());
         let stone_mesh = build_cube_mesh(ItemType::StoneChunk.tile_index());
         let seeds_mesh = build_cube_mesh(ItemType::Seeds.tile_index());
+        let bed_mesh   = build_bed_mesh();
 
         let stick_vert_count = (stick_mesh.len() / STRIDE) as i32;
         let cube_vert_count  = (log_mesh.len()   / STRIDE) as i32;
+        let bed_vert_count   = (bed_mesh.len()   / STRIDE) as i32;
 
         let vao_stick = upload_vao(&stick_mesh);
         let vao_log   = upload_vao(&log_mesh);
         let vao_dirt  = upload_vao(&dirt_mesh);
         let vao_stone = upload_vao(&stone_mesh);
         let vao_seeds = upload_vao(&seeds_mesh);
+        let vao_bed   = upload_vao(&bed_mesh);
 
         let atlas = create_item_atlas();
 
@@ -194,9 +217,9 @@ impl ItemRenderer {
         };
 
         ItemRenderer {
-            vao_stick, vao_log, vao_dirt, vao_stone, vao_seeds,
+            vao_stick, vao_log, vao_dirt, vao_stone, vao_seeds, vao_bed,
             shader, mvp_loc, atlas,
-            stick_vert_count, cube_vert_count,
+            stick_vert_count, cube_vert_count, bed_vert_count,
             colored_shader, colored_mvp_loc,
             axe_model,
             torch_model,
@@ -223,6 +246,7 @@ impl ItemRenderer {
                     ItemType::DirtClump   => (self.vao_dirt,  self.cube_vert_count),
                     ItemType::StoneChunk  => (self.vao_stone, self.cube_vert_count),
                     ItemType::Seeds       => (self.vao_seeds, self.cube_vert_count),
+                    ItemType::Bed         => (self.vao_bed,   self.bed_vert_count),
                     ItemType::Feather     => (self.vao_stone, self.cube_vert_count),
                     ItemType::Egg         => (self.vao_stone, self.cube_vert_count),
                     ItemType::ChickenMeat => (self.vao_stone, self.cube_vert_count),
@@ -303,6 +327,7 @@ impl ItemRenderer {
                 // Atlas items — render using the appropriate VAO
                 let (vao, count) = match item {
                     ItemType::Stick => (self.vao_stick, self.stick_vert_count),
+                    ItemType::Bed   => (self.vao_bed,   self.bed_vert_count),
                     _               => (self.vao_stone,  self.cube_vert_count),
                 };
                 gl::UseProgram(self.shader);
@@ -329,6 +354,7 @@ impl Drop for ItemRenderer {
             gl::DeleteVertexArrays(1, &self.vao_dirt);
             gl::DeleteVertexArrays(1, &self.vao_stone);
             gl::DeleteVertexArrays(1, &self.vao_seeds);
+            gl::DeleteVertexArrays(1, &self.vao_bed);
             gl::DeleteTextures(1, &self.atlas);
             gl::DeleteProgram(self.shader);
             gl::DeleteProgram(self.colored_shader);

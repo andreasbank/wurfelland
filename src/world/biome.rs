@@ -29,13 +29,13 @@ impl Biome {
                 base_height: 64.0, amplitude: 8.0, scale: 0.03,
                 surface_block:     BlockType::Grass,
                 sub_surface_block: BlockType::Dirt,
-                tree_freq: 220, grass_freq: 3,
+                tree_freq: 4, grass_freq: 3,  // 1 in 4 cells (≈1 tree per 256 blocks)
             },
             Biome::Forest => BiomeParams {
                 base_height: 65.0, amplitude: 14.0, scale: 0.04,
                 surface_block:     BlockType::Grass,
                 sub_surface_block: BlockType::Dirt,
-                tree_freq: 22, grass_freq: 2,
+                tree_freq: 1, grass_freq: 2,  // every cell (≈1 tree per 64 blocks)
             },
             Biome::Desert => BiomeParams {
                 base_height: 63.0, amplitude: 6.0, scale: 0.025,

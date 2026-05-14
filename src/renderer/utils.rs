@@ -128,6 +128,9 @@ pub fn create_item_atlas() -> u32 {
     // === TILE 4: Seeds ===
     fill_tile_placeholder(&mut pixels, 4, 204, 192, 51);
 
+    // === TILE 11: Bed ===
+    fill_tile_placeholder(&mut pixels, 11, 204, 90, 64);
+
     unsafe {
         let mut id = 0u32;
         gl::GenTextures(1, &mut id);

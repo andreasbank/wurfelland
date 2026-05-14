@@ -12,7 +12,7 @@ mod camera;
 use camera::Camera;
 
 mod world;
-use world::{World, ItemEntity, ItemType, Chicken, Pig, nearest_entity_hit, EntityRegistry};
+use world::{World, ItemEntity, ItemType, Chicken, Pig, Penguin, nearest_entity_hit, EntityRegistry};
 use world::block::BlockType;
 
 mod renderer;
@@ -44,6 +44,7 @@ use renderer::UnderwaterRenderer;
 use renderer::LoadMenuRenderer;
 use renderer::StatsRenderer;
 use renderer::ChunkOutlineRenderer;
+use renderer::PlacedObjectRenderer;
 
 mod net;
 use net::{GameServer, GameClient};
@@ -144,8 +145,10 @@ fn main() {
         let underwater_renderer = UnderwaterRenderer::new();
         let mut load_menu       = LoadMenuRenderer::new();
         let stats_renderer         = StatsRenderer::new();
-        let chunk_outline_renderer = ChunkOutlineRenderer::new();
+        let chunk_outline_renderer    = ChunkOutlineRenderer::new();
+        let placed_object_renderer    = PlacedObjectRenderer::new();
         let mut chunk_outlines     = false;
+        let mut entity_outlines    = false;
         let mut pending_load: Option<save::SaveData> = None;
 
         // ── Network state ─────────────────────────────────────────────────────
@@ -162,6 +165,7 @@ fn main() {
 
         let mut chickens: Vec<Chicken> = Vec::new();
         let mut pigs: Vec<Pig> = Vec::new();
+        let mut penguins: Vec<Penguin> = Vec::new();
         let mut item_entities: Vec<ItemEntity> = Vec::new();
 
         let mut hotbar: [Option<(ItemType, u32)>; 9] = [None; 9];
@@ -174,8 +178,12 @@ fn main() {
 
         // ── System stats (CPU / memory) ───────────────────────────────────────
         let mut sys = sysinfo::System::new();
+        let self_pid = sysinfo::get_current_pid().ok();
+        if let Some(pid) = self_pid {
+            sys.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[pid]));
+        }
         let mut sys_refresh_timer: f32 = 0.0;
-        let mut cpu_pct: f32 = 0.0;
+        let cpu_pct: f32 = 0.0;
         let mut mem_mb: u64 = 0;
         let mut fps_counter: u32 = 0;
         let mut fps_timer: f32 = 0.0;
@@ -248,9 +256,12 @@ fn main() {
             if sys_refresh_timer >= 0.5 {
                 sys_refresh_timer = 0.0;
                 sys.refresh_cpu_usage();
-                sys.refresh_memory();
-                cpu_pct = sys.global_cpu_usage();
-                mem_mb  = sys.used_memory() / 1_048_576;
+                if let Some(pid) = self_pid {
+                    sys.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[pid]));
+                    mem_mb = sys.process(pid)
+                        .map(|p| p.memory() / 1_048_576)
+                        .unwrap_or(0);
+                }
             }
 
             // ── Events ────────────────────────────────────────────────────────
@@ -292,8 +303,10 @@ fn main() {
                                     chunk_radius_idx = (chunk_radius_idx + 1) % CHUNK_RADII.len();
                                     world.set_radius(CHUNK_RADII[chunk_radius_idx]);
                                 }
-                                Some("outline") => outline_enabled = !outline_enabled,
-                                Some("stats")   => stats_enabled   = !stats_enabled,
+                                Some("outline")        => outline_enabled = !outline_enabled,
+                                Some("stats")          => stats_enabled   = !stats_enabled,
+                                Some("chunk_outlines")   => chunk_outlines   = !chunk_outlines,
+                                Some("entity_outlines")  => entity_outlines  = !entity_outlines,
                                 Some("res") => {
                                     hi_res = !hi_res;
                                     let (nw, nh) = if hi_res { (1600, 1200) } else { (800, 600) };
@@ -319,8 +332,11 @@ fn main() {
                                         world.update([8.5, 0.0, 8.5]);
                                         chickens.clear();
                                         pigs.clear();
+                                        penguins.clear();
                                         item_entities.clear();
                                         menu_reveal_timer = 0.0;
+                                        sun_angle  = std::f32::consts::FRAC_PI_4;
+                                        total_time = 0.0;
                                         game_state = GameState::LoadingGame;
                                     }
                                     Some("load_game") => {
@@ -342,8 +358,11 @@ fn main() {
                                                 world.update([8.5, 0.0, 8.5]);
                                                 chickens.clear();
                                                 pigs.clear();
+                                                penguins.clear();
                                                 item_entities.clear();
                                                 menu_reveal_timer = 0.0;
+                                                sun_angle  = std::f32::consts::FRAC_PI_4;
+                                                total_time = 0.0;
                                                 pending_load = Some(data);
                                                 game_state = GameState::LoadingGame;
                                             }
@@ -365,8 +384,11 @@ fn main() {
                                                 world = World::new(8, seed);
                                                 world.update([8.5, 0.0, 8.5]);
                                                 chickens.clear();
+                                                penguins.clear();
                                                 item_entities.clear();
                                                 menu_reveal_timer = 0.0;
+                                                sun_angle  = std::f32::consts::FRAC_PI_4;
+                                                total_time = 0.0;
                                                 game_state = GameState::LoadingGame;
                                             }
                                             Err(e) => eprintln!("Failed to start server: {}", e),
@@ -388,8 +410,11 @@ fn main() {
                                                     world = World::new(8, seed);
                                                     world.update([8.5, 0.0, 8.5]);
                                                     chickens.clear();
+                                                    penguins.clear();
                                                     item_entities.clear();
                                                     menu_reveal_timer = 0.0;
+                                                    sun_angle  = std::f32::consts::FRAC_PI_4;
+                                                    total_time = 0.0;
                                                     game_state = GameState::LoadingGame;
                                                 }
                                                 Err(e) => eprintln!("Failed to connect: {}", e),
@@ -423,6 +448,7 @@ fn main() {
                                             cursor_item  = None;
                                             chickens.clear();
                                             pigs.clear();
+                                            penguins.clear();
                                             item_entities.clear();
                                             player       = Player::new();
                                             hotbar       = [None; 9];
@@ -436,6 +462,8 @@ fn main() {
                                             world = World::new(12, 0xDEAD_C0DE);
                                             loading_menu_timer = 0.0;
                                             menu_reveal_timer  = 0.0;
+                                            sun_angle  = std::f32::consts::FRAC_PI_4;
+                                            total_time = 0.0;
                                             game_state = GameState::LoadingMenu;
                                             window.set_cursor_mode(glfw::CursorMode::Normal);
                                         }
@@ -535,7 +563,26 @@ fn main() {
                                         }
                                     }
                                 } else if build_open {
-                                    build_renderer.handle_click(last_mouse_x, last_mouse_y, win_w, win_h);
+                                    if let Some(recipe) = build_renderer.handle_click(last_mouse_x, last_mouse_y, win_w, win_h) {
+                                        if recipe == "bed" {
+                                            let log_count: u32 = player.inventory.iter()
+                                                .filter_map(|s| if let Some((ItemType::LogBlock, c)) = s { Some(*c) } else { None })
+                                                .sum();
+                                            if log_count >= 12 {
+                                                let mut to_consume = 12u32;
+                                                for slot in player.inventory.iter_mut() {
+                                                    if to_consume == 0 { break; }
+                                                    if let Some((ItemType::LogBlock, c)) = slot {
+                                                        let take = (*c).min(to_consume);
+                                                        *c -= take;
+                                                        to_consume -= take;
+                                                        if *c == 0 { *slot = None; }
+                                                    }
+                                                }
+                                                player.pick_up(ItemType::Bed);
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }} // end else { match game_state
@@ -545,7 +592,27 @@ fn main() {
                         if game_state == GameState::Playing && !paused && !bag_open && !build_open {
                             let ro = [camera.position.x, camera.position.y, camera.position.z];
                             let rd = [camera.front.x,    camera.front.y,    camera.front.z];
-                            if let Some((idx, _)) = nearest_entity_hit(&chickens, ro, rd, 5.0) {
+                            let holding_bed = hotbar[selected_slot].map_or(false, |(item, _)| item == ItemType::Bed);
+                            if holding_bed {
+                                if let Some((_hit, adj)) = world.raycast_face(ro, rd, 5.0) {
+                                    // Second block: step in the dominant horizontal facing direction
+                                    let (dx2, dz2) = if rd[0].abs() >= rd[2].abs() {
+                                        (rd[0].signum() as i32, 0i32)
+                                    } else {
+                                        (0i32, rd[2].signum() as i32)
+                                    };
+                                    let adj2 = [adj[0] + dx2, adj[1], adj[2] + dz2];
+                                    if world.get_block(adj[0], adj[1], adj[2]) == BlockType::Air
+                                        && world.get_block(adj2[0], adj2[1], adj2[2]) == BlockType::Air
+                                    {
+                                        world.set_block_recorded(adj[0], adj[1], adj[2], BlockType::Bed);
+                                        world.set_block_recorded(adj2[0], adj2[1], adj2[2], BlockType::Bed);
+                                        if let Some((_, count)) = &mut hotbar[selected_slot] {
+                                            if *count > 1 { *count -= 1; } else { hotbar[selected_slot] = None; }
+                                        }
+                                    }
+                                }
+                            } else if let Some((idx, _)) = nearest_entity_hit(&chickens, ro, rd, 5.0) {
                                 chickens[idx].interact();
                             }
                         }
@@ -829,12 +896,12 @@ fn main() {
                                 for cz in -scan_radius..=scan_radius {
                                     let h = (cx.wrapping_mul(73_856_093i32)
                                         ^ cz.wrapping_mul(19_349_663i32)) as u32;
-                                    if h % 20 != 0 { continue; }
+                                    if h % 55 != 0 { continue; }
                                     let center_wx = (cx * 16 + 8) as f64;
                                     let center_wz = (cz * 16 + 8) as f64;
                                     if !world::biome::biome_at_world(center_wx, center_wz)
                                         .allows_chickens() { continue; }
-                                    let family_size = 1 + (h >> 8) % 3;
+                                    let family_size = 2 + (h >> 8) % 2;
                                     let base_bx = cx * 16 + ((h >> 4) & 0xF) as i32;
                                     let base_bz = cz * 16 + ((h >> 12) & 0xF) as i32;
                                     for i in 0..family_size {
@@ -855,12 +922,12 @@ fn main() {
                                 for cz in -scan_radius..=scan_radius {
                                     let h = (cx.wrapping_mul(48_271i32)
                                         ^ cz.wrapping_mul(83_492_791i32)) as u32;
-                                    if h % 25 != 0 { continue; }
+                                    if h % 65 != 0 { continue; }
                                     let center_wx = (cx * 16 + 8) as f64;
                                     let center_wz = (cz * 16 + 8) as f64;
                                     if !world::biome::biome_at_world(center_wx, center_wz)
                                         .allows_pigs() { continue; }
-                                    let family_size = 2 + (h >> 8) % 3;
+                                    let family_size = 2 + (h >> 8) % 2;
                                     let base_bx = cx * 16 + ((h >> 6) & 0xF) as i32;
                                     let base_bz = cz * 16 + ((h >> 14) & 0xF) as i32;
                                     for i in 0..family_size {
@@ -875,6 +942,20 @@ fn main() {
                                             }
                                         }
                                     }
+                                }
+                            }
+                        }
+
+                        // Spawn test penguins near the player on the surface.
+                        if penguins.is_empty() {
+                            if let Some(def) = entity_registry.get("penguin") {
+                                let offsets: [(i32, i32); 5] = [(-3,-4),(3,-4),(0,-6),(-4,-2),(4,-2)];
+                                for (ox, oz) in offsets {
+                                    let bx = player.position[0] as i32 + ox;
+                                    let bz = player.position[2] as i32 + oz;
+                                    let sy = world.surface_height(bx, bz);
+                                    let y = if sy > 0 { sy as f32 } else { player.position[1] };
+                                    penguins.push(Penguin::new(bx as f32 + 0.5, y, bz as f32 + 0.5, def.clone()));
                                 }
                             }
                         }
@@ -943,20 +1024,24 @@ fn main() {
                         if lmb_held {
                             let chk_hit = nearest_entity_hit(&chickens, cam_pos, cam_dir, 5.0);
                             let pig_hit = nearest_entity_hit(&pigs,     cam_pos, cam_dir, 5.0);
-                            // Pick whichever entity type is closer
-                            let (ent_hit_t, hit_chicken, hit_pig_idx) = match (chk_hit, pig_hit) {
-                                (Some((ci, ct)), Some((pi, pt))) => if ct <= pt {
-                                    (ct, Some(ci), None)
-                                } else {
-                                    (pt, None, Some(pi))
-                                },
-                                (Some((ci, ct)), None) => (ct, Some(ci), None),
-                                (None, Some((pi, pt))) => (pt, None, Some(pi)),
-                                (None, None)           => (f32::MAX, None, None),
+                            let pen_hit = nearest_entity_hit(&penguins, cam_pos, cam_dir, 5.0);
+                            // Pick the closest entity across all types
+                            let candidates = [
+                                chk_hit.map(|(i, t)| (0u8, i, t)),
+                                pig_hit.map(|(i, t)| (1u8, i, t)),
+                                pen_hit.map(|(i, t)| (2u8, i, t)),
+                            ];
+                            let best = candidates.iter().flatten()
+                                .min_by(|a, b| a.2.partial_cmp(&b.2).unwrap());
+                            let (ent_hit_t, hit_chicken, hit_pig_idx, hit_penguin_idx) = match best {
+                                Some(&(0, i, t)) => (t, Some(i), None,    None),
+                                Some(&(1, i, t)) => (t, None,    Some(i), None),
+                                Some(&(2, i, t)) => (t, None,    None,    Some(i)),
+                                _                => (f32::MAX, None, None, None),
                             };
                             let blk_hit = world.raycast(cam_pos, cam_dir, 5.0);
 
-                            let hit_entity = if hit_chicken.is_some() || hit_pig_idx.is_some() {
+                            let hit_entity = if hit_chicken.is_some() || hit_pig_idx.is_some() || hit_penguin_idx.is_some() {
                                 match blk_hit {
                                     Some(b) => {
                                         let dx = b[0] as f32 + 0.5 - cam_pos[0];
@@ -973,8 +1058,9 @@ fn main() {
                                     let len = (cam_dir[0]*cam_dir[0] + cam_dir[2]*cam_dir[2])
                                         .sqrt().max(0.001);
                                     let push = [cam_dir[0]/len, 0.0, cam_dir[2]/len];
-                                    if let Some(ci) = hit_chicken { chickens[ci].take_hit(push); }
-                                    if let Some(pi) = hit_pig_idx { pigs[pi].take_hit(push); }
+                                    if let Some(ci) = hit_chicken     { chickens[ci].take_hit(push); }
+                                    if let Some(pi) = hit_pig_idx     { pigs[pi].take_hit(push); }
+                                    if let Some(pi) = hit_penguin_idx { penguins[pi].take_hit(push); }
                                     entity_hit_cooldown = 0.4;
                                 }
                                 dig_target   = None;
@@ -988,9 +1074,24 @@ fn main() {
                                 if let Some(hardness) = block.hardness() {
                                     dig_progress += delta_time;
                                     if dig_progress >= hardness {
-                                        let drops = block.drops(target[0], target[1], target[2]);
+                                        // For beds: find and remove the paired half, drop only one item.
+                                        let is_bed = block == BlockType::Bed;
+                                        let drops = if is_bed {
+                                            vec![ItemType::Bed]
+                                        } else {
+                                            block.drops(target[0], target[1], target[2])
+                                        };
                                         world.set_block_recorded(target[0], target[1], target[2],
                                             world::BlockType::Air);
+                                        if is_bed {
+                                            let [tx, ty, tz] = target;
+                                            for (dx, dz) in [(1,0),(-1,0),(0,1),(0,-1)] {
+                                                if world.get_block(tx+dx, ty, tz+dz) == BlockType::Bed {
+                                                    world.set_block_recorded(tx+dx, ty, tz+dz, BlockType::Air);
+                                                    break;
+                                                }
+                                            }
+                                        }
                                         if let Some(ref mut server) = net_server {
                                             server.broadcast_block_change(
                                                 target[0], target[1], target[2], 0,
@@ -1028,6 +1129,9 @@ fn main() {
                         for pig in &mut pigs {
                             pig.update(delta_time, |x, y, z| world.get_block(x, y, z));
                         }
+                        for penguin in &mut penguins {
+                            penguin.update(delta_time, |x, y, z| world.get_block(x, y, z));
+                        }
                         for chicken in chickens.iter().filter(|c| c.is_dead()) {
                             for item_type in chicken.drops() {
                                 item_entities.push(ItemEntity::new(
@@ -1046,6 +1150,15 @@ fn main() {
                             }
                         }
                         pigs.retain(|p| !p.is_dead());
+                        for penguin in penguins.iter().filter(|p| p.is_dead()) {
+                            for item_type in penguin.drops() {
+                                item_entities.push(ItemEntity::new(
+                                    penguin.position[0], penguin.position[1] + 0.5,
+                                    penguin.position[2], item_type,
+                                ));
+                            }
+                        }
+                        penguins.retain(|p| !p.is_dead());
 
                         item_entities.retain(|entity| {
                             let dx = entity.position[0] + 0.5 - player.position[0];
@@ -1109,10 +1222,10 @@ fn main() {
             let night_dark  = glam::Vec3::new(0.04, 0.05, 0.12);
             let sky_color   = day_blue * day_w + dusk_orange * dusk_w + night_dark * night_w;
 
-            let ambient_light    = 0.45 * day_w + 0.25 * dusk_w + 0.10 * night_w;
+            let ambient_light    = 0.62 * day_w + 0.30 * dusk_w + 0.10 * night_w;
             let active_alt       = altitude.abs();
             let dir_t            = smoothstep(0.0, 0.20, active_alt);
-            let dir_max          = if altitude >= 0.0 { 0.55 } else { 0.15 };
+            let dir_max          = if altitude >= 0.0 { 0.38 } else { 0.15 };
             let directional_light = dir_max * dir_t;
 
             // ── Camera (menu panorama only — not during game loading) ─────────
@@ -1201,6 +1314,7 @@ fn main() {
                     if game_state == GameState::Playing {
                         entity_renderer.draw_shadows(&chickens, &shadow_pass);
                         entity_renderer.draw_pig_shadows(&pigs, &shadow_pass);
+                        placed_object_renderer.draw_penguin_shadows(&penguins, &shadow_pass);
                     }
                 }
                 shadow_pass.end(fb_w, fb_h);
@@ -1248,6 +1362,7 @@ fn main() {
                     entity_renderer.draw_pigs(&pigs, &view, &projection,
                         fog_start, fog_end, fb_w as f32, fb_h as f32, sky_tex,
                         fog_override, fog_override_color);
+                    placed_object_renderer.draw_penguins(&penguins, &view, &projection);
                     let remote_peers: Vec<([f32; 3], f32)> = if let Some(ref server) = net_server {
                         server.remote_players()
                     } else if let Some(ref client) = net_client {
@@ -1266,6 +1381,27 @@ fn main() {
                     let cy = player.position[1].div_euclid(16.0) as i32;
                     let cz = player.position[2].div_euclid(16.0) as i32;
                     chunk_outline_renderer.draw_chunks(&[[cx, cy, cz]], &camera.view_matrix(), &projection);
+                }
+
+                if entity_outlines && game_state == GameState::Playing {
+                    use std::f32::consts::FRAC_PI_2;
+                    let mut boxes: Vec<([f32; 3], f32, f32, f32, f32, f32)> = Vec::new();
+                    for c in &chickens {
+                        let hw = c.def.hit_half_width * 2.0;
+                        let yr = c.yaw.to_radians();
+                        boxes.push((c.position, hw, c.def.height, hw, -(yr + FRAC_PI_2), FRAC_PI_2 - yr));
+                    }
+                    for p in &pigs {
+                        let hw = p.def.hit_half_width * 2.0;
+                        let yr = p.yaw.to_radians();
+                        boxes.push((p.position, hw, p.def.height, hw, -(yr + FRAC_PI_2), FRAC_PI_2 - yr));
+                    }
+                    for p in &penguins {
+                        let hw = p.def.hit_half_width * 2.0;
+                        let yr = p.yaw.to_radians();
+                        boxes.push((p.position, hw, p.def.height, hw, yr, yr + std::f32::consts::PI));
+                    }
+                    chunk_outline_renderer.draw_entity_boxes(&boxes, &camera.view_matrix(), &projection);
                 }
 
                 // Capture scene (terrain + entities) for water refraction, then draw water
@@ -1351,7 +1487,7 @@ fn main() {
 
                 if stats_enabled {
                     let ws = world.world_stats();
-                    stats_renderer.draw(fps_display, cpu_pct, mem_mb, &ws, drawn_chunks, win_w, win_h);
+                    stats_renderer.draw(fps_display, cpu_pct, mem_mb, player.position, &ws, drawn_chunks, win_w, win_h);
                 }
 
                 let time_of_day = (sun_angle / std::f32::consts::TAU * 24.0 + 6.0).rem_euclid(24.0);
@@ -1422,7 +1558,7 @@ fn main() {
 
             // Options menu overlays on top of everything else.
             if options_open {
-                options_menu.draw(fog_distance.as_idx(), chunk_radius_idx, outline_enabled, stats_enabled, hi_res, win_w, win_h);
+                options_menu.draw(fog_distance.as_idx(), chunk_radius_idx, outline_enabled, stats_enabled, hi_res, chunk_outlines, entity_outlines, win_w, win_h);
             }
 
             window.swap_buffers();

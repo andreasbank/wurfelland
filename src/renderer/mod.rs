@@ -78,3 +78,8 @@ pub use stats_renderer::StatsRenderer;
 
 pub mod chunk_outline_renderer;
 pub use chunk_outline_renderer::ChunkOutlineRenderer;
+
+pub mod gltf_model;
+
+pub mod placed_object_renderer;
+pub use placed_object_renderer::PlacedObjectRenderer;

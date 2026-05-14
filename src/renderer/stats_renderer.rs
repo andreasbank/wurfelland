@@ -19,6 +19,7 @@ const ACCENT_W:  f32 = 2.0;   // left/top accent bar width
 // Colours  [r, g, b, a]
 const COL_TITLE: [f32; 4] = [1.0, 0.75, 0.15, 1.0]; // amber
 const COL_PERF:  [f32; 4] = [0.85, 0.95, 1.0,  1.0]; // cool white
+const COL_POS:   [f32; 4] = [0.55, 1.0,  0.65, 1.0]; // soft green
 const COL_CHUNK: [f32; 4] = [1.0,  1.0,  0.55, 1.0]; // soft yellow
 const COL_SHAD:  [f32; 4] = [0.0,  0.0,  0.0,  0.72];// drop-shadow
 
@@ -134,18 +135,26 @@ impl StatsRenderer {
     pub fn draw(
         &self,
         fps: u32, cpu_pct: f32, mem_mb: u64,
+        player_pos: [f32; 3],
         stats: &WorldStats, drawn: usize,
         win_w: f32, win_h: f32,
     ) {
-        // Body stat lines use a fixed 16-char wide format:  label(10) + value(6)
+        // Body stat lines: fixed 16-char format — label(8) + value(8).
+        // 8 value chars fits "9999 MB", "99.9 GB", "-12345.1", etc. without overflow.
         let s = |label: &str, val: &str| -> TextTexture {
-            create_text_texture_scaled(&format!("{:<10}{:>6}", label, val), BODY_SCALE)
+            create_text_texture_scaled(&format!("{:<8}{:>8}", label, val), BODY_SCALE)
         };
+
+        // MEM: show as X.XGB so it always fits in 8 chars ("  0.1GB" .. "999.9GB")
+        let mem_str = format!("{:.1}GB", mem_mb as f32 / 1024.0);
 
         let title_tex    = create_text_texture_scaled("WURFELLAND", TITLE_SCALE);
         let fps_tex      = s("FPS",      &fps.to_string());
         let cpu_tex      = s("CPU",      &format!("{:.0}%", cpu_pct));
-        let mem_tex      = s("MEM",      &format!("{} MB", mem_mb));
+        let mem_tex      = s("MEM",      &mem_str);
+        let x_tex        = s("X",        &format!("{:.1}", player_pos[0]));
+        let y_tex        = s("Y",        &format!("{:.1}", player_pos[1]));
+        let z_tex        = s("Z",        &format!("{:.1}", player_pos[2]));
         let loaded_tex   = s("LOADED",   &stats.loaded.to_string());
         let meshed_tex   = s("MESHED",   &stats.meshed.to_string());
         let drawn_tex    = s("DRAWN",    &drawn.to_string());
@@ -162,6 +171,8 @@ impl StatsRenderer {
             + TITLE_LH                // title
             + SEP_H                   // separator
             + 3.0 * BODY_LH           // fps, cpu, mem
+            + SEP_H                   // separator
+            + 3.0 * BODY_LH           // x, y, z
             + SEP_H                   // separator
             + 6.0 * BODY_LH           // 6 chunk stats
             + PAD;
@@ -198,6 +209,17 @@ impl StatsRenderer {
         // Performance stats
         for tex in &[&fps_tex, &cpu_tex, &mem_tex] {
             self.draw_line(tex, tx, ty, win_w, win_h, COL_PERF);
+            ty += BODY_LH;
+        }
+
+        // Separator
+        self.draw_rect(tx, ty + 1.0, text_w, 1.0, win_w, win_h,
+                       [0.30, 0.52, 0.88, 0.45]);
+        ty += SEP_H;
+
+        // Position
+        for tex in &[&x_tex, &y_tex, &z_tex] {
+            self.draw_line(tex, tx, ty, win_w, win_h, COL_POS);
             ty += BODY_LH;
         }
 

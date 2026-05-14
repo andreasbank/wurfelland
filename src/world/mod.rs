@@ -23,4 +23,4 @@ pub mod entity_def;
 pub use entity_def::EntityRegistry;
 
 pub mod entity;
-pub use entity::{Chicken, Pig, nearest_entity_hit};
+pub use entity::{Chicken, Pig, Penguin, nearest_entity_hit};

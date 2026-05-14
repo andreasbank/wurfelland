@@ -296,6 +296,20 @@ impl ShadowPass {
         }
     }
 
+    /// Like draw_solid_mesh but uses DrawElements for indexed geometry (e.g. GLTF models).
+    pub fn draw_solid_mesh_indexed(&self, vao: u32, index_count: i32, model: &glam::Mat4) {
+        unsafe {
+            gl::UseProgram(self.solid_shader);
+            gl::UniformMatrix4fv(self.solid_ls_loc, 1, gl::FALSE,
+                self.light_space_matrices[self.current_cascade].as_ref().as_ptr());
+            gl::UniformMatrix4fv(self.solid_model_loc, 1, gl::FALSE, model.as_ref().as_ptr());
+            gl::BindVertexArray(vao);
+            gl::DrawElements(gl::TRIANGLES, index_count, gl::UNSIGNED_INT, std::ptr::null());
+            gl::BindVertexArray(0);
+            gl::UseProgram(self.shader);
+        }
+    }
+
     pub fn end(&self, fb_w: i32, fb_h: i32) {
         unsafe {
             gl::Disable(gl::POLYGON_OFFSET_FILL);
