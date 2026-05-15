@@ -300,15 +300,64 @@ impl TextButton {
     }
 }
 
+// ─── Slider ───────────────────────────────────────────────────────────────────
+// A horizontal draggable slider with a live percentage label.
+
+pub struct Slider {
+    pub id:     String,
+    pub bounds: (f32, f32, f32, f32),
+    pub value:  f32,
+    label_prefix: String,
+    cached_label: TextTexture,
+    cached_pct:   u32,
+}
+
+impl Slider {
+    pub fn new(id: &str, label_prefix: &str, value: f32, bounds: (f32, f32, f32, f32)) -> Self {
+        let v   = value.clamp(0.0, 1.0);
+        let pct = (v * 100.0) as u32;
+        Slider {
+            id:           id.to_string(),
+            bounds,
+            value:        v,
+            label_prefix: label_prefix.to_string(),
+            cached_label: create_text_texture_scaled(&format!("{}: {}%", label_prefix, pct), 2),
+            cached_pct:   pct,
+        }
+    }
+
+    pub fn set_value(&mut self, v: f32) {
+        self.value = v.clamp(0.0, 1.0);
+        let pct = (self.value * 100.0) as u32;
+        if pct != self.cached_pct {
+            self.cached_label = create_text_texture_scaled(
+                &format!("{}: {}%", self.label_prefix, pct), 2,
+            );
+            self.cached_pct = pct;
+        }
+    }
+
+    pub fn is_hit(&self, nx: f32, ny: f32) -> bool {
+        let (x0, y0, x1, y1) = self.bounds;
+        nx >= x0 && nx <= x1 && ny >= y0 && ny <= y1
+    }
+
+    pub fn value_at_x(&self, nx: f32) -> f32 {
+        let (x0, _, x1, _) = self.bounds;
+        ((nx - x0) / (x1 - x0)).clamp(0.0, 1.0)
+    }
+}
+
 // ─── Window ───────────────────────────────────────────────────────────────────
 // A 2D UI panel: optional full-screen overlay, optional title, and a list of
 // TextButtons. Call `handle_click` to get the id of the clicked button.
 
 pub struct Window {
     renderer:      UiRenderer,
-    overlay_alpha: f32,                                       // 0 = none, >0 = dark overlay
-    title:         Option<(TextTexture, (f32, f32, f32, f32))>,  // texture + draw bounds
+    overlay_alpha: f32,
+    title:         Option<(TextTexture, (f32, f32, f32, f32))>,
     pub buttons:   Vec<TextButton>,
+    pub sliders:   Vec<Slider>,
 }
 
 impl Window {
@@ -318,6 +367,7 @@ impl Window {
             overlay_alpha: 0.0,
             title:         None,
             buttons:       Vec::new(),
+            sliders:       Vec::new(),
         }
     }
 
@@ -333,21 +383,28 @@ impl Window {
         self
     }
 
-    pub fn add_button(&mut self, btn: TextButton) {
-        self.buttons.push(btn);
-    }
+    pub fn add_button(&mut self, btn: TextButton) { self.buttons.push(btn); }
+    pub fn add_slider(&mut self, s: Slider)       { self.sliders.push(s); }
 
-    /// Returns the `id` of the first button hit by the click, or `None`.
-    /// `nx` and `ny` are normalised screen coords in [0,1] (Y down).
     pub fn handle_click(&self, nx: f32, ny: f32) -> Option<&str> {
         self.buttons.iter()
             .find(|b| b.is_hit(nx, ny))
             .map(|b| b.id.as_str())
     }
 
-    /// Finds a button by id so its label can be updated before drawing.
+    /// Returns `(slider_id, new_value)` if `(nx, ny)` falls inside a slider track.
+    pub fn handle_drag(&self, nx: f32, ny: f32) -> Option<(&str, f32)> {
+        self.sliders.iter()
+            .find(|s| s.is_hit(nx, ny))
+            .map(|s| (s.id.as_str(), s.value_at_x(nx)))
+    }
+
     pub fn button_mut(&mut self, id: &str) -> Option<&mut TextButton> {
         self.buttons.iter_mut().find(|b| b.id == id)
+    }
+
+    pub fn slider_mut(&mut self, id: &str) -> Option<&mut Slider> {
+        self.sliders.iter_mut().find(|s| s.id == id)
     }
 
     /// Draw a flat coloured rectangle in [0,1] screen space (Y down).
@@ -380,6 +437,24 @@ impl Window {
 
         for btn in &self.buttons {
             btn.draw(&self.renderer, win_w, win_h);
+        }
+
+        for s in &self.sliders {
+            let (x0, y0, x1, y1) = s.bounds;
+            let pad = 0.005;
+            self.renderer.draw_rect(x0-pad, y0-pad, x1+pad, y1+pad, 0.8, 0.8, 0.8, 1.0);
+            self.renderer.draw_rect(x0, y0, x1, y1, 0.18, 0.18, 0.18, 1.0);
+            let fill_x = (x0 + (x1 - x0) * s.value).max(x0);
+            self.renderer.draw_rect(x0, y0, fill_x, y1, 0.35, 0.35, 0.75, 1.0);
+            // Knob: bright vertical bar at the fill position
+            let kh = (y1 - y0) * 0.2;
+            self.renderer.draw_rect(fill_x - 0.005, y0 - kh, fill_x + 0.005, y1 + kh, 1.0, 1.0, 1.0, 1.0);
+            // Centred label
+            let tw = s.cached_label.pixel_width  as f32 / win_w;
+            let th = s.cached_label.pixel_height as f32 / win_h;
+            let cx = (x0 + x1) / 2.0;
+            let cy = (y0 + y1) / 2.0;
+            self.renderer.draw_text(&s.cached_label, cx-tw/2.0, cy-th/2.0, cx+tw/2.0, cy+th/2.0);
         }
 
         unsafe {

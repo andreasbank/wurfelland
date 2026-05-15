@@ -50,7 +50,10 @@ mod net;
 use net::{GameServer, GameClient};
 use net::messages::{ServerMessage, SERVER_PORT};
 
-#[derive(PartialEq, Eq)]
+mod audio;
+use audio::AudioManager;
+
+#[derive(PartialEq, Eq, Clone, Copy)]
 enum GameState {
     MainMenu,
     LoadMenu,
@@ -158,6 +161,11 @@ fn main() {
 
         // ── Game state ────────────────────────────────────────────────────────
         let mut game_state = GameState::MainMenu;
+        let mut prev_game_state = game_state;
+        let mut audio = AudioManager::new();
+        let mut prev_menu_revealed = false;
+        let mut music_enabled = true;
+        let mut music_volume: f32 = 1.0;
         let mut menu_yaw: f32 = 0.0; // slowly panning bird's-eye camera
         let mut menu_reveal_timer: f32 = 0.0; // seconds elapsed since chunks finished loading
 
@@ -279,15 +287,27 @@ fn main() {
                             if first_mouse { first_mouse = false; }
                             else { player.process_mouse_movement(xoffset, yoffset); }
                         }
+                        if options_open && lmb_held {
+                            if let Some(v) = options_menu.handle_drag(last_mouse_x, last_mouse_y, win_w, win_h) {
+                                music_volume = v;
+                                audio.set_volume(music_volume);
+                            }
+                        }
                     }
 
                     glfw::WindowEvent::MouseButton(glfw::MouseButton::Button1, Action::Press, _) => {
+                        lmb_held = true;
+                        if options_open {
+                            if let Some(v) = options_menu.handle_drag(last_mouse_x, last_mouse_y, win_w, win_h) {
+                                music_volume = v;
+                                audio.set_volume(music_volume);
+                            }
+                        }
                         // Gameplay only — capture cursor and start digging.
                         if game_state == GameState::Playing && !paused && !bag_open
                             && !build_open && !options_open
                         {
                             window.set_cursor_mode(glfw::CursorMode::Disabled);
-                            lmb_held = true;
                         }
                     }
 
@@ -307,6 +327,16 @@ fn main() {
                                 Some("stats")          => stats_enabled   = !stats_enabled,
                                 Some("chunk_outlines")   => chunk_outlines   = !chunk_outlines,
                                 Some("entity_outlines")  => entity_outlines  = !entity_outlines,
+                                Some("music") => {
+                                    music_enabled = !music_enabled;
+                                    if music_enabled && menu_reveal_timer >= 2.0
+                                        && matches!(game_state, GameState::MainMenu | GameState::LoadMenu | GameState::MultiplayerMenu)
+                                    {
+                                        audio.play_music("assets/music/main_menu.ogg");
+                                    } else if !music_enabled {
+                                        audio.stop_music();
+                                    }
+                                }
                                 Some("res") => {
                                     hi_res = !hi_res;
                                     let (nw, nh) = if hi_res { (1600, 1200) } else { (800, 600) };
@@ -775,6 +805,21 @@ fn main() {
 
                     _ => {}
                 }
+            }
+
+            // ── Audio state transitions ───────────────────────────────────────
+            if prev_game_state != game_state {
+                let was_menu = matches!(prev_game_state,
+                    GameState::MainMenu | GameState::LoadMenu |
+                    GameState::MultiplayerMenu | GameState::LoadingMenu);
+                let is_menu = matches!(game_state,
+                    GameState::MainMenu | GameState::LoadMenu | GameState::MultiplayerMenu);
+                if was_menu && !is_menu {
+                    audio.stop_music();
+                } else if !was_menu && is_menu {
+                    audio.play_music("assets/music/main_menu.ogg");
+                }
+                prev_game_state = game_state;
             }
 
             // ── State-specific updates ─────────────────────────────────────────
@@ -1246,6 +1291,13 @@ fn main() {
                 menu_reveal_timer += delta_time;
             }
             let menu_revealed = menu_reveal_timer >= 2.0;
+            if menu_revealed && !prev_menu_revealed
+                && music_enabled
+                && matches!(game_state, GameState::MainMenu | GameState::LoadMenu | GameState::MultiplayerMenu)
+            {
+                audio.play_music("assets/music/main_menu.ogg");
+            }
+            prev_menu_revealed = menu_revealed;
             let show_3d = game_state == GameState::Playing || menu_revealed;
 
             // ── 3D render ─────────────────────────────────────────────────────
@@ -1558,7 +1610,7 @@ fn main() {
 
             // Options menu overlays on top of everything else.
             if options_open {
-                options_menu.draw(fog_distance.as_idx(), chunk_radius_idx, outline_enabled, stats_enabled, hi_res, chunk_outlines, entity_outlines, win_w, win_h);
+                options_menu.draw(fog_distance.as_idx(), chunk_radius_idx, outline_enabled, stats_enabled, hi_res, chunk_outlines, entity_outlines, music_enabled, music_volume, win_w, win_h);
             }
 
             window.swap_buffers();
