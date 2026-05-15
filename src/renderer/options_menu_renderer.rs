@@ -44,8 +44,10 @@ impl OptionsMenuRenderer {
             &["MUSIC: OFF", "MUSIC: ON"], (0.30, 0.42, 0.70, 0.52)));
         audio_window.add_slider(Slider::new("volume", "MUSIC VOL", 1.0,
             (0.30, 0.55, 0.70, 0.64)));
+        audio_window.add_slider(Slider::new("sfx_volume", "SFX VOL", 1.0,
+            (0.30, 0.67, 0.70, 0.76)));
         audio_window.add_button(TextButton::new("back", "BACK",
-            (0.35, 0.70, 0.65, 0.78)));
+            (0.35, 0.82, 0.65, 0.90)));
 
         OptionsMenuRenderer { window, audio_window, audio_open: false }
     }
@@ -55,12 +57,13 @@ impl OptionsMenuRenderer {
         fog_idx: usize, chunk_radius_idx: usize,
         outline_enabled: bool, stats_enabled: bool, hi_res: bool,
         chunk_outlines: bool, entity_outlines: bool,
-        music_enabled: bool, music_volume: f32,
+        music_enabled: bool, music_volume: f32, sfx_volume: f32,
         win_w: f32, win_h: f32,
     ) {
         if self.audio_open {
             self.audio_window.button_mut("music").unwrap().set_label(music_enabled as usize);
             self.audio_window.slider_mut("volume").unwrap().set_value(music_volume);
+            self.audio_window.slider_mut("sfx_volume").unwrap().set_value(sfx_volume);
             self.audio_window.draw(win_w, win_h);
         } else {
             self.window.button_mut("fog").unwrap().set_label(fog_idx);
@@ -93,11 +96,15 @@ impl OptionsMenuRenderer {
         }
     }
 
-    /// Returns `Some(new_volume)` while the cursor drags the volume slider.
-    pub fn handle_drag(&self, mx: f32, my: f32, win_w: f32, win_h: f32) -> Option<f32> {
+    /// Returns `Some(("volume", v))` or `Some(("sfx_volume", v))` while dragging
+    /// the corresponding slider, `None` otherwise.
+    pub fn handle_drag(&self, mx: f32, my: f32, win_w: f32, win_h: f32) -> Option<(&'static str, f32)> {
         if !self.audio_open { return None; }
         self.audio_window.handle_drag(mx / win_w, my / win_h)
-            .filter(|(id, _)| *id == "volume")
-            .map(|(_, v)| v)
+            .and_then(|(id, v)| match id {
+                "volume"     => Some(("volume", v)),
+                "sfx_volume" => Some(("sfx_volume", v)),
+                _            => None,
+            })
     }
 }

@@ -109,6 +109,13 @@ impl BlockType {
         }
     }
 
+    pub fn hit_sound(&self) -> Option<&'static str> {
+        match self {
+            BlockType::Dirt | BlockType::Grass => Some("assets/sounds/UI_Quirky_53.mp3"),
+            _ => None,
+        }
+    }
+
     #[allow(dead_code)]
     pub fn to_net_id(self) -> u8 {
         match self {

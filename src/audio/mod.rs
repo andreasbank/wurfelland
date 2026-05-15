@@ -3,8 +3,9 @@ use std::fs::File;
 use std::io::BufReader;
 
 pub struct AudioManager {
-    inner:  Option<Inner>,
-    volume: f32,
+    inner:      Option<Inner>,
+    volume:     f32,
+    sfx_volume: f32,
 }
 
 struct Inner {
@@ -25,7 +26,7 @@ impl AudioManager {
                 None
             }
         };
-        Self { inner, volume: 1.0 }
+        Self { inner, volume: 1.0, sfx_volume: 1.0 }
     }
 
     pub fn play_music(&mut self, path: &str) {
@@ -63,6 +64,10 @@ impl AudioManager {
         }
     }
 
+    pub fn set_sfx_volume(&mut self, v: f32) {
+        self.sfx_volume = v.clamp(0.0, 1.0);
+    }
+
     pub fn play_sound(&self, path: &str) {
         let Some(inner) = &self.inner else { return; };
         let file = match File::open(path) {
@@ -74,7 +79,11 @@ impl AudioManager {
             Err(e) => { eprintln!("[audio] Cannot decode '{path}': {e}"); return; }
         };
         match Sink::try_new(&inner.handle) {
-            Ok(sink) => { sink.append(source); sink.detach(); }
+            Ok(sink) => {
+                sink.set_volume(self.sfx_volume);
+                sink.append(source);
+                sink.detach();
+            }
             Err(e) => eprintln!("[audio] Sink error: {e}"),
         }
     }

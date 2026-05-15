@@ -169,6 +169,7 @@ fn main() {
         let mut prev_menu_revealed = false;
         let mut music_enabled = true;
         let mut music_volume: f32 = 1.0;
+        let mut sfx_volume: f32 = 1.0;
         let mut menu_yaw: f32 = 0.0; // slowly panning bird's-eye camera
         let mut menu_reveal_timer: f32 = 0.0; // seconds elapsed since chunks finished loading
 
@@ -232,6 +233,7 @@ fn main() {
         let mut lmb_held = false;
         let mut dig_target: Option<[i32; 3]> = None;
         let mut dig_progress: f32 = 0.0;
+        let mut dig_sound_timer: f32 = 0.0;
         let mut swing_time: f32 = 0.0;
         let mut entity_hit_cooldown: f32 = 0.0;
 
@@ -291,9 +293,10 @@ fn main() {
                             else { player.process_mouse_movement(xoffset, yoffset); }
                         }
                         if options_open && lmb_held {
-                            if let Some(v) = options_menu.handle_drag(last_mouse_x, last_mouse_y, win_w, win_h) {
-                                music_volume = v;
-                                audio.set_volume(music_volume);
+                            match options_menu.handle_drag(last_mouse_x, last_mouse_y, win_w, win_h) {
+                                Some(("volume", v))     => { music_volume = v; audio.set_volume(v); }
+                                Some(("sfx_volume", v)) => { sfx_volume = v; audio.set_sfx_volume(v); }
+                                _ => {}
                             }
                         }
                     }
@@ -301,9 +304,10 @@ fn main() {
                     glfw::WindowEvent::MouseButton(glfw::MouseButton::Button1, Action::Press, _) => {
                         lmb_held = true;
                         if options_open {
-                            if let Some(v) = options_menu.handle_drag(last_mouse_x, last_mouse_y, win_w, win_h) {
-                                music_volume = v;
-                                audio.set_volume(music_volume);
+                            match options_menu.handle_drag(last_mouse_x, last_mouse_y, win_w, win_h) {
+                                Some(("volume", v))     => { music_volume = v; audio.set_volume(v); }
+                                Some(("sfx_volume", v)) => { sfx_volume = v; audio.set_sfx_volume(v); }
+                                _ => {}
                             }
                         }
                         // Gameplay only — capture cursor and start digging.
@@ -1131,11 +1135,19 @@ fn main() {
                             } else if let Some(target) = blk_hit {
                                 let block = world.get_block(target[0], target[1], target[2]);
                                 if Some(target) != dig_target {
-                                    dig_target   = Some(target);
-                                    dig_progress = 0.0;
+                                    dig_target      = Some(target);
+                                    dig_progress    = 0.0;
+                                    dig_sound_timer = 0.0;
                                 }
                                 if let Some(hardness) = block.hardness() {
-                                    dig_progress += delta_time;
+                                    dig_progress    += delta_time;
+                                    dig_sound_timer -= delta_time;
+                                    if dig_sound_timer <= 0.0 {
+                                        if let Some(path) = block.hit_sound() {
+                                            audio.play_sound(path);
+                                        }
+                                        dig_sound_timer = 0.4;
+                                    }
                                     if dig_progress >= hardness {
                                         // For beds: find and remove the paired half, drop only one item.
                                         let is_bed = block == BlockType::Bed;
@@ -1634,7 +1646,7 @@ fn main() {
 
             // Options menu overlays on top of everything else.
             if options_open {
-                options_menu.draw(fog_distance.as_idx(), chunk_radius_idx, outline_enabled, stats_enabled, hi_res, chunk_outlines, entity_outlines, music_enabled, music_volume, win_w, win_h);
+                options_menu.draw(fog_distance.as_idx(), chunk_radius_idx, outline_enabled, stats_enabled, hi_res, chunk_outlines, entity_outlines, music_enabled, music_volume, sfx_volume, win_w, win_h);
             }
 
             window.swap_buffers();
