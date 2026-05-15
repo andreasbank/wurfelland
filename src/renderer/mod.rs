@@ -83,3 +83,6 @@ pub mod gltf_model;
 
 pub mod placed_object_renderer;
 pub use placed_object_renderer::PlacedObjectRenderer;
+
+pub mod credits_menu_renderer;
+pub use credits_menu_renderer::CreditsMenuRenderer;

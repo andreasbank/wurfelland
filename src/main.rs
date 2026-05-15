@@ -45,6 +45,7 @@ use renderer::LoadMenuRenderer;
 use renderer::StatsRenderer;
 use renderer::ChunkOutlineRenderer;
 use renderer::PlacedObjectRenderer;
+use renderer::CreditsMenuRenderer;
 
 mod net;
 use net::{GameServer, GameClient};
@@ -58,6 +59,7 @@ enum GameState {
     MainMenu,
     LoadMenu,
     MultiplayerMenu,
+    CreditsMenu,
     LoadingGame,
     LoadingMenu, // transitioning from Playing back to the main menu
     Playing,
@@ -147,6 +149,7 @@ fn main() {
         let mut options_menu    = OptionsMenuRenderer::new();
         let underwater_renderer = UnderwaterRenderer::new();
         let mut load_menu       = LoadMenuRenderer::new();
+        let mut credits_menu    = CreditsMenuRenderer::new();
         let stats_renderer         = StatsRenderer::new();
         let chunk_outline_renderer    = ChunkOutlineRenderer::new();
         let placed_object_renderer    = PlacedObjectRenderer::new();
@@ -374,8 +377,14 @@ fn main() {
                                         game_state = GameState::LoadMenu;
                                     }
                                     Some("multiplayer") => game_state = GameState::MultiplayerMenu,
+                                    Some("credits") => game_state = GameState::CreditsMenu,
                                     Some("exit") => window.set_should_close(true),
                                     _ => {}
+                                }
+                            }
+                            GameState::CreditsMenu => {
+                                if credits_menu.handle_click(last_mouse_x, last_mouse_y, win_w, win_h) == Some("back") {
+                                    game_state = GameState::MainMenu;
                                 }
                             }
                             GameState::LoadMenu => {
@@ -679,6 +688,12 @@ fn main() {
                             }
                             continue;
                         }
+                        if game_state == GameState::CreditsMenu {
+                            if key == Key::Escape && action == Action::Press {
+                                game_state = GameState::MainMenu;
+                            }
+                            continue;
+                        }
                         if game_state != GameState::Playing {
                             // Escape closes the window from the main menu / loading screen
                             if key == Key::Escape && action == Action::Press {
@@ -794,7 +809,9 @@ fn main() {
                     }
 
                     glfw::WindowEvent::Scroll(_, y) => {
-                        if game_state == GameState::Playing && !bag_open && !console_open {
+                        if game_state == GameState::CreditsMenu {
+                            credits_menu.handle_scroll(y as f32);
+                        } else if game_state == GameState::Playing && !bag_open && !console_open {
                             if y < 0.0 {
                                 selected_slot = (selected_slot + 1) % 9;
                             } else if y > 0.0 {
@@ -811,9 +828,10 @@ fn main() {
             if prev_game_state != game_state {
                 let was_menu = matches!(prev_game_state,
                     GameState::MainMenu | GameState::LoadMenu |
-                    GameState::MultiplayerMenu | GameState::LoadingMenu);
+                    GameState::MultiplayerMenu | GameState::CreditsMenu | GameState::LoadingMenu);
                 let is_menu = matches!(game_state,
-                    GameState::MainMenu | GameState::LoadMenu | GameState::MultiplayerMenu);
+                    GameState::MainMenu | GameState::LoadMenu |
+                    GameState::MultiplayerMenu | GameState::CreditsMenu);
                 if was_menu && !is_menu {
                     audio.stop_music();
                 } else if !was_menu && is_menu {
@@ -824,7 +842,7 @@ fn main() {
 
             // ── State-specific updates ─────────────────────────────────────────
             match game_state {
-                GameState::MainMenu => {
+                GameState::MainMenu | GameState::CreditsMenu => {
                     let menu_ready = world.meshed_surface_chunk_count() >= MENU_CHUNK_TARGET;
                     if menu_ready {
                         world.update([8.0, 80.0, 8.0]);
@@ -1128,6 +1146,9 @@ fn main() {
                                         };
                                         world.set_block_recorded(target[0], target[1], target[2],
                                             world::BlockType::Air);
+                                        if let Some(path) = block.break_sound() {
+                                            audio.play_sound(path);
+                                        }
                                         if is_bed {
                                             let [tx, ty, tz] = target;
                                             for (dx, dz) in [(1,0),(-1,0),(0,1),(0,-1)] {
@@ -1274,7 +1295,7 @@ fn main() {
             let directional_light = dir_max * dir_t;
 
             // ── Camera (menu panorama only — not during game loading) ─────────
-            if matches!(game_state, GameState::MainMenu | GameState::LoadMenu | GameState::MultiplayerMenu) {
+            if matches!(game_state, GameState::MainMenu | GameState::LoadMenu | GameState::MultiplayerMenu | GameState::CreditsMenu) {
                 menu_yaw += delta_time * 0.006;
                 camera.position = glam::Vec3::new(8.0, 80.0, 8.0);
                 camera.front    = glam::Vec3::new(
@@ -1287,13 +1308,13 @@ fn main() {
             let projection = camera.projection_matrix();
 
             let menu_ready = world.meshed_surface_chunk_count() >= MENU_CHUNK_TARGET;
-            if menu_ready && matches!(game_state, GameState::MainMenu | GameState::LoadMenu | GameState::MultiplayerMenu) {
+            if menu_ready && matches!(game_state, GameState::MainMenu | GameState::LoadMenu | GameState::MultiplayerMenu | GameState::CreditsMenu) {
                 menu_reveal_timer += delta_time;
             }
             let menu_revealed = menu_reveal_timer >= 2.0;
             if menu_revealed && !prev_menu_revealed
                 && music_enabled
-                && matches!(game_state, GameState::MainMenu | GameState::LoadMenu | GameState::MultiplayerMenu)
+                && matches!(game_state, GameState::MainMenu | GameState::LoadMenu | GameState::MultiplayerMenu | GameState::CreditsMenu)
             {
                 audio.play_music("assets/music/main_menu.ogg");
             }
@@ -1591,6 +1612,9 @@ fn main() {
                         main_menu.draw_loading_screen(progress, win_w, win_h);
                     }
                     mp_menu.draw(win_w, win_h);
+                }
+                GameState::CreditsMenu => {
+                    credits_menu.draw(win_w, win_h, fb_w, fb_h);
                 }
                 GameState::LoadingGame => {
                     // Progress = how many of the 3×3 spawn chunks are meshed.

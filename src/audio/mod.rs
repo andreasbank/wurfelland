@@ -63,6 +63,22 @@ impl AudioManager {
         }
     }
 
+    pub fn play_sound(&self, path: &str) {
+        let Some(inner) = &self.inner else { return; };
+        let file = match File::open(path) {
+            Ok(f) => f,
+            Err(e) => { eprintln!("[audio] Cannot open '{path}': {e}"); return; }
+        };
+        let source = match Decoder::new(BufReader::new(file)) {
+            Ok(d) => d,
+            Err(e) => { eprintln!("[audio] Cannot decode '{path}': {e}"); return; }
+        };
+        match Sink::try_new(&inner.handle) {
+            Ok(sink) => { sink.append(source); sink.detach(); }
+            Err(e) => eprintln!("[audio] Sink error: {e}"),
+        }
+    }
+
     pub fn stop_music(&mut self) {
         if let Some(inner) = &mut self.inner {
             if let Some(s) = inner.sink.take() { s.stop(); }

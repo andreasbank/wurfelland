@@ -13,10 +13,11 @@ impl MainMenuRenderer {
         let title   = create_text_texture_scaled("WURFELLAND", 4);
         let loading_label = create_text_texture_scaled("LOADING", 3);
         let buttons = vec![
-            TextButton::new("singleplayer", "SINGLEPLAYER", (0.30, 0.42, 0.70, 0.50)),
-            TextButton::new("load_game",    "LOAD GAME",    (0.30, 0.53, 0.70, 0.61)),
-            TextButton::new("multiplayer",  "MULTIPLAYER",  (0.30, 0.64, 0.70, 0.72)),
-            TextButton::new("options",      "OPTIONS",      (0.30, 0.75, 0.70, 0.83)),
+            TextButton::new("singleplayer", "SINGLEPLAYER", (0.30, 0.39, 0.70, 0.46)),
+            TextButton::new("load_game",    "LOAD GAME",    (0.30, 0.48, 0.70, 0.55)),
+            TextButton::new("multiplayer",  "MULTIPLAYER",  (0.30, 0.57, 0.70, 0.64)),
+            TextButton::new("options",      "OPTIONS",      (0.30, 0.66, 0.70, 0.73)),
+            TextButton::new("credits",      "CREDITS",      (0.30, 0.79, 0.70, 0.86)),
             TextButton::new("exit",         "QUIT GAME",    (0.30, 0.88, 0.70, 0.96)),
         ];
         MainMenuRenderer { renderer, title, loading_label, buttons }
@@ -33,7 +34,7 @@ impl MainMenuRenderer {
         }
 
         // Semi-transparent dark panel behind the buttons
-        self.renderer.draw_rect(0.28, 0.36, 0.72, 0.99, 0.0, 0.0, 0.0, 0.58);
+        self.renderer.draw_rect(0.28, 0.32, 0.72, 0.99, 0.0, 0.0, 0.0, 0.58);
 
         // Title
         let tw = self.title.pixel_width  as f32 / win_w;
@@ -46,9 +47,9 @@ impl MainMenuRenderer {
             btn.draw(&self.renderer, win_w, win_h);
         }
 
-        // Dim the non-exit buttons while the world is still loading
+        // Dim the game/options buttons while the world is still loading
         if !ready {
-            self.renderer.draw_rect(0.28, 0.40, 0.72, 0.85, 0.0, 0.0, 0.0, 0.50);
+            self.renderer.draw_rect(0.28, 0.37, 0.72, 0.75, 0.0, 0.0, 0.0, 0.50);
         }
 
         // World-loading progress bar — hidden once fully loaded
@@ -101,7 +102,7 @@ impl MainMenuRenderer {
         let nx = mx / win_w;
         let ny = my / win_h;
         let hit = self.buttons.iter().find(|b| b.is_hit(nx, ny)).map(|b| b.id.as_str());
-        if !ready && hit != Some("exit") { return None; }
+        if !ready && hit != Some("exit") && hit != Some("credits") { return None; }
         hit
     }
 }
