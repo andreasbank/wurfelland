@@ -2,7 +2,7 @@ use std::mem;
 use std::os::raw::c_void;
 use std::f32::consts::FRAC_PI_2;
 use crate::renderer::utils::{compile_shader, link_program};
-use crate::renderer::shadow_pass::ShadowPass;
+use crate::renderer::shadow_pass::{ShadowPass, NUM_CASCADES, CASCADE_ENDS};
 use crate::world::entity::{Chicken, Pig};
 
 // Vertex format: [x, y, z, r, g, b] — 6 floats
@@ -114,12 +114,20 @@ pub struct EntityRenderer {
     pig_vbo: u32,
     shader: u32,
     mvp_loc: i32,
+    model_loc: i32,
     fog_start_loc: i32,
     fog_end_loc: i32,
     fog_override_loc: i32,
     fog_color_override_loc: i32,
     screen_size_loc: i32,
     sky_sampler_loc: i32,
+    ambient_light_loc: i32,
+    directional_light_loc: i32,
+    light_dir_loc: i32,
+    shadow_maps_loc: i32,
+    light_space_loc: i32,
+    cascade_ends_loc: i32,
+    texel_sizes_loc: i32,
 }
 
 impl EntityRenderer {
@@ -159,60 +167,139 @@ impl EntityRenderer {
                 layout(location = 0) in vec3 aPos;
                 layout(location = 1) in vec3 aColor;
                 uniform mat4 mvp;
+                uniform mat4 u_model;
                 out vec3 vColor;
+                out vec3 vWorldPos;
                 out float fragDist;
                 void main() {
                     gl_Position = mvp * vec4(aPos, 1.0);
-                    vColor = aColor;
-                    fragDist = gl_Position.w;
+                    vColor      = aColor;
+                    fragDist    = gl_Position.w;
+                    vWorldPos   = (u_model * vec4(aPos, 1.0)).xyz;
                 }"#).unwrap();
 
             let frag = compile_shader(gl::FRAGMENT_SHADER, r#"#version 330 core
+                #define NUM_CASCADES 3
                 in vec3 vColor;
+                in vec3 vWorldPos;
                 in float fragDist;
                 out vec4 FragColor;
-                uniform sampler2D u_sky_sampler;
-                uniform vec2 u_screen_size;
+                uniform sampler2D      u_sky_sampler;
+                uniform sampler2DArray u_shadow_maps;
+                uniform vec2  u_screen_size;
                 uniform float u_fog_start;
                 uniform float u_fog_end;
                 uniform float u_fog_override;
                 uniform vec3  u_fog_color_override;
+                uniform float u_ambient_light;
+                uniform float u_directional_light;
+                uniform vec3  u_light_dir;
+                uniform mat4  u_light_space[NUM_CASCADES];
+                uniform float u_cascade_ends[NUM_CASCADES];
+                uniform float u_texel_sizes[NUM_CASCADES];
+
+                float calcShadow(vec3 worldPos, float viewDist) {
+                    int cascade = NUM_CASCADES - 1;
+                    for (int i = 0; i < NUM_CASCADES - 1; i++) {
+                        if (viewDist < u_cascade_ends[i]) { cascade = i; break; }
+                    }
+                    vec3 offset = worldPos + vec3(0.0, u_texel_sizes[cascade], 0.0);
+                    vec4 fragPosLS  = u_light_space[cascade] * vec4(offset, 1.0);
+                    vec3 projCoords = fragPosLS.xyz / fragPosLS.w * 0.5 + 0.5;
+                    if (projCoords.z > 1.0) return 0.0;
+                    float currentDepth = projCoords.z - 0.001;
+                    float shadow = 0.0;
+                    const vec2 texelSize = vec2(1.0 / 2048.0);
+                    for (int x = -1; x <= 1; ++x)
+                        for (int y = -1; y <= 1; ++y)
+                            shadow += currentDepth > texture(u_shadow_maps,
+                                vec3(projCoords.xy + vec2(x, y) * texelSize, cascade)).r ? 1.0 : 0.0;
+                    return shadow / 9.0;
+                }
+
                 void main() {
-                    vec2 screenUV = gl_FragCoord.xy / u_screen_size;
-                    vec3 skyFog = texture(u_sky_sampler, screenUV).rgb;
-                    vec3 fogColor = mix(skyFog, u_fog_color_override, u_fog_override);
+                    vec2 screenUV  = gl_FragCoord.xy / u_screen_size;
+                    vec3 skyFog    = texture(u_sky_sampler, screenUV).rgb;
+                    vec3 fogColor  = mix(skyFog, u_fog_color_override, u_fog_override);
                     float fog_factor = clamp((fragDist - u_fog_start) / (u_fog_end - u_fog_start), 0.0, 1.0);
-                    FragColor = vec4(mix(vColor, fogColor, fog_factor), 1.0);
+                    float shadow   = calcShadow(vWorldPos, fragDist);
+                    float light    = u_ambient_light + u_directional_light * (1.0 - shadow);
+                    FragColor = vec4(mix(vColor * light, fogColor, fog_factor), 1.0);
                 }
             "#).unwrap();
 
             let shader = link_program(vert, frag).unwrap();
-            let mvp_loc          = gl::GetUniformLocation(shader, c"mvp".as_ptr());
+            let mvp_loc                = gl::GetUniformLocation(shader, c"mvp".as_ptr());
+            let model_loc              = gl::GetUniformLocation(shader, c"u_model".as_ptr());
             let fog_start_loc          = gl::GetUniformLocation(shader, c"u_fog_start".as_ptr());
             let fog_end_loc            = gl::GetUniformLocation(shader, c"u_fog_end".as_ptr());
             let fog_override_loc       = gl::GetUniformLocation(shader, c"u_fog_override".as_ptr());
             let fog_color_override_loc = gl::GetUniformLocation(shader, c"u_fog_color_override".as_ptr());
             let screen_size_loc        = gl::GetUniformLocation(shader, c"u_screen_size".as_ptr());
             let sky_sampler_loc        = gl::GetUniformLocation(shader, c"u_sky_sampler".as_ptr());
+            let ambient_light_loc      = gl::GetUniformLocation(shader, c"u_ambient_light".as_ptr());
+            let directional_light_loc  = gl::GetUniformLocation(shader, c"u_directional_light".as_ptr());
+            let light_dir_loc          = gl::GetUniformLocation(shader, c"u_light_dir".as_ptr());
+            let shadow_maps_loc        = gl::GetUniformLocation(shader, c"u_shadow_maps".as_ptr());
+            let light_space_loc        = gl::GetUniformLocation(shader, c"u_light_space".as_ptr());
+            let cascade_ends_loc       = gl::GetUniformLocation(shader, c"u_cascade_ends".as_ptr());
+            let texel_sizes_loc        = gl::GetUniformLocation(shader, c"u_texel_sizes".as_ptr());
 
-            EntityRenderer { vao, vbo, pig_vao, pig_vbo, shader, mvp_loc, fog_start_loc, fog_end_loc, fog_override_loc, fog_color_override_loc, screen_size_loc, sky_sampler_loc }
+            EntityRenderer {
+                vao, vbo, pig_vao, pig_vbo, shader,
+                mvp_loc, model_loc,
+                fog_start_loc, fog_end_loc, fog_override_loc, fog_color_override_loc,
+                screen_size_loc, sky_sampler_loc,
+                ambient_light_loc, directional_light_loc, light_dir_loc,
+                shadow_maps_loc, light_space_loc, cascade_ends_loc, texel_sizes_loc,
+            }
+        }
+    }
+
+    fn bind_frame_uniforms(
+        &self,
+        fog_start: f32, fog_end: f32, screen_w: f32, screen_h: f32, sky_tex: u32,
+        fog_override: f32, fog_color_override: glam::Vec3,
+        ambient_light: f32, directional_light: f32, sun_dir: glam::Vec3,
+        shadow_tex: u32, light_space: &[glam::Mat4; NUM_CASCADES],
+        texel_sizes: &[f32; NUM_CASCADES],
+    ) {
+        unsafe {
+            gl::UseProgram(self.shader);
+            gl::Uniform1f(self.fog_start_loc,  fog_start);
+            gl::Uniform1f(self.fog_end_loc,    fog_end);
+            gl::Uniform1f(self.fog_override_loc, fog_override);
+            gl::Uniform3f(self.fog_color_override_loc, fog_color_override.x, fog_color_override.y, fog_color_override.z);
+            gl::Uniform2f(self.screen_size_loc, screen_w, screen_h);
+            gl::Uniform1f(self.ambient_light_loc,     ambient_light);
+            gl::Uniform1f(self.directional_light_loc, directional_light);
+            gl::Uniform3f(self.light_dir_loc, sun_dir.x, sun_dir.y, sun_dir.z);
+            gl::Uniform1fv(self.cascade_ends_loc,  NUM_CASCADES as i32, CASCADE_ENDS.as_ptr());
+            gl::Uniform1fv(self.texel_sizes_loc,   NUM_CASCADES as i32, texel_sizes.as_ptr());
+            gl::UniformMatrix4fv(self.light_space_loc, NUM_CASCADES as i32, gl::FALSE,
+                light_space[0].as_ref().as_ptr());
+            // Texture unit 4: sky (fog colour)
+            gl::Uniform1i(self.sky_sampler_loc, 4);
+            gl::ActiveTexture(gl::TEXTURE4);
+            gl::BindTexture(gl::TEXTURE_2D, sky_tex);
+            // Texture unit 5: shadow map array
+            gl::Uniform1i(self.shadow_maps_loc, 5);
+            gl::ActiveTexture(gl::TEXTURE5);
+            gl::BindTexture(gl::TEXTURE_2D_ARRAY, shadow_tex);
         }
     }
 
     pub fn draw_chickens(&self, chickens: &[Chicken], view: &glam::Mat4, projection: &glam::Mat4,
                          fog_start: f32, fog_end: f32, screen_w: f32, screen_h: f32, sky_tex: u32,
-                         fog_override: f32, fog_color_override: glam::Vec3) {
+                         fog_override: f32, fog_color_override: glam::Vec3,
+                         ambient_light: f32, directional_light: f32, sun_dir: glam::Vec3,
+                         shadow_tex: u32, light_space: &[glam::Mat4; NUM_CASCADES],
+                         texel_sizes: &[f32; NUM_CASCADES]) {
         unsafe {
             gl::Disable(gl::CULL_FACE);
-            gl::UseProgram(self.shader);
-            gl::Uniform1f(self.fog_start_loc, fog_start);
-            gl::Uniform1f(self.fog_end_loc, fog_end);
-            gl::Uniform1f(self.fog_override_loc, fog_override);
-            gl::Uniform3f(self.fog_color_override_loc, fog_color_override.x, fog_color_override.y, fog_color_override.z);
-            gl::Uniform2f(self.screen_size_loc, screen_w, screen_h);
-            gl::Uniform1i(self.sky_sampler_loc, 4);
-            gl::ActiveTexture(gl::TEXTURE4);
-            gl::BindTexture(gl::TEXTURE_2D, sky_tex);
+            self.bind_frame_uniforms(fog_start, fog_end, screen_w, screen_h, sky_tex,
+                fog_override, fog_color_override, ambient_light, directional_light, sun_dir,
+                shadow_tex, light_space, texel_sizes);
             gl::BindVertexArray(self.vao);
 
             for chicken in chickens {
@@ -222,6 +309,7 @@ impl EntityRenderer {
                     * glam::Mat4::from_rotation_y(rot_y);
                 let mvp = *projection * *view * model;
 
+                gl::UniformMatrix4fv(self.model_loc, 1, gl::FALSE, model.to_cols_array().as_ptr());
                 // Static parts: body + head + beak + wattle (4 boxes = 144 verts)
                 gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE, mvp.to_cols_array().as_ptr());
                 gl::DrawArrays(gl::TRIANGLES, BODY_OFF, VPB * 4);
@@ -257,18 +345,15 @@ impl EntityRenderer {
 
     pub fn draw_pigs(&self, pigs: &[Pig], view: &glam::Mat4, projection: &glam::Mat4,
                      fog_start: f32, fog_end: f32, screen_w: f32, screen_h: f32, sky_tex: u32,
-                     fog_override: f32, fog_color_override: glam::Vec3) {
+                     fog_override: f32, fog_color_override: glam::Vec3,
+                     ambient_light: f32, directional_light: f32, sun_dir: glam::Vec3,
+                     shadow_tex: u32, light_space: &[glam::Mat4; NUM_CASCADES],
+                     texel_sizes: &[f32; NUM_CASCADES]) {
         unsafe {
             gl::Disable(gl::CULL_FACE);
-            gl::UseProgram(self.shader);
-            gl::Uniform1f(self.fog_start_loc, fog_start);
-            gl::Uniform1f(self.fog_end_loc, fog_end);
-            gl::Uniform1f(self.fog_override_loc, fog_override);
-            gl::Uniform3f(self.fog_color_override_loc, fog_color_override.x, fog_color_override.y, fog_color_override.z);
-            gl::Uniform2f(self.screen_size_loc, screen_w, screen_h);
-            gl::Uniform1i(self.sky_sampler_loc, 4);
-            gl::ActiveTexture(gl::TEXTURE4);
-            gl::BindTexture(gl::TEXTURE_2D, sky_tex);
+            self.bind_frame_uniforms(fog_start, fog_end, screen_w, screen_h, sky_tex,
+                fog_override, fog_color_override, ambient_light, directional_light, sun_dir,
+                shadow_tex, light_space, texel_sizes);
             gl::BindVertexArray(self.pig_vao);
 
             for pig in pigs {
@@ -277,6 +362,7 @@ impl EntityRenderer {
                     * glam::Mat4::from_rotation_y(rot_y);
                 let mvp = *projection * *view * model;
 
+                gl::UniformMatrix4fv(self.model_loc, 1, gl::FALSE, model.to_cols_array().as_ptr());
                 // Static parts: body + head + snout
                 gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE, mvp.to_cols_array().as_ptr());
                 gl::DrawArrays(gl::TRIANGLES, 0, PIG_STATIC_CNT);

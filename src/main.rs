@@ -1452,11 +1452,25 @@ fn main() {
                     item_renderer.draw(&item_entities, &view, &projection);
                     entity_renderer.draw_chickens(&chickens, &view, &projection,
                         fog_start, fog_end, fb_w as f32, fb_h as f32, sky_tex,
-                        fog_override, fog_override_color);
+                        fog_override, fog_override_color,
+                        ambient_light, directional_light, sun_dir,
+                        shadow_pass.depth_texture_array(),
+                        shadow_pass.light_space_matrices(),
+                        shadow_pass.texel_world_sizes());
                     entity_renderer.draw_pigs(&pigs, &view, &projection,
                         fog_start, fog_end, fb_w as f32, fb_h as f32, sky_tex,
-                        fog_override, fog_override_color);
-                    placed_object_renderer.draw_penguins(&penguins, &view, &projection);
+                        fog_override, fog_override_color,
+                        ambient_light, directional_light, sun_dir,
+                        shadow_pass.depth_texture_array(),
+                        shadow_pass.light_space_matrices(),
+                        shadow_pass.texel_world_sizes());
+                    placed_object_renderer.draw_penguins(&penguins, &view, &projection,
+                        fog_start, fog_end, fb_w as f32, fb_h as f32, sky_tex,
+                        fog_override, fog_override_color,
+                        ambient_light, directional_light, sun_dir,
+                        shadow_pass.depth_texture_array(),
+                        shadow_pass.light_space_matrices(),
+                        shadow_pass.texel_world_sizes());
                     let remote_peers: Vec<([f32; 3], f32)> = if let Some(ref server) = net_server {
                         server.remote_players()
                     } else if let Some(ref client) = net_client {
