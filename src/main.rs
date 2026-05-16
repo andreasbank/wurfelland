@@ -1360,10 +1360,12 @@ fn main() {
                 if world.get_block(eye_x, eye_y, eye_z) == BlockType::Water {
                     (1.0f32, glam::Vec3::new(0.02, 0.12, 0.40))
                 } else {
+                    let surface_y = world.surface_height(eye_x, eye_z);
+                    let deep_underground = eye_y <= surface_y - 20;
                     let head_y = (player.position[1] + 1.9) as i32;
                     let in_cave = (head_y..head_y + 15)
                         .any(|by| world.get_block(eye_x, by, eye_z).is_solid());
-                    if in_cave { (1.0f32, glam::Vec3::ZERO) } else { (0.0f32, glam::Vec3::ZERO) }
+                    if deep_underground || in_cave { (1.0f32, glam::Vec3::ZERO) } else { (0.0f32, glam::Vec3::ZERO) }
                 }
             } else {
                 (0.0f32, glam::Vec3::ZERO)
