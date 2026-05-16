@@ -1,4 +1,21 @@
 #[derive(Copy, Clone, Debug, PartialEq)]
+pub enum BlockMaterial { Grass, Dirt, Stone, Wood, Leaves, Sand, Snow }
+
+impl BlockMaterial {
+    pub fn sound(&self) -> &'static str {
+        match self {
+            BlockMaterial::Grass  => "assets/sounds/grass.mp3",
+            BlockMaterial::Dirt   => "assets/sounds/dirt.mp3",
+            BlockMaterial::Stone  => "assets/sounds/stone.mp3",
+            BlockMaterial::Wood   => "assets/sounds/wood.mp3",
+            BlockMaterial::Leaves => "assets/sounds/leaves.mp3",
+            BlockMaterial::Sand   => "assets/sounds/sand.mp3",
+            BlockMaterial::Snow   => "assets/sounds/snow.mp3",
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum BlockType {
     Air,
     Grass,
@@ -102,18 +119,25 @@ impl BlockType {
         }
     }
 
-    pub fn break_sound(&self) -> Option<&'static str> {
+    pub fn material(&self) -> Option<BlockMaterial> {
         match self {
-            BlockType::Dirt | BlockType::Grass => Some("assets/sounds/UI_Quirky_53.mp3"),
-            _ => None,
+            BlockType::Grass | BlockType::TallGrass | BlockType::GrassShort => Some(BlockMaterial::Grass),
+            BlockType::Dirt   => Some(BlockMaterial::Dirt),
+            BlockType::Stone  => Some(BlockMaterial::Stone),
+            BlockType::Log | BlockType::Bed => Some(BlockMaterial::Wood),
+            BlockType::Leaves => Some(BlockMaterial::Leaves),
+            BlockType::Sand   => Some(BlockMaterial::Sand),
+            BlockType::Snow   => Some(BlockMaterial::Snow),
+            _                 => None,
         }
     }
 
+    pub fn break_sound(&self) -> Option<&'static str> {
+        self.material().map(|m| m.sound())
+    }
+
     pub fn hit_sound(&self) -> Option<&'static str> {
-        match self {
-            BlockType::Dirt | BlockType::Grass => Some("assets/sounds/UI_Quirky_53.mp3"),
-            _ => None,
-        }
+        self.material().map(|m| m.sound())
     }
 
     #[allow(dead_code)]
