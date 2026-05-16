@@ -72,6 +72,30 @@ impl Drop for TextTexture {
     }
 }
 
+pub fn load_image_texture(path: &str) -> TextTexture {
+    let img = image::open(path)
+        .unwrap_or_else(|e| panic!("Failed to load image '{}': {}", path, e))
+        .into_rgba8();
+    let (w, h) = img.dimensions();
+    let pixels = img.into_raw();
+    unsafe {
+        let mut id = 0;
+        gl::GenTextures(1, &mut id);
+        gl::BindTexture(gl::TEXTURE_2D, id);
+        gl::TexImage2D(
+            gl::TEXTURE_2D, 0, gl::RGBA as i32,
+            w as i32, h as i32, 0,
+            gl::RGBA, gl::UNSIGNED_BYTE, pixels.as_ptr() as *const _,
+        );
+        gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::NEAREST as i32);
+        gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::NEAREST as i32);
+        gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_S, gl::CLAMP_TO_EDGE as i32);
+        gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_T, gl::CLAMP_TO_EDGE as i32);
+        gl::BindTexture(gl::TEXTURE_2D, 0);
+        TextTexture { id, uv_max: (1.0, 1.0), pixel_width: w, pixel_height: h }
+    }
+}
+
 pub fn create_text_texture(text: &str) -> TextTexture {
     create_text_texture_scaled(text, 4)
 }

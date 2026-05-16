@@ -26,40 +26,40 @@ impl Biome {
     pub fn params(&self) -> BiomeParams {
         match self {
             Biome::Plains => BiomeParams {
-                base_height: 64.0, amplitude: 8.0, scale: 0.03,
+                base_height: 128.0, amplitude: 8.0, scale: 0.03,
                 surface_block:     BlockType::Grass,
                 sub_surface_block: BlockType::Dirt,
                 tree_freq: 4, grass_freq: 3,  // 1 in 4 cells (≈1 tree per 256 blocks)
             },
             Biome::Forest => BiomeParams {
-                base_height: 65.0, amplitude: 14.0, scale: 0.04,
+                base_height: 129.0, amplitude: 14.0, scale: 0.04,
                 surface_block:     BlockType::Grass,
                 sub_surface_block: BlockType::Dirt,
                 tree_freq: 1, grass_freq: 2,  // every cell (≈1 tree per 64 blocks)
             },
             Biome::Desert => BiomeParams {
-                base_height: 63.0, amplitude: 6.0, scale: 0.025,
+                base_height: 127.0, amplitude: 6.0, scale: 0.025,
                 surface_block:     BlockType::Sand,
                 sub_surface_block: BlockType::Sand,
                 tree_freq: 0, grass_freq: 0,
             },
             Biome::Mountains => BiomeParams {
-                // base near plains (66) so biome edges aren't cliffs; amplitude 52
-                // gives typical peaks at Y=88–102, rare highs to Y=118 — matching
-                // classic Minecraft Extreme Hills.  Low scale = broad, gradual slopes.
-                base_height: 66.0, amplitude: 52.0, scale: 0.018,
+                // base near plains (130) so biome edges aren't cliffs; amplitude 52
+                // gives typical peaks at Y=152–166, rare highs to Y=182.
+                // Low scale = broad, gradual slopes.
+                base_height: 130.0, amplitude: 52.0, scale: 0.018,
                 surface_block:     BlockType::Stone,
                 sub_surface_block: BlockType::Stone,
                 tree_freq: 0, grass_freq: 0,
             },
             Biome::SnowyTundra => BiomeParams {
-                base_height: 64.0, amplitude: 5.0, scale: 0.025,
+                base_height: 128.0, amplitude: 5.0, scale: 0.025,
                 surface_block:     BlockType::Snow,
                 sub_surface_block: BlockType::Dirt,
                 tree_freq: 0, grass_freq: 0,
             },
             Biome::Ocean => BiomeParams {
-                base_height: 40.0, amplitude: 10.0, scale: 0.02,
+                base_height: 104.0, amplitude: 10.0, scale: 0.02,
                 surface_block:     BlockType::Sand,
                 sub_surface_block: BlockType::Stone,
                 tree_freq: 0, grass_freq: 0,

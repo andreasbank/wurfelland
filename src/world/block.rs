@@ -29,6 +29,8 @@ pub enum BlockType {
     Sand,
     Snow,
     Bed,
+    CopperOre,
+    CoalOre,
 }
 
 impl BlockType {
@@ -46,6 +48,8 @@ impl BlockType {
             BlockType::Sand       => [0.96, 0.87, 0.60],
             BlockType::Snow       => [0.90, 0.94, 1.00],
             BlockType::Bed        => [0.80, 0.35, 0.25],
+            BlockType::CopperOre  => [0.72, 0.45, 0.20],
+            BlockType::CoalOre    => [0.15, 0.15, 0.15],
         }
     }
     
@@ -53,7 +57,7 @@ impl BlockType {
         match self {
             BlockType::Air | BlockType::Water | BlockType::Leaves
             | BlockType::TallGrass | BlockType::GrassShort => false,
-            BlockType::Bed => true,
+            BlockType::Bed | BlockType::CopperOre => true,
             _ => true,
         }
     }
@@ -86,6 +90,8 @@ impl BlockType {
             BlockType::TallGrass  => Some(0.05),
             BlockType::GrassShort => Some(0.05),
             BlockType::Snow       => Some(0.2),
+            BlockType::CopperOre  => Some(3.0),
+            BlockType::CoalOre    => Some(3.0),
             BlockType::Leaves     => Some(0.2),
             BlockType::Grass      => Some(0.5),
             BlockType::Dirt       => Some(0.5),
@@ -113,8 +119,10 @@ impl BlockType {
             BlockType::TallGrass | BlockType::GrassShort => {
                 if hash % 20 == 0 { vec![ItemType::Seeds] } else { vec![] }
             }
-            BlockType::Stone => vec![ItemType::StoneChunk],
-            BlockType::Bed   => vec![ItemType::Bed],
+            BlockType::Stone     => vec![ItemType::StoneChunk],
+            BlockType::Bed       => vec![ItemType::Bed],
+            BlockType::CopperOre => vec![ItemType::RawCopper],
+            BlockType::CoalOre   => vec![ItemType::Coal],
             _ => vec![],
         }
     }
@@ -124,7 +132,9 @@ impl BlockType {
             BlockType::Grass | BlockType::TallGrass | BlockType::GrassShort => Some(BlockMaterial::Grass),
             BlockType::Dirt   => Some(BlockMaterial::Dirt),
             BlockType::Stone  => Some(BlockMaterial::Stone),
-            BlockType::Log | BlockType::Bed => Some(BlockMaterial::Wood),
+            BlockType::Log | BlockType::Bed  => Some(BlockMaterial::Wood),
+            BlockType::CopperOre             => Some(BlockMaterial::Stone),
+            BlockType::CoalOre               => Some(BlockMaterial::Stone),
             BlockType::Leaves => Some(BlockMaterial::Leaves),
             BlockType::Sand   => Some(BlockMaterial::Sand),
             BlockType::Snow   => Some(BlockMaterial::Snow),
@@ -155,6 +165,8 @@ impl BlockType {
             BlockType::Snow       => 9,
             BlockType::GrassShort => 10,
             BlockType::Bed        => 11,
+            BlockType::CopperOre  => 12,
+            BlockType::CoalOre    => 13,
         }
     }
 
@@ -171,6 +183,8 @@ impl BlockType {
             9  => Self::Snow,
             10 => Self::GrassShort,
             11 => Self::Bed,
+            12 => Self::CopperOre,
+            13 => Self::CoalOre,
             _  => Self::Air,
         }
     }
@@ -195,7 +209,9 @@ impl BlockType {
             BlockType::GrassShort => 8, // reuses the same atlas tile, rendered shorter
             BlockType::Sand       => 14,
             BlockType::Snow       => 15,
-            BlockType::Bed        => 5,  // reuse log-side texture (brown)
+            BlockType::Bed        => 5,   // reuse log-side texture (brown)
+            BlockType::CopperOre  => 16,
+            BlockType::CoalOre    => 17,
         }
     }
 

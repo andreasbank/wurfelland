@@ -18,8 +18,8 @@ pub struct WorldStats {
 }
 
 /// Only generate chunks up to this Y level; above is always air.
-/// Mountains peak at ~150, buffer to 11 chunk-layers (Y=0..175).
-const MAX_TERRAIN_CY: i32 = 11;
+/// Mountains peak at ~182 (cy=11), buffer to 13 chunk-layers (Y=0..207).
+const MAX_TERRAIN_CY: i32 = 13;
 
 // Phase 1: terrain data arrives from worker thread
 struct BlockReady {
@@ -132,7 +132,7 @@ impl World {
         for x in -radius..=radius {
             for z in -radius..=radius {
                 if x * x + z * z > r2 { continue; }
-                for cy in 3..=6 {  // surface band only for the buffer ring
+                for cy in 6..=10 {  // surface band only for the buffer ring
                     let pos = [center[0] + x, cy, center[2] + z];
                     if !self.chunks.contains_key(&pos)
                         && !self.terrain_queue.contains(&pos)
@@ -174,8 +174,8 @@ impl World {
         candidates.sort_unstable_by_key(|&[x, cy, z]| {
             let dx = x - pc[0]; let dz = z - pc[2];
             let xz = dx * dx + dz * dz;
-            // Surface band (cy 3–6, world Y 48–111) loads before bedrock/sky slices.
-            let y_penalty = if cy >= 3 && cy <= 6 { 0 } else { 100_000 };
+            // Surface band (cy 6–10, world Y 96–175) loads before bedrock/sky slices.
+            let y_penalty = if cy >= 6 && cy <= 10 { 0 } else { 100_000 };
             xz + y_penalty
         });
         let to_spawn: Vec<[i32; 3]> = candidates.into_iter().take(slots).collect();
@@ -586,12 +586,12 @@ impl World {
         self.chunks.len()
     }
 
-/// Count meshed chunks in the surface Y band (cy 3–6, world Y 48–111).
+/// Count meshed chunks in the surface Y band (cy 6–10, world Y 96–175).
     /// Underground solid chunks and high-altitude air chunks mesh near-instantly
     /// and swamp the global count; this metric only tracks the visible terrain layers.
     pub fn meshed_surface_chunk_count(&self) -> usize {
         self.chunks.iter()
-            .filter(|(pos, c)| pos[1] >= 3 && pos[1] <= 6 && c.mesh.is_some())
+            .filter(|(pos, c)| pos[1] >= 6 && pos[1] <= 10 && c.mesh.is_some())
             .count()
     }
 

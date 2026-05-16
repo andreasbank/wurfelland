@@ -14,6 +14,8 @@ pub enum ItemType {
     StoneAxe,
     Torch,
     Bed,
+    RawCopper,
+    Coal,
 }
 
 impl ItemType {
@@ -32,6 +34,8 @@ impl ItemType {
             ItemType::StoneAxe     => 9,
             ItemType::Torch        => 10,
             ItemType::Bed          => 11,
+            ItemType::RawCopper    => 12,
+            ItemType::Coal         => 13,
         }
     }
 
@@ -49,6 +53,8 @@ impl ItemType {
             9  => Some(Self::StoneAxe),
             10 => Some(Self::Torch),
             11 => Some(Self::Bed),
+            12 => Some(Self::RawCopper),
+            13 => Some(Self::Coal),
             _  => None,
         }
     }
@@ -67,6 +73,8 @@ impl ItemType {
             "stone_axe"    => Some(Self::StoneAxe),
             "torch"        => Some(Self::Torch),
             "bed"          => Some(Self::Bed),
+            "raw_copper"   => Some(Self::RawCopper),
+            "coal"         => Some(Self::Coal),
             _              => None,
         }
     }
@@ -85,6 +93,8 @@ impl ItemType {
             ItemType::StoneAxe    => [0.58, 0.58, 0.63],
             ItemType::Torch       => [1.00, 0.47, 0.00],
             ItemType::Bed         => [0.80, 0.35, 0.25],
+            ItemType::RawCopper   => [0.72, 0.45, 0.20],
+            ItemType::Coal        => [0.15, 0.15, 0.15],
         }
     }
 }

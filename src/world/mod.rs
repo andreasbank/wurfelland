@@ -1,10 +1,11 @@
 pub mod world;
 pub use world::World;
 
-/// World height in chunk units (16 blocks each).  256 blocks total = classic Minecraft height.
+/// World height in chunk units (16 blocks each).  256 blocks total.
 pub const WORLD_HEIGHT_CHUNKS: i32 = 16;
-/// Sea level in world-block coordinates, matching Minecraft classic.
-pub const SEA_LEVEL: i32 = 63;
+/// Sea level in world-block coordinates.  127 blocks of underground space (y=0..127)
+/// matches modern Minecraft's depth (-64 to 63).
+pub const SEA_LEVEL: i32 = 127;
 
 pub mod biome;
 

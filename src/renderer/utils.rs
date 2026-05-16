@@ -107,6 +107,28 @@ fn fill_tile_placeholder(pixels: &mut [u8], tile_idx: usize, r: u8, g: u8, b: u8
     }
 }
 
+pub fn load_png_texture(path: &str) -> u32 {
+    let img = image::open(path)
+        .unwrap_or_else(|e| panic!("Failed to load '{}': {}", path, e))
+        .into_rgba8();
+    let (w, h) = img.dimensions();
+    let pixels = img.into_raw();
+    unsafe {
+        let mut id = 0u32;
+        gl::GenTextures(1, &mut id);
+        gl::BindTexture(gl::TEXTURE_2D, id);
+        gl::TexImage2D(gl::TEXTURE_2D, 0, gl::RGBA as i32,
+            w as i32, h as i32, 0,
+            gl::RGBA, gl::UNSIGNED_BYTE, pixels.as_ptr() as *const _);
+        gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::NEAREST as i32);
+        gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::NEAREST as i32);
+        gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_S, gl::CLAMP_TO_EDGE as i32);
+        gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_T, gl::CLAMP_TO_EDGE as i32);
+        gl::BindTexture(gl::TEXTURE_2D, 0);
+        id
+    }
+}
+
 pub fn create_item_atlas() -> u32 {
     const ATLAS_SIZE: usize = 256;
     let mut pixels = vec![0u8; ATLAS_SIZE * ATLAS_SIZE * 4];
@@ -177,6 +199,8 @@ pub fn create_block_atlas() -> u32 {
         [  0,   0,   0],
         [245, 222, 153], // 14: Sand
         [230, 240, 255], // 15: Snow
+        [128, 128, 128], // 16: Copper ore (stone base, copper specks added below)
+        [128, 128, 128], // 17: Coal ore   (stone base, dark specks added below)
     ];
 
     let mut pixels = vec![0u8; ATLAS_SIZE * ATLAS_SIZE * 4];
@@ -217,6 +241,16 @@ pub fn create_block_atlas() -> u32 {
                 };
 
                 let color = match tile_idx {
+                    // Copper ore: stone base with scattered orange-copper blobs
+                    16 => {
+                        let h = (px.wrapping_mul(7) ^ py.wrapping_mul(13) ^ px.wrapping_mul(py).wrapping_mul(3)) % 16;
+                        if h < 3 { [184u8, 115, 51] } else { base_color }
+                    }
+                    // Coal ore: stone base with dark coal blobs
+                    17 => {
+                        let h = (px.wrapping_mul(11) ^ py.wrapping_mul(7) ^ px.wrapping_mul(py).wrapping_mul(5)) % 16;
+                        if h < 4 { [30u8, 30, 30] } else { base_color }
+                    }
                     // Grass side: green stripe at top
                     4 if py >= TILE_SIZE - 4 => [120u8, 172, 48],
                     // Log side: darker vertical streaks on edges

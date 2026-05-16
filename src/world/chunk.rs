@@ -190,8 +190,8 @@ impl Chunk {
         let wy_base = position[1] * 16; // world Y at the bottom of this chunk
 
         // Max possible surf_y across all biomes — chunks above this are always air.
-        // Mountains: base 66 + amplitude 52 = 118.  Add a small buffer → 130.
-        const MAX_SURF_Y: i32 = 130;
+        // Mountains: base 130 + amplitude 52 = 182.  Add a small buffer → 195.
+        const MAX_SURF_Y: i32 = 195;
         let model = glam::Mat4::from_translation(glam::Vec3::new(
             position[0] as f32 * 16.0,
             position[1] as f32 * 16.0,
@@ -383,14 +383,14 @@ impl Chunk {
                     let sq = s1 * s1 + s2 * s2;
 
                     // Cheese caves — large voids, deeper only.
-                    let ch = if wy < 50 {
+                    let ch = if wy < 85 {
                         cheese.get([wx_f * 0.008, wy_f * 0.010, wz_f * 0.008])
                     } else {
                         -1.0
                     };
 
                     // Slightly widen spaghetti tunnels deeper down (more cavernous).
-                    let depth_bonus = ((50 - wy).max(0) as f64) * 0.000_15;
+                    let depth_bonus = ((80 - wy).max(0) as f64) * 0.000_15;
 
                     let is_cave = sq < 0.020 + depth_bonus   // spaghetti
                         || sq < 0.006                         // noodle (always)
@@ -399,6 +399,80 @@ impl Chunk {
                     if is_cave {
                         blocks[x][ly][z] = BlockType::Air;
                     }
+                }
+            }
+        }
+
+        // ── Copper ore veins ─────────────────────────────────────────────────
+        // Generates Y=0..112 with a triangular peak at Y=48, matching Minecraft.
+        // ~6 vein attempts per chunk column; each vein walks 4–7 blocks.
+        let ore_seed = seed.wrapping_mul(2_654_435_761).wrapping_add(
+            (position[0].wrapping_mul(1_234_567) ^ position[1].wrapping_mul(89) ^ position[2].wrapping_mul(7_654_321)) as u32
+        );
+        let mut rng = ore_seed;
+        let next = |r: &mut u32| -> u32 { *r ^= *r << 13; *r ^= *r >> 17; *r ^= *r << 5; *r };
+
+        for _ in 0..6 {
+            let rx    = (next(&mut rng) % 16) as i32;
+            let rz    = (next(&mut rng) % 16) as i32;
+            // Triangular distribution: pick max(r1,r2) biased toward Y=48
+            let r1    = next(&mut rng) % 112;
+            let r2    = next(&mut rng) % 112;
+            let start_wy = (r1.min(r2) + 24) as i32; // shift peak toward Y=48
+            let vein_len = 4 + (next(&mut rng) % 4) as i32;
+
+            for step in 0..vein_len {
+                let wy = start_wy + step;
+                if wy < 1 || wy > 112 { continue; }
+                let ly = wy - wy_base;
+                if ly < 0 || ly >= 16 { continue; }
+                let lx = rx as usize;
+                let lz = rz as usize;
+                if blocks[lx][ly as usize][lz] == BlockType::Stone {
+                    blocks[lx][ly as usize][lz] = BlockType::CopperOre;
+                }
+                // Spread one block in a random direction for blob shape
+                let spread_x = ((next(&mut rng) % 3) as i32 - 1 + rx).clamp(0, 15) as usize;
+                let spread_z = ((next(&mut rng) % 3) as i32 - 1 + rz).clamp(0, 15) as usize;
+                let sly = ly as usize;
+                if blocks[spread_x][sly][spread_z] == BlockType::Stone {
+                    blocks[spread_x][sly][spread_z] = BlockType::CopperOre;
+                }
+            }
+        }
+
+        // ── Coal ore veins ───────────────────────────────────────────────────
+        // Generates Y=0..160, peak at Y=96. More common than copper (~10 attempts).
+        // Veins 5–9 blocks, appears at and above sea level in cliff faces too.
+        let coal_seed = seed.wrapping_mul(1_442_695_037).wrapping_add(
+            (position[0].wrapping_mul(9_999_991) ^ position[1].wrapping_mul(179) ^ position[2].wrapping_mul(6_700_417)) as u32
+        );
+        let mut crng = coal_seed;
+
+        for _ in 0..10 {
+            let rx       = (next(&mut crng) % 16) as i32;
+            let rz       = (next(&mut crng) % 16) as i32;
+            // Triangular peak at Y=96: bias two uniform samples toward the middle
+            let r1       = next(&mut crng) % 160;
+            let r2       = next(&mut crng) % 160;
+            let start_wy = ((r1 + r2) / 2 + 16) as i32; // average shifts peak to ~96
+            let vein_len = 5 + (next(&mut crng) % 5) as i32;
+
+            for step in 0..vein_len {
+                let wy = start_wy + step;
+                if wy < 1 || wy > 160 { continue; }
+                let ly = wy - wy_base;
+                if ly < 0 || ly >= 16 { continue; }
+                let lx = rx as usize;
+                let lz = rz as usize;
+                if blocks[lx][ly as usize][lz] == BlockType::Stone {
+                    blocks[lx][ly as usize][lz] = BlockType::CoalOre;
+                }
+                let spread_x = ((next(&mut crng) % 3) as i32 - 1 + rx).clamp(0, 15) as usize;
+                let spread_z = ((next(&mut crng) % 3) as i32 - 1 + rz).clamp(0, 15) as usize;
+                let sly = ly as usize;
+                if blocks[spread_x][sly][spread_z] == BlockType::Stone {
+                    blocks[spread_x][sly][spread_z] = BlockType::CoalOre;
                 }
             }
         }

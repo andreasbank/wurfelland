@@ -42,6 +42,7 @@ use renderer::MultiplayerMenuRenderer;
 use renderer::OptionsMenuRenderer;
 use renderer::UnderwaterRenderer;
 use renderer::LoadMenuRenderer;
+use renderer::load_menu_renderer::LoadMenuAction;
 use renderer::StatsRenderer;
 use renderer::ChunkOutlineRenderer;
 use renderer::PlacedObjectRenderer;
@@ -393,9 +394,15 @@ fn main() {
                             }
                             GameState::LoadMenu => {
                                 match load_menu.handle_click(last_mouse_x, last_mouse_y, win_w, win_h) {
-                                    Some("back") => game_state = GameState::MainMenu,
-                                    Some(name) => {
-                                        match save::load(name) {
+                                    Some(LoadMenuAction::Back) => game_state = GameState::MainMenu,
+                                    Some(LoadMenuAction::Delete(name)) => {
+                                        if let Err(e) = save::delete(&name) {
+                                            eprintln!("[save] Failed to delete '{}': {}", name, e);
+                                        }
+                                        load_menu.refresh(&save::list_saves());
+                                    }
+                                    Some(LoadMenuAction::Load(name)) => {
+                                        match save::load(&name) {
                                             Ok(data) => {
                                                 world = World::new(8, data.seed);
                                                 world.update([8.5, 0.0, 8.5]);
@@ -1309,7 +1316,7 @@ fn main() {
             // ── Camera (menu panorama only — not during game loading) ─────────
             if matches!(game_state, GameState::MainMenu | GameState::LoadMenu | GameState::MultiplayerMenu | GameState::CreditsMenu) {
                 menu_yaw += delta_time * 0.006;
-                camera.position = glam::Vec3::new(8.0, 80.0, 8.0);
+                camera.position = glam::Vec3::new(8.0, 144.0, 8.0);
                 camera.front    = glam::Vec3::new(
                     menu_yaw.sin(), -0.06, menu_yaw.cos(),
                 ).normalize();

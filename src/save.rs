@@ -129,3 +129,8 @@ pub fn load(name: &str) -> Result<SaveData, String> {
     let text = fs::read_to_string(path).map_err(|e| e.to_string())?;
     serde_json::from_str(&text).map_err(|e| e.to_string())
 }
+
+pub fn delete(name: &str) -> Result<(), String> {
+    let path = saves_dir().join(format!("{}.json", name));
+    fs::remove_file(path).map_err(|e| e.to_string())
+}

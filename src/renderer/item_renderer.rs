@@ -1,6 +1,6 @@
 use std::mem;
 use std::os::raw::c_void;
-use crate::renderer::utils::{compile_shader, link_program, create_item_atlas};
+use crate::renderer::utils::{compile_shader, link_program, create_item_atlas, load_png_texture};
 use crate::renderer::geo_model::GeoModel;
 use crate::world::item::ItemType;
 use crate::world::ItemEntity;
@@ -46,6 +46,22 @@ fn build_stick_mesh() -> Vec<f32> {
     push_quad(&mut v,
         [[-0.15, 0.3, 0.0], [0.15, 0.3, 0.0], [0.15, 0.0, 0.0], [-0.15, 0.0, 0.0]],
         [[u0, vt], [u1, vt], [u1, vb], [u0, vb]]);
+    v
+}
+
+// ── Flat sprite: double-sided square quad, 0.35×0.35, base at Y=0 ──
+// UVs cover the full texture [0,1]×[0,1] so any PNG can be used directly.
+fn build_sprite_mesh() -> Vec<f32> {
+    const S: f32 = 0.175;
+    let mut v = Vec::new();
+    // Front face
+    push_quad(&mut v,
+        [[-S, 0.0, 0.0], [S, 0.0, 0.0], [S, S * 2.0, 0.0], [-S, S * 2.0, 0.0]],
+        [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]]);
+    // Back face
+    push_quad(&mut v,
+        [[-S, S * 2.0, 0.0], [S, S * 2.0, 0.0], [S, 0.0, 0.0], [-S, 0.0, 0.0]],
+        [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]);
     v
 }
 
@@ -115,23 +131,28 @@ fn upload_vao(mesh: &[f32]) -> u32 {
 
 pub struct ItemRenderer {
     // Atlas-textured items (Stick, cubes)
-    vao_stick:        u32,
-    vao_log:          u32,
-    vao_dirt:         u32,
-    vao_stone:        u32,
-    vao_seeds:        u32,
-    vao_bed:          u32,
-    shader:           u32,
-    mvp_loc:          i32,
-    atlas:            u32,
-    stick_vert_count: i32,
-    cube_vert_count:  i32,
-    bed_vert_count:   i32,
+    vao_stick:         u32,
+    vao_log:           u32,
+    vao_dirt:          u32,
+    vao_stone:         u32,
+    vao_seeds:         u32,
+    vao_bed:           u32,
+    shader:            u32,
+    mvp_loc:           i32,
+    atlas:             u32,
+    stick_vert_count:  i32,
+    cube_vert_count:   i32,
+    bed_vert_count:    i32,
+    // Flat PNG-sprite items (RawCopper, Coal, …)
+    vao_sprite:        u32,
+    sprite_vert_count: i32,
+    raw_copper_tex:    u32,
+    coal_tex:          u32,
     // Colored geo items (loaded from JSON)
-    colored_shader:   u32,
-    colored_mvp_loc:  i32,
-    axe_model:        Option<GeoModel>,
-    torch_model:      Option<GeoModel>,
+    colored_shader:    u32,
+    colored_mvp_loc:   i32,
+    axe_model:         Option<GeoModel>,
+    torch_model:       Option<GeoModel>,
 }
 
 impl ItemRenderer {
@@ -193,18 +214,24 @@ impl ItemRenderer {
         let seeds_mesh = build_cube_mesh(ItemType::Seeds.tile_index());
         let bed_mesh   = build_bed_mesh();
 
-        let stick_vert_count = (stick_mesh.len() / STRIDE) as i32;
-        let cube_vert_count  = (log_mesh.len()   / STRIDE) as i32;
-        let bed_vert_count   = (bed_mesh.len()   / STRIDE) as i32;
+        let sprite_mesh = build_sprite_mesh();
 
-        let vao_stick = upload_vao(&stick_mesh);
-        let vao_log   = upload_vao(&log_mesh);
-        let vao_dirt  = upload_vao(&dirt_mesh);
-        let vao_stone = upload_vao(&stone_mesh);
-        let vao_seeds = upload_vao(&seeds_mesh);
-        let vao_bed   = upload_vao(&bed_mesh);
+        let stick_vert_count  = (stick_mesh.len()  / STRIDE) as i32;
+        let cube_vert_count   = (log_mesh.len()    / STRIDE) as i32;
+        let bed_vert_count    = (bed_mesh.len()    / STRIDE) as i32;
+        let sprite_vert_count = (sprite_mesh.len() / STRIDE) as i32;
 
-        let atlas = create_item_atlas();
+        let vao_stick  = upload_vao(&stick_mesh);
+        let vao_log    = upload_vao(&log_mesh);
+        let vao_dirt   = upload_vao(&dirt_mesh);
+        let vao_stone  = upload_vao(&stone_mesh);
+        let vao_seeds  = upload_vao(&seeds_mesh);
+        let vao_bed    = upload_vao(&bed_mesh);
+        let vao_sprite = upload_vao(&sprite_mesh);
+
+        let atlas          = create_item_atlas();
+        let raw_copper_tex = load_png_texture("assets/ui/raw_copper.png");
+        let coal_tex       = load_png_texture("assets/ui/coal.png");
 
         // ── Geo models ────────────────────────────────────────────────────────
         let axe_model = match GeoModel::load("assets/models/stone_axe.geo.json") {
@@ -220,6 +247,7 @@ impl ItemRenderer {
             vao_stick, vao_log, vao_dirt, vao_stone, vao_seeds, vao_bed,
             shader, mvp_loc, atlas,
             stick_vert_count, cube_vert_count, bed_vert_count,
+            vao_sprite, sprite_vert_count, raw_copper_tex, coal_tex,
             colored_shader, colored_mvp_loc,
             axe_model,
             torch_model,
@@ -239,6 +267,29 @@ impl ItemRenderer {
             gl::ActiveTexture(gl::TEXTURE0);
             gl::BindTexture(gl::TEXTURE_2D, self.atlas);
 
+            // ── Flat PNG sprites (RawCopper, Coal, …) ────────────────────────
+            gl::BindVertexArray(self.vao_sprite);
+            for item in items {
+                let tex = match item.item {
+                    ItemType::RawCopper => self.raw_copper_tex,
+                    ItemType::Coal      => self.coal_tex,
+                    _                   => continue,
+                };
+                gl::BindTexture(gl::TEXTURE_2D, tex);
+                let pos = glam::Vec3::new(
+                    item.position[0] + 0.5,
+                    item.visual_y(),
+                    item.position[2] + 0.5,
+                );
+                let model = glam::Mat4::from_translation(pos)
+                    * glam::Mat4::from_rotation_y(item.age * 1.5);
+                let mvp = *projection * *view * model;
+                gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE, mvp.to_cols_array().as_ptr());
+                gl::DrawArrays(gl::TRIANGLES, 0, self.sprite_vert_count);
+            }
+            gl::BindVertexArray(0);
+            gl::BindTexture(gl::TEXTURE_2D, self.atlas);
+
             for item in items {
                 let (vao, vert_count) = match item.item {
                     ItemType::Stick       => (self.vao_stick, self.stick_vert_count),
@@ -251,6 +302,8 @@ impl ItemRenderer {
                     ItemType::Egg         => (self.vao_stone, self.cube_vert_count),
                     ItemType::ChickenMeat => (self.vao_stone, self.cube_vert_count),
                     ItemType::PorkChop    => (self.vao_stone, self.cube_vert_count),
+                    ItemType::RawCopper   => continue, // handled by sprite pass above
+                    ItemType::Coal        => continue, // handled by sprite pass above
                     ItemType::StoneAxe    => continue, // handled by geo pass below
                     ItemType::Torch       => continue, // handled by geo pass below
                 };
@@ -355,7 +408,10 @@ impl Drop for ItemRenderer {
             gl::DeleteVertexArrays(1, &self.vao_stone);
             gl::DeleteVertexArrays(1, &self.vao_seeds);
             gl::DeleteVertexArrays(1, &self.vao_bed);
+            gl::DeleteVertexArrays(1, &self.vao_sprite);
             gl::DeleteTextures(1, &self.atlas);
+            gl::DeleteTextures(1, &self.raw_copper_tex);
+            gl::DeleteTextures(1, &self.coal_tex);
             gl::DeleteProgram(self.shader);
             gl::DeleteProgram(self.colored_shader);
         }
