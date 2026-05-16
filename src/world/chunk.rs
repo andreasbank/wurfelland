@@ -262,7 +262,9 @@ impl Chunk {
                     } else if wy < surf_y {
                         p.sub_surface_block
                     } else if wy == surf_y {
-                        if underwater { p.sub_surface_block } else { p.surface_block }
+                        if underwater { p.sub_surface_block }
+                        else if wy >= SEA_LEVEL + 33 { BlockType::Snow }
+                        else { p.surface_block }
                     } else if underwater && wy <= SEA_LEVEL {
                         BlockType::Water
                     } else {
