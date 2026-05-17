@@ -11,24 +11,29 @@ impl MenuRenderer {
             .with_title("PAUSED", (0.30, 0.20, 0.70, 0.30));
 
         window.add_button(TextButton::new(
+            "back",
+            "BACK",
+            (0.30, 0.34, 0.70, 0.42),
+        ));
+        window.add_button(TextButton::new(
             "save",
             "SAVE",
-            (0.30, 0.34, 0.70, 0.43),
+            (0.30, 0.44, 0.70, 0.52),
         ));
         window.add_button(TextButton::new(
             "options",
             "OPTIONS",
-            (0.30, 0.47, 0.70, 0.56),
+            (0.30, 0.54, 0.70, 0.62),
         ));
         window.add_button(TextButton::new(
             "main_menu",
             "MAIN MENU",
-            (0.30, 0.60, 0.70, 0.69),
+            (0.30, 0.64, 0.70, 0.72),
         ));
         window.add_button(TextButton::new(
             "exit",
             "EXIT",
-            (0.30, 0.73, 0.70, 0.82),
+            (0.30, 0.74, 0.70, 0.82),
         ));
 
         MenuRenderer { window }

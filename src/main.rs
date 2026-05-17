@@ -487,6 +487,7 @@ fn main() {
                             GameState::Playing => {
                                 if paused {
                                     match menu_renderer.handle_click(last_mouse_x, last_mouse_y, win_w, win_h) {
+                                        Some("back")      => paused = false,
                                         Some("exit")      => window.set_should_close(true),
                                         Some("options")   => options_open = true,
                                         Some("main_menu") => {

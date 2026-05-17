@@ -49,7 +49,7 @@ pub struct World {
     pending_water: HashMap<[i32; 3], (f32, u8)>, // position → (countdown, level to place)
     active_water: HashSet<[i32; 3]>,              // water blocks that currently have air below them
     active_spread: HashSet<[i32; 3]>,             // water blocks (level>2) that still have air neighbors at same Y
-    water_levels: HashMap<[i32; 3], u8>,          // world-coord → water level (1–7 flowing, 8 source)
+    water_levels: HashMap<[i32; 3], Box<[[[u8; 16]; 16]; 16]>>, // chunk-coord → [lx][ly][lz] water level
     // Player-authored block changes (breaks/placements); applied to newly generated
     // chunks so loaded saves always see the same terrain modifications.
     block_changes: HashMap<[i32; 3], BlockType>,
@@ -221,18 +221,17 @@ impl World {
             }
             self.chunks.insert(ready.position, chunk);
 
-            // Seed water_levels for rendering. Skip active-simulation sets — terrain
-            // water is static (already fully filled), and seeding thousands of ocean
-            // blocks into the flow simulation is extremely expensive.
+            // Seed water_levels for rendering. One HashMap entry per chunk instead
+            // of one per water block — avoids O(n) inserts for large water bodies.
             let snapshot = self.chunks[&ready.position].blocks_snapshot();
+            let chunk_wl = self.water_levels
+                .entry([cx, cy, cz])
+                .or_insert_with(|| Box::new([[[0u8; 16]; 16]; 16]));
             for ly in 0..16usize {
                 for lz in 0..16usize {
                     for lx in 0..16usize {
-                        if snapshot[lx][ly][lz] == BlockType::Water {
-                            let wx = cx * 16 + lx as i32;
-                            let wy = cy * 16 + ly as i32;
-                            let wz = cz * 16 + lz as i32;
-                            self.water_levels.entry([wx, wy, wz]).or_insert(8);
+                        if snapshot[lx][ly][lz] == BlockType::Water && chunk_wl[lx][ly][lz] == 0 {
+                            chunk_wl[lx][ly][lz] = 8;
                         }
                     }
                 }
@@ -351,7 +350,12 @@ impl World {
     fn refresh_active_spread(&mut self, wx: i32, wy: i32, wz: i32) {
         for (px, pz) in [(wx, wz), (wx+1, wz), (wx-1, wz), (wx, wz+1), (wx, wz-1)] {
             let pos = [px, wy, pz];
-            let lvl = self.water_levels.get(&pos).copied().unwrap_or(0);
+            let lvl = {
+                let cxp = px.div_euclid(16); let cyp = wy.div_euclid(16); let czp = pz.div_euclid(16);
+                self.water_levels.get(&[cxp, cyp, czp])
+                    .map(|wl| wl[px.rem_euclid(16) as usize][wy.rem_euclid(16) as usize][pz.rem_euclid(16) as usize])
+                    .unwrap_or(0)
+            };
             if lvl > 2 && [[px+1,pz],[px-1,pz],[px,pz+1],[px,pz-1]].iter()
                 .any(|&[nx,nz]| self.get_block(nx, wy, nz) == BlockType::Air)
             {
@@ -383,7 +387,13 @@ impl World {
         // 2. Horizontal flow: only check the active frontier — water blocks that still
         // have at least one air neighbor at the same Y. Settled blocks are not in this set.
         let h_candidates: Vec<([i32; 3], u8)> = self.active_spread.iter().copied()
-            .filter_map(|pos| self.water_levels.get(&pos).map(|&lvl| (pos, lvl)))
+            .filter_map(|[wx, wy, wz]| {
+                let cx = wx.div_euclid(16); let cy = wy.div_euclid(16); let cz = wz.div_euclid(16);
+                self.water_levels.get(&[cx, cy, cz]).and_then(|wl| {
+                    let lvl = wl[wx.rem_euclid(16) as usize][wy.rem_euclid(16) as usize][wz.rem_euclid(16) as usize];
+                    if lvl > 0 { Some(([wx, wy, wz], lvl)) } else { None }
+                })
+            })
             .collect();
         for ([wx, wy, wz], lvl) in h_candidates {
             let new_lvl = lvl - 1;
@@ -412,36 +422,36 @@ impl World {
         // 4. Fill — only if still air (player may have placed something there).
         for ([wx, wy, wz], lvl) in to_fill {
             if self.get_block(wx, wy, wz) == BlockType::Air {
-                self.water_levels.insert([wx, wy, wz], lvl);
+                let cx = wx.div_euclid(16); let cy = wy.div_euclid(16); let cz = wz.div_euclid(16);
+                self.water_levels
+                    .entry([cx, cy, cz])
+                    .or_insert_with(|| Box::new([[[0u8; 16]; 16]; 16]))
+                    [wx.rem_euclid(16) as usize][wy.rem_euclid(16) as usize][wz.rem_euclid(16) as usize] = lvl;
                 self.set_block(wx, wy, wz, BlockType::Water);
             }
         }
     }
 
     fn unload_distant_chunks(&mut self, center: [i32; 3], radius: i32) {
+        let r2 = radius * radius;
+        let mut removed: Vec<[i32; 3]> = Vec::new();
         self.chunks.retain(|&pos, _| {
             let dx = pos[0] - center[0];
             let dz = pos[2] - center[2];
-            dx * dx + dz * dz <= radius * radius
+            if dx * dx + dz * dz <= r2 { true } else { removed.push(pos); false }
         });
-        // Also clear queued terrain jobs for unloaded chunks.
         self.terrain_queue.retain(|&pos| {
             let dx = pos[0] - center[0];
             let dz = pos[2] - center[2];
-            dx * dx + dz * dz <= radius * radius
+            dx * dx + dz * dz <= r2
         });
-        // Remove water metadata for unloaded XZ columns.
-        self.water_levels.retain(|&[wx, wy, wz], _| {
-            let cx = wx.div_euclid(16);
-            let cy = wy.div_euclid(16);
-            let cz = wz.div_euclid(16);
-            self.chunks.contains_key(&[cx, cy, cz])
-        });
+        // Drop water data for each removed chunk in O(1) per chunk.
+        for pos in &removed {
+            self.water_levels.remove(pos);
+        }
+        // active_spread is small (player-triggered water only); retain is fine.
         self.active_spread.retain(|&[wx, wy, wz]| {
-            let cx = wx.div_euclid(16);
-            let cy = wy.div_euclid(16);
-            let cz = wz.div_euclid(16);
-            self.chunks.contains_key(&[cx, cy, cz])
+            self.chunks.contains_key(&[wx.div_euclid(16), wy.div_euclid(16), wz.div_euclid(16)])
         });
     }
 
@@ -456,9 +466,12 @@ impl World {
         let lz = wz.rem_euclid(16) as usize;
 
         if block != BlockType::Water {
-            self.water_levels.remove(&[wx, wy, wz]);
+            if let Some(wl) = self.water_levels.get_mut(&[cx, cy, cz]) {
+                wl[lx][ly][lz] = 0;
+            }
         } else {
-            self.water_levels.entry([wx, wy, wz]).or_insert(8);
+            let wl = self.water_levels.entry([cx, cy, cz]).or_insert_with(|| Box::new([[[0u8; 16]; 16]; 16]));
+            if wl[lx][ly][lz] == 0 { wl[lx][ly][lz] = 8; }
         }
 
         if let Some(chunk) = self.chunks.get_mut(&[cx, cy, cz]) {
@@ -511,27 +524,18 @@ impl World {
     // ── Water level helpers (used when snapshotting data for mesh threads) ───
 
     fn water_levels_snapshot(&self, cx: i32, cy: i32, cz: i32) -> WaterLevels {
-        let mut wl = [[[0u8; 16]; 16]; 16];
-        for lx in 0..16i32 {
-            for ly in 0..16i32 {
-                for lz in 0..16i32 {
-                    let wy = cy * 16 + ly;
-                    if let Some(&lvl) = self.water_levels.get(&[cx * 16 + lx, wy, cz * 16 + lz]) {
-                        wl[lx as usize][ly as usize][lz as usize] = lvl;
-                    }
-                }
-            }
+        match self.water_levels.get(&[cx, cy, cz]) {
+            Some(wl) => **wl,
+            None => [[[0u8; 16]; 16]; 16],
         }
-        wl
     }
 
     fn water_edge_at_lx(&self, cx: i32, cy: i32, cz: i32, lx: i32) -> [[u8; 16]; 16] {
         let mut e = [[0u8; 16]; 16];
-        for ly in 0..16i32 {
-            for lz in 0..16i32 {
-                let wy = cy * 16 + ly;
-                if let Some(&lvl) = self.water_levels.get(&[cx * 16 + lx, wy, cz * 16 + lz]) {
-                    e[ly as usize][lz as usize] = lvl;
+        if let Some(wl) = self.water_levels.get(&[cx, cy, cz]) {
+            for ly in 0..16usize {
+                for lz in 0..16usize {
+                    e[ly][lz] = wl[lx as usize][ly][lz];
                 }
             }
         }
@@ -540,11 +544,10 @@ impl World {
 
     fn water_edge_at_lz(&self, cx: i32, cy: i32, cz: i32, lz: i32) -> [[u8; 16]; 16] {
         let mut e = [[0u8; 16]; 16];
-        for ly in 0..16i32 {
-            for lx in 0..16i32 {
-                let wy = cy * 16 + ly;
-                if let Some(&lvl) = self.water_levels.get(&[cx * 16 + lx, wy, cz * 16 + lz]) {
-                    e[ly as usize][lx as usize] = lvl;
+        if let Some(wl) = self.water_levels.get(&[cx, cy, cz]) {
+            for ly in 0..16usize {
+                for lx in 0..16usize {
+                    e[ly][lx] = wl[lx][ly][lz as usize];
                 }
             }
         }
