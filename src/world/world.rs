@@ -285,9 +285,13 @@ impl World {
             })
             .map(|(pos, _)| *pos)
             .collect();
-        needs_mesh.sort_unstable_by_key(|&[x, _, z]| {
+        needs_mesh.sort_unstable_by_key(|&[x, y, z]| {
             let dx = x - pc[0]; let dz = z - pc[2];
-            dx * dx + dz * dz
+            // Primary: closest horizontal ring first.
+            // Secondary: highest cy first — terrain chunks build before cave chunks below
+            // them, so cave chunks get correct above_sky on first build and the sky-light
+            // cascade shrinks to near-zero.
+            (dx * dx + dz * dz, -(y as i64))
         });
         let needs_mesh: Vec<[i32; 3]> = needs_mesh.into_iter().take(mesh_slots).collect();
 
@@ -319,9 +323,30 @@ impl World {
             match self.mesh_rx.try_recv() {
                 Ok(ready) => {
                     self.pending_meshes.remove(&ready.position);
+                    let [cx, cy, cz] = ready.position;
+                    let sky_changed = self.chunks.get(&ready.position)
+                        .map(|c| c.sky_edges_changed(&ready.sky))
+                        .unwrap_or(false);
                     if let Some(chunk) = self.chunks.get_mut(&ready.position) {
                         chunk.finalize_mesh(ready.vertices);
                         chunk.update_sky_light(ready.sky);
+                    }
+                    // Sky-light edges changed: only vertical neighbours need a rebuild.
+                    // The chunk below reads above_sky from us; the chunk above reads
+                    // below_sky from us.  Horizontal spreading is handled entirely by
+                    // the BFS inside build_vertices using the stored sky-edge seeds, so
+                    // horizontal cascade rebuilds are unnecessary and expensive.
+                    if sky_changed {
+                        for npos in [
+                            [cx, cy - 1, cz],
+                            [cx, cy + 1, cz],
+                        ] {
+                            if !self.pending_meshes.contains(&npos) {
+                                if let Some(n) = self.chunks.get_mut(&npos) {
+                                    n.mark_for_rebuild();
+                                }
+                            }
+                        }
                     }
                 }
                 Err(_) => break,

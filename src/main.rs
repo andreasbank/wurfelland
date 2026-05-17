@@ -731,15 +731,17 @@ fn main() {
                                             let log_count: u32 = player.inventory.iter()
                                                 .filter_map(|s| if let Some((ItemType::LogBlock, c)) = s { Some(*c) } else { None })
                                                 .sum();
-                                            if log_count >= 12 {
-                                                let mut to_consume = 12u32;
-                                                for slot in player.inventory.iter_mut() {
-                                                    if to_consume == 0 { break; }
-                                                    if let Some((ItemType::LogBlock, c)) = slot {
-                                                        let take = (*c).min(to_consume);
-                                                        *c -= take;
-                                                        to_consume -= take;
-                                                        if *c == 0 { *slot = None; }
+                                            if god_mode || log_count >= 12 {
+                                                if !god_mode {
+                                                    let mut to_consume = 12u32;
+                                                    for slot in player.inventory.iter_mut() {
+                                                        if to_consume == 0 { break; }
+                                                        if let Some((ItemType::LogBlock, c)) = slot {
+                                                            let take = (*c).min(to_consume);
+                                                            *c -= take;
+                                                            to_consume -= take;
+                                                            if *c == 0 { *slot = None; }
+                                                        }
                                                     }
                                                 }
                                                 player.pick_up(ItemType::Bed);
@@ -770,8 +772,10 @@ fn main() {
                                     {
                                         world.set_block_recorded(adj[0], adj[1], adj[2], BlockType::Bed);
                                         world.set_block_recorded(adj2[0], adj2[1], adj2[2], BlockType::Bed);
-                                        if let Some((_, count)) = &mut hotbar[selected_slot] {
-                                            if *count > 1 { *count -= 1; } else { hotbar[selected_slot] = None; }
+                                        if !god_mode {
+                                            if let Some((_, count)) = &mut hotbar[selected_slot] {
+                                                if *count > 1 { *count -= 1; } else { hotbar[selected_slot] = None; }
+                                            }
                                         }
                                     }
                                 }
@@ -859,6 +863,7 @@ fn main() {
                                             if god_mode {
                                                 console.push_line("GOD MODE ENABLED");
                                             } else {
+                                                player.stop_flying();
                                                 console.push_line("GOD MODE DISABLED");
                                             }
                                         }
@@ -902,7 +907,19 @@ fn main() {
                                     }
                                 } else if !paused && !console_open {
                                     if key == Key::Space {
-                                        player.jump();
+                                        let px = player.position[0] as i32;
+                                        let pz = player.position[2] as i32;
+                                        let key_in_water =
+                                            world.get_block(px, player.position[1] as i32, pz) == BlockType::Water
+                                            || world.get_block(px, (player.position[1] + 0.9) as i32, pz) == BlockType::Water;
+                                        if key_in_water {
+                                            player.swim_up();
+                                        } else if god_mode {
+                                            player.flying = true;
+                                            player.fly_up();
+                                        } else {
+                                            player.jump();
+                                        }
                                     } else if let Some(slot) = match key {
                                         Key::Num1 => Some(0), Key::Num2 => Some(1),
                                         Key::Num3 => Some(2), Key::Num4 => Some(3),
@@ -1123,11 +1140,12 @@ fn main() {
 
                 GameState::Playing => {
                     if !paused && !bag_open && !build_open && !console_open {
-                        let in_water = world.get_block(
-                            player.position[0] as i32,
-                            player.position[1] as i32,
-                            player.position[2] as i32,
-                        ) == BlockType::Water;
+                        let in_water = {
+                            let px = player.position[0] as i32;
+                            let pz = player.position[2] as i32;
+                            world.get_block(px, player.position[1] as i32, pz) == BlockType::Water
+                            || world.get_block(px, (player.position[1] + 0.9) as i32, pz) == BlockType::Water
+                        };
 
                         // Player movement
                         player.walk(
@@ -1141,7 +1159,18 @@ fn main() {
                         if in_water && *keys_pressed.get(&Key::Space).unwrap_or(&false) {
                             player.swim_up();
                         }
+                        if player.flying {
+                            if *keys_pressed.get(&Key::Space).unwrap_or(&false) {
+                                player.fly_up();
+                            } else if *keys_pressed.get(&Key::LeftShift).unwrap_or(&false) {
+                                player.fly_down();
+                            }
+                        }
                         player.apply_physics(delta_time, in_water, |x, y, z| world.get_block(x, y, z).is_solid());
+                        // Landing while flying stops the flight
+                        if player.flying && player.on_ground {
+                            player.stop_flying();
+                        }
                         let fall_dmg = player.tick_fall(in_water);
                         if !god_mode && fall_dmg > 0 {
                             player.health = player.health.saturating_sub(fall_dmg);
@@ -1226,6 +1255,7 @@ fn main() {
                                     dig_sound_timer = 0.0;
                                 }
                                 if let Some(hardness) = block.hardness() {
+                                    let hardness = if god_mode { hardness.min(0.4) } else { hardness };
                                     dig_progress    += delta_time;
                                     dig_sound_timer -= delta_time;
                                     if dig_sound_timer <= 0.0 {

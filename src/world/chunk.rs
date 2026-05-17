@@ -653,10 +653,8 @@ impl Chunk {
         // 16³ * 0.10 * 3 faces * 6 verts * 12 floats ≈ 8748. Sized to avoid early reallocs.
         let mut vertices = Vec::with_capacity(9216);
 
-        // Sky-light — vertical column scan only.
-        // For each (x,z) column, propagate the above_sky value straight down
-        // through non-opaque blocks until an opaque block is hit. No horizontal
-        // propagation: caves are dark regardless of proximity to an entrance.
+        // Sky-light: vertical column scan (no diminishing) + BFS horizontal spread.
+        // Vertical pass: propagate above_sky straight down through transparent blocks.
         let mut sky = [[[0u8; 16]; 16]; 16];
         for x in 0..16usize {
             for z in 0..16usize {
@@ -665,6 +663,62 @@ impl Chunk {
                 for y in (0..16usize).rev() {
                     if blocks[x][y][z].is_opaque() { break; }
                     sky[x][y][z] = top;
+                }
+            }
+        }
+
+        // BFS horizontal spread: light bleeds sideways from lit blocks into cave
+        // entrances, diminishing by 1 per block.  Also seeds from horizontal
+        // neighbour edges so light carries across chunk boundaries.
+        {
+            use std::collections::VecDeque;
+            let mut queue: VecDeque<(i32, i32, i32)> = VecDeque::new();
+
+            // Seed queue from vertical scan results.
+            for x in 0..16usize {
+                for y in 0..16usize {
+                    for z in 0..16usize {
+                        if sky[x][y][z] > 0 {
+                            queue.push_back((x as i32, y as i32, z as i32));
+                        }
+                    }
+                }
+            }
+
+            // Seed from horizontal neighbour sky edges (value already diminished by 1
+            // because the source block is one step outside this chunk).
+            let seed = |sky: &mut [[[u8;16];16];16], x: usize, y: usize, z: usize, val: u8,
+                            queue: &mut VecDeque<(i32,i32,i32)>| {
+                if val > 0 && !blocks[x][y][z].is_opaque() && sky[x][y][z] < val {
+                    sky[x][y][z] = val;
+                    queue.push_back((x as i32, y as i32, z as i32));
+                }
+            };
+            for y in 0..16usize {
+                for z in 0..16usize {
+                    seed(&mut sky, 0,  y, z, edges.left_sky [y][z].saturating_sub(1), &mut queue);
+                    seed(&mut sky, 15, y, z, edges.right_sky[y][z].saturating_sub(1), &mut queue);
+                }
+                for x in 0..16usize {
+                    seed(&mut sky, x, y, 0,  edges.back_sky [y][x].saturating_sub(1), &mut queue);
+                    seed(&mut sky, x, y, 15, edges.front_sky[y][x].saturating_sub(1), &mut queue);
+                }
+            }
+
+            // BFS flood-fill: spread to all 6 neighbours, diminishing by 1.
+            while let Some((x, y, z)) = queue.pop_front() {
+                let cur = sky[x as usize][y as usize][z as usize];
+                if cur == 0 { continue; }
+                let spread = cur - 1;
+                for (dx, dy, dz) in [(-1i32,0,0),(1,0,0),(0,-1,0),(0,1,0),(0,0,-1i32),(0,0,1)] {
+                    let (nx, ny, nz) = (x+dx, y+dy, z+dz);
+                    if nx < 0 || nx >= 16 || ny < 0 || ny >= 16 || nz < 0 || nz >= 16 { continue; }
+                    let (nxu, nyu, nzu) = (nx as usize, ny as usize, nz as usize);
+                    if blocks[nxu][nyu][nzu].is_opaque() { continue; }
+                    if sky[nxu][nyu][nzu] < spread {
+                        sky[nxu][nyu][nzu] = spread;
+                        queue.push_back((nx, ny, nz));
+                    }
                 }
             }
         }

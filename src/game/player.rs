@@ -14,6 +14,7 @@ const SWIM_UP_SPEED: f32 = 3.5;
 const MAX_WATER_FALL: f32 = -2.0;
 const HALF_WIDTH: f32 = 0.3; // Player is 0.6 wide
 const PLAYER_HEIGHT: f32 = 1.8;
+const FLY_SPEED: f32 = 10.0;
 
 pub struct Player {
     pub health: u32,
@@ -22,6 +23,7 @@ pub struct Player {
     pub pitch: f32,
     pub velocity: [f32; 3],
     pub on_ground: bool,
+    pub flying: bool,
     pub inventory: [Option<(ItemType, u32)>; INVENTORY_SIZE],
     mouse_sensitivity: f32,
     fall_peak_y: f32,
@@ -40,6 +42,7 @@ impl Player {
             pitch: 0.0,
             velocity: [0.0; 3],
             on_ground: false,
+            flying: false,
             inventory,
             mouse_sensitivity: 0.1,
             fall_peak_y: 64.0,
@@ -88,7 +91,20 @@ impl Player {
 
     // Sets horizontal velocity based on input — apply_physics does the actual moving
     pub fn swim_up(&mut self) {
-        self.velocity[1] = SWIM_UP_SPEED;
+        self.velocity[1] = self.velocity[1].max(SWIM_UP_SPEED);
+    }
+
+    pub fn fly_up(&mut self) {
+        self.velocity[1] = FLY_SPEED;
+    }
+
+    pub fn fly_down(&mut self) {
+        self.velocity[1] = -FLY_SPEED;
+    }
+
+    pub fn stop_flying(&mut self) {
+        self.flying = false;
+        self.velocity[1] = 0.0;
     }
 
     pub fn walk(&mut self, forward: bool, back: bool, left: bool, right: bool, running: bool, in_water: bool) {
@@ -160,7 +176,11 @@ impl Player {
     }
 
     pub fn apply_physics(&mut self, delta_time: f32, in_water: bool, is_solid: impl Fn(i32, i32, i32) -> bool) {
-        if in_water {
+        if self.flying {
+            // Gravity-free: vertical velocity comes entirely from fly_up/fly_down input.
+            // Damp it so the player hovers when no key is held.
+            self.velocity[1] *= (1.0 - 15.0 * delta_time).max(0.0);
+        } else if in_water {
             // Clamp immediately so diving in at terminal velocity doesn't punch through the floor
             self.velocity[1] = self.velocity[1].max(MAX_WATER_FALL);
             self.velocity[1] += WATER_GRAVITY * delta_time;
