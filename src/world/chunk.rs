@@ -165,9 +165,10 @@ fn compute_sky_light(blocks: &Blocks) -> Box<SkyLight> {
             let mut lit = true;
             for y in (0..16usize).rev() {
                 if lit {
-                    sky[x][y][z] = 15;
                     if blocks[x][y][z].is_opaque() {
                         lit = false;
+                    } else {
+                        sky[x][y][z] = 15;
                     }
                 }
             }
@@ -652,54 +653,20 @@ impl Chunk {
         // 16³ * 0.10 * 3 faces * 6 verts * 12 floats ≈ 8748. Sized to avoid early reallocs.
         let mut vertices = Vec::with_capacity(9216);
 
-        // Sky-light flood fill: seed from all six neighbour edges, then BFS through
-        // non-opaque blocks. This correctly lights any cavity connected to open sky
-        // via a sideways opening, not just vertically exposed columns.
+        // Sky-light — vertical column scan only.
+        // For each (x,z) column, propagate the above_sky value straight down
+        // through non-opaque blocks until an opaque block is hit. No horizontal
+        // propagation: caves are dark regardless of proximity to an entrance.
         let mut sky = [[[0u8; 16]; 16]; 16];
-        let mut queue: std::collections::VecDeque<(usize, usize, usize)> = std::collections::VecDeque::new();
-
-        macro_rules! seed {
-            ($x:expr, $y:expr, $z:expr) => {
-                if !blocks[$x][$y][$z].is_opaque() && sky[$x][$y][$z] == 0 {
-                    sky[$x][$y][$z] = 15;
-                    queue.push_back(($x, $y, $z));
-                }
-            };
-        }
-
         for x in 0..16usize {
             for z in 0..16usize {
-                if edges.above_sky[x][z] > 0 { seed!(x, 15, z); }
-                if edges.below_sky[x][z] > 0 { seed!(x,  0, z); }
+                let top = edges.above_sky[x][z];
+                if top == 0 { continue; }
+                for y in (0..16usize).rev() {
+                    if blocks[x][y][z].is_opaque() { break; }
+                    sky[x][y][z] = top;
+                }
             }
-        }
-        for y in 0..16usize {
-            for z in 0..16usize {
-                if edges.left_sky [y][z] > 0 { seed!( 0, y, z); }
-                if edges.right_sky[y][z] > 0 { seed!(15, y, z); }
-            }
-            for x in 0..16usize {
-                if edges.back_sky [y][x] > 0 { seed!(x, y,  0); }
-                if edges.front_sky[y][x] > 0 { seed!(x, y, 15); }
-            }
-        }
-
-        while let Some((x, y, z)) = queue.pop_front() {
-            macro_rules! spread {
-                ($nx:expr, $ny:expr, $nz:expr) => {
-                    let (nx, ny, nz) = ($nx as usize, $ny as usize, $nz as usize);
-                    if !blocks[nx][ny][nz].is_opaque() && sky[nx][ny][nz] == 0 {
-                        sky[nx][ny][nz] = 15;
-                        queue.push_back((nx, ny, nz));
-                    }
-                };
-            }
-            if x > 0  { spread!(x - 1, y, z); }
-            if x < 15 { spread!(x + 1, y, z); }
-            if y > 0  { spread!(x, y - 1, z); }
-            if y < 15 { spread!(x, y + 1, z); }
-            if z > 0  { spread!(x, y, z - 1); }
-            if z < 15 { spread!(x, y, z + 1); }
         }
 
         for x in 0..16usize {

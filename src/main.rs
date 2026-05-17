@@ -67,6 +67,8 @@ enum GameState {
 }
 
 const CHUNK_RADII: [i32; 5] = [4, 6, 8, 10, 12];
+// 0 = simulate all loaded entities (no radius cap)
+const SIM_RADII: [i32; 5] = [2, 4, 6, 8, 0];
 
 #[derive(Clone, Copy, PartialEq)]
 enum FogDistance { Near, Normal, Far, Off }
@@ -91,6 +93,73 @@ impl FogDistance {
     }
 }
 
+
+/// Deterministically spawn entities for one XZ chunk column on its first visit.
+/// Uses the same hash seeds as the original scan-radius spawn loops so entity
+/// placement is stable across sessions.
+fn spawn_column_entities(
+    cx: i32, cz: i32,
+    world: &World,
+    chickens: &mut Vec<Chicken>,
+    pigs:     &mut Vec<Pig>,
+    penguins: &mut Vec<Penguin>,
+    registry: &EntityRegistry,
+) {
+    let center_wx = (cx * 16 + 8) as f64;
+    let center_wz = (cz * 16 + 8) as f64;
+    let biome = world::biome::biome_at_world(center_wx, center_wz);
+
+    let hc = (cx.wrapping_mul(73_856_093i32) ^ cz.wrapping_mul(19_349_663i32)) as u32;
+    if hc % 55 == 0 && biome.allows_chickens() {
+        let n = 2 + (hc >> 8) % 2;
+        let bx0 = cx * 16 + ((hc >> 4)  & 0xF) as i32;
+        let bz0 = cz * 16 + ((hc >> 12) & 0xF) as i32;
+        for i in 0..n {
+            let bx = bx0 + (i as i32 % 2) * 3;
+            let bz = bz0 + (i as i32 / 2) * 3;
+            let sy = world.surface_height(bx, bz);
+            if sy > 63 {
+                if let Some(def) = registry.get("chicken") {
+                    chickens.push(Chicken::new(bx as f32 + 0.5, sy as f32, bz as f32 + 0.5, def));
+                }
+            }
+        }
+    }
+
+    let hp = (cx.wrapping_mul(48_271i32) ^ cz.wrapping_mul(83_492_791i32)) as u32;
+    if hp % 65 == 0 && biome.allows_pigs() {
+        let n = 2 + (hp >> 8) % 2;
+        let bx0 = cx * 16 + ((hp >> 6)  & 0xF) as i32;
+        let bz0 = cz * 16 + ((hp >> 14) & 0xF) as i32;
+        for i in 0..n {
+            let bx = bx0 + (i as i32 % 2) * 3;
+            let bz = bz0 + (i as i32 / 2) * 3;
+            let sy = world.surface_height(bx, bz);
+            if sy > 63 {
+                if let Some(def) = registry.get("pig") {
+                    pigs.push(Pig::new(bx as f32 + 0.5, sy as f32, bz as f32 + 0.5, def));
+                }
+            }
+        }
+    }
+
+    let hn = (cx.wrapping_mul(31_397_093i32) ^ cz.wrapping_mul(67_219_501i32)) as u32;
+    if hn % 60 == 0 && biome.allows_penguins() {
+        let n = 2 + (hn >> 8) % 2;
+        let bx0 = cx * 16 + ((hn >> 4)  & 0xF) as i32;
+        let bz0 = cz * 16 + ((hn >> 12) & 0xF) as i32;
+        for i in 0..n {
+            let bx = bx0 + (i as i32 % 2) * 3;
+            let bz = bz0 + (i as i32 / 2) * 3;
+            let sy = world.surface_height(bx, bz);
+            if sy > 63 {
+                if let Some(def) = registry.get("penguin") {
+                    penguins.push(Penguin::new(bx as f32 + 0.5, sy as f32, bz as f32 + 0.5, def));
+                }
+            }
+        }
+    }
+}
 
 fn main() {
     let mut glfw = glfw::init_no_callbacks().unwrap();
@@ -181,6 +250,15 @@ fn main() {
         let mut penguins: Vec<Penguin> = Vec::new();
         let mut item_entities: Vec<ItemEntity> = Vec::new();
 
+        #[derive(Default)]
+        struct DormantColumn {
+            chickens: Vec<save::EntitySave>,
+            pigs:     Vec<save::EntitySave>,
+            penguins: Vec<save::EntitySave>,
+        }
+        let mut dormant: HashMap<[i32; 2], DormantColumn> = HashMap::new();
+        let mut spawned_columns: std::collections::HashSet<[i32; 2]> = std::collections::HashSet::new();
+
         let mut hotbar: [Option<(ItemType, u32)>; 9] = [None; 9];
         let mut selected_slot: usize = 0;
         let mut cursor_item: Option<(ItemType, u32)> = None;
@@ -205,6 +283,7 @@ fn main() {
         let mut options_open = false;
         let mut fog_distance = FogDistance::Normal;
         let mut chunk_radius_idx: usize = 2; // default radius = CHUNK_RADII[2] = 8
+        let mut entity_sim_radius_idx: usize = 4; // default SIM_RADII[4] = 0 (all)
         let mut console_swallow_char = false;
         let mut paused = false;
         let mut loading_menu_timer: f32 = 0.0; // time spent in LoadingMenu state
@@ -331,6 +410,9 @@ fn main() {
                                     chunk_radius_idx = (chunk_radius_idx + 1) % CHUNK_RADII.len();
                                     world.set_radius(CHUNK_RADII[chunk_radius_idx]);
                                 }
+                                Some("sim_radius") => {
+                                    entity_sim_radius_idx = (entity_sim_radius_idx + 1) % SIM_RADII.len();
+                                }
                                 Some("outline")        => outline_enabled = !outline_enabled,
                                 Some("stats")          => stats_enabled   = !stats_enabled,
                                 Some("chunk_outlines")   => chunk_outlines   = !chunk_outlines,
@@ -372,6 +454,8 @@ fn main() {
                                         pigs.clear();
                                         penguins.clear();
                                         item_entities.clear();
+                                        dormant.clear();
+                                        spawned_columns.clear();
                                         menu_reveal_timer = 0.0;
                                         sun_angle  = std::f32::consts::FRAC_PI_4;
                                         total_time = 0.0;
@@ -410,6 +494,8 @@ fn main() {
                                                 pigs.clear();
                                                 penguins.clear();
                                                 item_entities.clear();
+                                                dormant.clear();
+                                                spawned_columns.clear();
                                                 menu_reveal_timer = 0.0;
                                                 sun_angle  = std::f32::consts::FRAC_PI_4;
                                                 total_time = 0.0;
@@ -436,6 +522,8 @@ fn main() {
                                                 chickens.clear();
                                                 penguins.clear();
                                                 item_entities.clear();
+                                                dormant.clear();
+                                                spawned_columns.clear();
                                                 menu_reveal_timer = 0.0;
                                                 sun_angle  = std::f32::consts::FRAC_PI_4;
                                                 total_time = 0.0;
@@ -462,6 +550,8 @@ fn main() {
                                                     chickens.clear();
                                                     penguins.clear();
                                                     item_entities.clear();
+                                                    dormant.clear();
+                                                    spawned_columns.clear();
                                                     menu_reveal_timer = 0.0;
                                                     sun_angle  = std::f32::consts::FRAC_PI_4;
                                                     total_time = 0.0;
@@ -501,6 +591,8 @@ fn main() {
                                             pigs.clear();
                                             penguins.clear();
                                             item_entities.clear();
+                                            dormant.clear();
+                                            spawned_columns.clear();
                                             player       = Player::new();
                                             hotbar       = [None; 9];
                                             net_server   = None;
@@ -566,6 +658,21 @@ fn main() {
                                                     })
                                                 })
                                                 .collect();
+                                            let penguin_saves: Vec<save::EntitySave> = penguins.iter()
+                                                .map(|p| save::EntitySave {
+                                                    position: p.position,
+                                                    yaw:      p.yaw,
+                                                    health:   p.health,
+                                                })
+                                                .collect();
+                                            let mut dormant_chicken_saves: Vec<save::DormantEntitySave> = Vec::new();
+                                            let mut dormant_pig_saves:     Vec<save::DormantEntitySave> = Vec::new();
+                                            let mut dormant_penguin_saves: Vec<save::DormantEntitySave> = Vec::new();
+                                            for (&[cx, cz], col) in &dormant {
+                                                for e in &col.chickens { dormant_chicken_saves.push(save::DormantEntitySave { chunk_x: cx, chunk_z: cz, position: e.position, yaw: e.yaw, health: e.health }); }
+                                                for e in &col.pigs     { dormant_pig_saves    .push(save::DormantEntitySave { chunk_x: cx, chunk_z: cz, position: e.position, yaw: e.yaw, health: e.health }); }
+                                                for e in &col.penguins { dormant_penguin_saves.push(save::DormantEntitySave { chunk_x: cx, chunk_z: cz, position: e.position, yaw: e.yaw, health: e.health }); }
+                                            }
                                             let data = save::SaveData {
                                                 seed: world.seed(),
                                                 sun_angle,
@@ -575,10 +682,15 @@ fn main() {
                                                 block_changes,
                                                 chickens: chicken_saves,
                                                 pigs: pig_saves,
+                                                penguins: penguin_saves,
                                                 items: item_saves,
                                                 inventory: inventory_saves,
                                                 selected_slot,
                                                 hotbar: hotbar_saves,
+                                                dormant_chickens: dormant_chicken_saves,
+                                                dormant_pigs:     dormant_pig_saves,
+                                                dormant_penguins: dormant_penguin_saves,
+                                                visited_columns:  spawned_columns.iter().copied().collect(),
                                             };
                                             if let Err(e) = save::save(&name, &data) {
                                                 eprintln!("[save] {}", e);
@@ -940,6 +1052,33 @@ fn main() {
                                     pigs.push(p);
                                 }
                             }
+                            for es in &data.penguins {
+                                if let Some(def) = entity_registry.get("penguin") {
+                                    let mut p = Penguin::new(
+                                        es.position[0], es.position[1], es.position[2], def,
+                                    );
+                                    p.yaw    = es.yaw;
+                                    p.health = es.health;
+                                    penguins.push(p);
+                                }
+                            }
+                            // Restore dormant entities (those in unloaded columns at save time).
+                            for d in &data.dormant_chickens {
+                                dormant.entry([d.chunk_x, d.chunk_z]).or_default().chickens
+                                    .push(save::EntitySave { position: d.position, yaw: d.yaw, health: d.health });
+                            }
+                            for d in &data.dormant_pigs {
+                                dormant.entry([d.chunk_x, d.chunk_z]).or_default().pigs
+                                    .push(save::EntitySave { position: d.position, yaw: d.yaw, health: d.health });
+                            }
+                            for d in &data.dormant_penguins {
+                                dormant.entry([d.chunk_x, d.chunk_z]).or_default().penguins
+                                    .push(save::EntitySave { position: d.position, yaw: d.yaw, health: d.health });
+                            }
+                            // Restore visited-column set so we don't re-spawn entities in explored areas.
+                            for col in &data.visited_columns {
+                                spawned_columns.insert(*col);
+                            }
                             for is in &data.items {
                                 if let Some(item) = world::ItemType::from_tile_index(is.item_id as usize) {
                                     item_entities.push(ItemEntity::new(
@@ -964,76 +1103,15 @@ fn main() {
                                     }
                                 }
                             }
-                        } else {
-                            // ── Fresh game — deterministic entity spawn ────
-                            let scan_radius: i32 = 12;
-                            for cx in -scan_radius..=scan_radius {
-                                for cz in -scan_radius..=scan_radius {
-                                    let h = (cx.wrapping_mul(73_856_093i32)
-                                        ^ cz.wrapping_mul(19_349_663i32)) as u32;
-                                    if h % 55 != 0 { continue; }
-                                    let center_wx = (cx * 16 + 8) as f64;
-                                    let center_wz = (cz * 16 + 8) as f64;
-                                    if !world::biome::biome_at_world(center_wx, center_wz)
-                                        .allows_chickens() { continue; }
-                                    let family_size = 2 + (h >> 8) % 2;
-                                    let base_bx = cx * 16 + ((h >> 4) & 0xF) as i32;
-                                    let base_bz = cz * 16 + ((h >> 12) & 0xF) as i32;
-                                    for i in 0..family_size {
-                                        let bx = base_bx + (i as i32 % 2) * 3;
-                                        let bz = base_bz + (i as i32 / 2) * 3;
-                                        let sy = world.surface_height(bx, bz);
-                                        if sy > 63 {
-                                            if let Some(def) = entity_registry.get("chicken") {
-                                                chickens.push(Chicken::new(
-                                                    bx as f32 + 0.5, sy as f32, bz as f32 + 0.5, def,
-                                                ));
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            for cx in -scan_radius..=scan_radius {
-                                for cz in -scan_radius..=scan_radius {
-                                    let h = (cx.wrapping_mul(48_271i32)
-                                        ^ cz.wrapping_mul(83_492_791i32)) as u32;
-                                    if h % 65 != 0 { continue; }
-                                    let center_wx = (cx * 16 + 8) as f64;
-                                    let center_wz = (cz * 16 + 8) as f64;
-                                    if !world::biome::biome_at_world(center_wx, center_wz)
-                                        .allows_pigs() { continue; }
-                                    let family_size = 2 + (h >> 8) % 2;
-                                    let base_bx = cx * 16 + ((h >> 6) & 0xF) as i32;
-                                    let base_bz = cz * 16 + ((h >> 14) & 0xF) as i32;
-                                    for i in 0..family_size {
-                                        let bx = base_bx + (i as i32 % 2) * 3;
-                                        let bz = base_bz + (i as i32 / 2) * 3;
-                                        let sy = world.surface_height(bx, bz);
-                                        if sy > 63 {
-                                            if let Some(def) = entity_registry.get("pig") {
-                                                pigs.push(Pig::new(
-                                                    bx as f32 + 0.5, sy as f32, bz as f32 + 0.5, def,
-                                                ));
-                                            }
-                                        }
-                                    }
-                                }
-                            }
                         }
 
-                        // Spawn test penguins near the player on the surface.
-                        if penguins.is_empty() {
-                            if let Some(def) = entity_registry.get("penguin") {
-                                let offsets: [(i32, i32); 5] = [(-3,-4),(3,-4),(0,-6),(-4,-2),(4,-2)];
-                                for (ox, oz) in offsets {
-                                    let bx = player.position[0] as i32 + ox;
-                                    let bz = player.position[2] as i32 + oz;
-                                    let sy = world.surface_height(bx, bz);
-                                    let y = if sy > 0 { sy as f32 } else { player.position[1] };
-                                    penguins.push(Penguin::new(bx as f32 + 0.5, y, bz as f32 + 0.5, def.clone()));
-                                }
+                        // Spawn entities in every column that finished loading during startup.
+                        for [cx, cz] in world.all_loaded_columns() {
+                            if spawned_columns.insert([cx, cz]) {
+                                spawn_column_entities(cx, cz, &world, &mut chickens, &mut pigs, &mut penguins, &entity_registry);
                             }
                         }
+                        let _ = world.take_loaded_columns(); // clear backlog already handled above
 
                         world.update(player.position); // seed chunk gen at actual spawn
                         minimap.update(&world, player.position[0], player.position[2]);
@@ -1209,14 +1287,34 @@ fn main() {
                         for entity in &mut item_entities {
                             entity.update(delta_time, |x, y, z| world.get_block(x, y, z));
                         }
+                        // Compute simulation radius² for this frame.
+                        let sim_r = SIM_RADII[entity_sim_radius_idx];
+                        let sim_r2 = if sim_r == 0 { i32::MAX } else { sim_r * sim_r };
+                        let pc_x = (player.position[0] / 16.0).floor() as i32;
+                        let pc_z = (player.position[2] / 16.0).floor() as i32;
                         for chicken in &mut chickens {
-                            chicken.update(delta_time, |x, y, z| world.get_block(x, y, z));
+                            let ecx = (chicken.position[0] / 16.0).floor() as i32;
+                            let ecz = (chicken.position[2] / 16.0).floor() as i32;
+                            let dx = ecx - pc_x; let dz = ecz - pc_z;
+                            if dx*dx + dz*dz <= sim_r2 {
+                                chicken.update(delta_time, |x, y, z| world.get_block(x, y, z));
+                            }
                         }
                         for pig in &mut pigs {
-                            pig.update(delta_time, |x, y, z| world.get_block(x, y, z));
+                            let ecx = (pig.position[0] / 16.0).floor() as i32;
+                            let ecz = (pig.position[2] / 16.0).floor() as i32;
+                            let dx = ecx - pc_x; let dz = ecz - pc_z;
+                            if dx*dx + dz*dz <= sim_r2 {
+                                pig.update(delta_time, |x, y, z| world.get_block(x, y, z));
+                            }
                         }
                         for penguin in &mut penguins {
-                            penguin.update(delta_time, |x, y, z| world.get_block(x, y, z));
+                            let ecx = (penguin.position[0] / 16.0).floor() as i32;
+                            let ecz = (penguin.position[2] / 16.0).floor() as i32;
+                            let dx = ecx - pc_x; let dz = ecz - pc_z;
+                            if dx*dx + dz*dz <= sim_r2 {
+                                penguin.update(delta_time, |x, y, z| world.get_block(x, y, z));
+                            }
                         }
                         for chicken in chickens.iter().filter(|c| c.is_dead()) {
                             for item_type in chicken.drops() {
@@ -1256,6 +1354,89 @@ fn main() {
                         });
 
                         world.update(player.position);
+
+                        // ── Entity dormancy ───────────────────────────────
+                        // Move entities whose column just unloaded into dormant store.
+                        for col in world.take_unloaded_columns() {
+                            let [ucx, ucz] = col;
+                            let entry = dormant.entry(col).or_default();
+                            chickens.retain(|c| {
+                                let ccx = (c.position[0] / 16.0).floor() as i32;
+                                let ccz = (c.position[2] / 16.0).floor() as i32;
+                                if ccx == ucx && ccz == ucz {
+                                    entry.chickens.push(save::EntitySave { position: c.position, yaw: c.yaw, health: c.health });
+                                    false
+                                } else { true }
+                            });
+                            pigs.retain(|p| {
+                                let ccx = (p.position[0] / 16.0).floor() as i32;
+                                let ccz = (p.position[2] / 16.0).floor() as i32;
+                                if ccx == ucx && ccz == ucz {
+                                    entry.pigs.push(save::EntitySave { position: p.position, yaw: p.yaw, health: p.health });
+                                    false
+                                } else { true }
+                            });
+                            penguins.retain(|p| {
+                                let ccx = (p.position[0] / 16.0).floor() as i32;
+                                let ccz = (p.position[2] / 16.0).floor() as i32;
+                                if ccx == ucx && ccz == ucz {
+                                    entry.penguins.push(save::EntitySave { position: p.position, yaw: p.yaw, health: p.health });
+                                    false
+                                } else { true }
+                            });
+                            if entry.chickens.is_empty() && entry.pigs.is_empty() && entry.penguins.is_empty() {
+                                dormant.remove(&col);
+                            }
+                        }
+                        // Restore entities from dormant columns that just finished loading,
+                        // and spawn fresh entities in columns visited for the first time.
+                        let loaded_cols = world.take_loaded_columns();
+                        for col in loaded_cols {
+                            let [col_cx, col_cz] = col;
+                            if let Some(entry) = dormant.remove(&col) {
+                                let mut leftover = DormantColumn::default();
+                                for es in entry.chickens {
+                                    let cy = (es.position[1] as i32).div_euclid(16);
+                                    if world.is_chunk_loaded(col_cx, cy, col_cz) {
+                                        if let Some(def) = entity_registry.get("chicken") {
+                                            let mut c = Chicken::new(es.position[0], es.position[1], es.position[2], def);
+                                            c.yaw = es.yaw; c.health = es.health;
+                                            chickens.push(c);
+                                        }
+                                    } else { leftover.chickens.push(es); }
+                                }
+                                for es in entry.pigs {
+                                    let cy = (es.position[1] as i32).div_euclid(16);
+                                    if world.is_chunk_loaded(col_cx, cy, col_cz) {
+                                        if let Some(def) = entity_registry.get("pig") {
+                                            let mut p = Pig::new(es.position[0], es.position[1], es.position[2], def);
+                                            p.yaw = es.yaw; p.health = es.health;
+                                            pigs.push(p);
+                                        }
+                                    } else { leftover.pigs.push(es); }
+                                }
+                                for es in entry.penguins {
+                                    let cy = (es.position[1] as i32).div_euclid(16);
+                                    if world.is_chunk_loaded(col_cx, cy, col_cz) {
+                                        if let Some(def) = entity_registry.get("penguin") {
+                                            let mut p = Penguin::new(es.position[0], es.position[1], es.position[2], def);
+                                            p.yaw = es.yaw; p.health = es.health;
+                                            penguins.push(p);
+                                        }
+                                    } else { leftover.penguins.push(es); }
+                                }
+                                // Re-queue any entities whose specific chunk didn't arrive yet,
+                                // and reset the notification so finalize_blocks re-fires when it does.
+                                if !leftover.chickens.is_empty() || !leftover.pigs.is_empty() || !leftover.penguins.is_empty() {
+                                    world.reset_column_notification(col_cx, col_cz);
+                                    dormant.insert(col, leftover);
+                                }
+                            } else if spawned_columns.insert(col) {
+                                // First time visiting this column — seed it with entities.
+                                spawn_column_entities(col_cx, col_cz, &world, &mut chickens, &mut pigs, &mut penguins, &entity_registry);
+                            }
+                        }
+
                         world.tick_water(delta_time);
                     }
 
@@ -1670,7 +1851,7 @@ fn main() {
 
             // Options menu overlays on top of everything else.
             if options_open {
-                options_menu.draw(fog_distance.as_idx(), chunk_radius_idx, outline_enabled, stats_enabled, hi_res, chunk_outlines, entity_outlines, music_enabled, music_volume, sfx_volume, win_w, win_h);
+                options_menu.draw(fog_distance.as_idx(), chunk_radius_idx, entity_sim_radius_idx, outline_enabled, stats_enabled, hi_res, chunk_outlines, entity_outlines, music_enabled, music_volume, sfx_volume, win_w, win_h);
             }
 
             window.swap_buffers();

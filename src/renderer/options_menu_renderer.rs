@@ -21,18 +21,20 @@ impl OptionsMenuRenderer {
             &["FOG: NEAR", "FOG: NORMAL", "FOG: FAR", "FOG: OFF"], row(0)));
         window.add_button(TextButton::new_toggle("chunks",
             &["CHUNKS: 4", "CHUNKS: 6", "CHUNKS: 8", "CHUNKS: 10", "CHUNKS: 12"], row(1)));
+        window.add_button(TextButton::new_toggle("sim_radius",
+            &["SIM: 2", "SIM: 4", "SIM: 6", "SIM: 8", "SIM: ALL"], row(2)));
         window.add_button(TextButton::new_toggle("outline",
-            &["OUTLINE: OFF", "OUTLINE: ON"], row(2)));
+            &["OUTLINE: OFF", "OUTLINE: ON"], row(3)));
         window.add_button(TextButton::new_toggle("stats",
-            &["STATS: OFF", "STATS: ON"], row(3)));
+            &["STATS: OFF", "STATS: ON"], row(4)));
         window.add_button(TextButton::new_toggle("res",
-            &["RES: LO", "RES: HI"], row(4)));
+            &["RES: LO", "RES: HI"], row(5)));
         window.add_button(TextButton::new_toggle("chunk_outlines",
-            &["CHUNK OUTLINES: OFF", "CHUNK OUTLINES: ON"], row(5)));
+            &["CHUNK OUTLINES: OFF", "CHUNK OUTLINES: ON"], row(6)));
         window.add_button(TextButton::new_toggle("entity_outlines",
-            &["ENTITY OUTLINES: OFF", "ENTITY OUTLINES: ON"], row(6)));
-        window.add_button(TextButton::new("audio", "AUDIO", row(7)));
-        let back_y = 0.14 + 8.0 * 0.08 + 0.01;
+            &["ENTITY OUTLINES: OFF", "ENTITY OUTLINES: ON"], row(7)));
+        window.add_button(TextButton::new("audio", "AUDIO", row(8)));
+        let back_y = 0.14 + 9.0 * 0.08 + 0.01;
         window.add_button(TextButton::new("back", "BACK",
             (0.35, back_y, 0.65, back_y + 0.065)));
 
@@ -54,7 +56,7 @@ impl OptionsMenuRenderer {
 
     pub fn draw(
         &mut self,
-        fog_idx: usize, chunk_radius_idx: usize,
+        fog_idx: usize, chunk_radius_idx: usize, entity_sim_radius_idx: usize,
         outline_enabled: bool, stats_enabled: bool, hi_res: bool,
         chunk_outlines: bool, entity_outlines: bool,
         music_enabled: bool, music_volume: f32, sfx_volume: f32,
@@ -68,6 +70,7 @@ impl OptionsMenuRenderer {
         } else {
             self.window.button_mut("fog").unwrap().set_label(fog_idx);
             self.window.button_mut("chunks").unwrap().set_label(chunk_radius_idx);
+            self.window.button_mut("sim_radius").unwrap().set_label(entity_sim_radius_idx);
             self.window.button_mut("outline").unwrap().set_label(outline_enabled as usize);
             self.window.button_mut("stats").unwrap().set_label(stats_enabled as usize);
             self.window.button_mut("res").unwrap().set_label(hi_res as usize);

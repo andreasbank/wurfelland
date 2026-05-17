@@ -5,10 +5,11 @@
     "habitat": "land",
     "health": { "max": 6.0 },
     "physics": {
-      "half_width": 0.22,
-      "height": 1.0,
+      "half_width": 0.14,
+      "height": 0.6,
       "jump_speed": 7.0,
-      "hit_half_width": 0.32
+      "hit_half_width": 0.20,
+      "render_scale": 0.55
     },
     "movement": { "speed": 0.8 },
     "wander": {

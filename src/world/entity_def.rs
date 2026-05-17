@@ -27,8 +27,14 @@ struct Components {
 #[derive(Deserialize)]
 struct HealthComp   { max: f32 }
 
+fn default_render_scale() -> f32 { 1.0 }
+
 #[derive(Deserialize)]
-struct PhysicsComp  { half_width: f32, height: f32, jump_speed: f32, hit_half_width: f32 }
+struct PhysicsComp {
+    half_width: f32, height: f32, jump_speed: f32, hit_half_width: f32,
+    #[serde(default = "default_render_scale")]
+    render_scale: f32,
+}
 
 #[derive(Deserialize)]
 struct MovementComp { speed: f32 }
@@ -64,6 +70,7 @@ pub struct EntityDef {
     pub height: f32,
     pub jump_speed: f32,
     pub hit_half_width: f32,
+    pub render_scale: f32,
     pub speed: f32,
     pub idle_chance: f32,
     pub idle_range: (f32, f32),
@@ -86,6 +93,7 @@ impl EntityDef {
             height:        c.physics.height,
             jump_speed:    c.physics.jump_speed,
             hit_half_width: c.physics.hit_half_width,
+            render_scale:  c.physics.render_scale,
             speed:         c.movement.speed,
             idle_chance:   c.wander.idle_chance,
             idle_range:    (c.wander.idle_min_secs, c.wander.idle_max_secs),

@@ -79,7 +79,7 @@ float calcShadow(vec3 worldPos, vec3 normal, float viewDist) {
     }
     vec4 lsPos = u_light_space[cascade] * vec4(worldPos, 1.0);
     vec3 proj   = lsPos.xyz / lsPos.w * 0.5 + 0.5;
-    if (proj.z > 1.0) return 0.0;
+    if (proj.z > 1.0) return 1.0;
     float bias  = max(u_texel_sizes[cascade] * 2.0 * (1.0 - max(dot(normal, u_light_dir), 0.0)), u_texel_sizes[cascade]);
     float shadow = 0.0;
     float ts     = 1.0 / 1024.0;
@@ -223,7 +223,8 @@ impl PlacedObjectRenderer {
                 let model_mat =
                     glam::Mat4::from_translation(glam::Vec3::from(p.position))
                     * glam::Mat4::from_rotation_y(p.yaw.to_radians())
-                    * glam::Mat4::from_rotation_z(roll);
+                    * glam::Mat4::from_rotation_z(roll)
+                    * glam::Mat4::from_scale(glam::Vec3::splat(p.def.render_scale));
                 let mvp = *projection * *view * model_mat;
 
                 gl::UniformMatrix4fv(self.mvp_loc,   1, gl::FALSE, mvp.to_cols_array().as_ptr());
@@ -243,7 +244,8 @@ impl PlacedObjectRenderer {
         for p in penguins {
             let model_mat =
                 glam::Mat4::from_translation(glam::Vec3::from(p.position))
-                * glam::Mat4::from_rotation_y(p.yaw.to_radians());
+                * glam::Mat4::from_rotation_y(p.yaw.to_radians())
+                * glam::Mat4::from_scale(glam::Vec3::splat(p.def.render_scale));
             shadow_pass.draw_solid_mesh_indexed(model.vao, model.index_count, &model_mat);
         }
     }

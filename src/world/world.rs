@@ -53,6 +53,10 @@ pub struct World {
     // Player-authored block changes (breaks/placements); applied to newly generated
     // chunks so loaded saves always see the same terrain modifications.
     block_changes: HashMap<[i32; 3], BlockType>,
+    // Per-frame column events consumed by main.rs for entity dormancy.
+    unloaded_columns: Vec<[i32; 2]>,
+    loaded_columns:   Vec<[i32; 2]>,
+    notified_columns: HashSet<[i32; 2]>, // columns already announced as loaded
 }
 
 impl World {
@@ -76,6 +80,9 @@ impl World {
             active_spread: HashSet::new(),
             water_levels: HashMap::new(),
             block_changes: HashMap::new(),
+            unloaded_columns: Vec::new(),
+            loaded_columns:   Vec::new(),
+            notified_columns: HashSet::new(),
         }
     }
 
@@ -221,6 +228,16 @@ impl World {
             }
             self.chunks.insert(ready.position, chunk);
 
+            // Announce when enough of an XZ column is loaded to support entities.
+            // cy 4 = world Y 64-79 (sea level where most entities stand); cy 10 = mountain tops.
+            let col = [cx, cz];
+            if !self.notified_columns.contains(&col)
+                && (4i32..=10).all(|y| self.chunks.contains_key(&[cx, y, cz]))
+            {
+                self.notified_columns.insert(col);
+                self.loaded_columns.push(col);
+            }
+
             // Seed water_levels for rendering. One HashMap entry per chunk instead
             // of one per water block — avoids O(n) inserts for large water bodies.
             let snapshot = self.chunks[&ready.position].blocks_snapshot();
@@ -298,32 +315,16 @@ impl World {
     /// sky edge data on their next pass. Sky values can only go from 15→0 (never
     /// the reverse), so this cascade converges in at most 2 passes per chunk.
     fn finalize_meshes(&mut self, max: usize) {
-        let mut to_rebuild: Vec<[i32; 3]> = Vec::new();
         for _ in 0..max {
             match self.mesh_rx.try_recv() {
                 Ok(ready) => {
                     self.pending_meshes.remove(&ready.position);
                     if let Some(chunk) = self.chunks.get_mut(&ready.position) {
-                        let sky_changed = chunk.sky_edges_changed(&ready.sky);
                         chunk.finalize_mesh(ready.vertices);
                         chunk.update_sky_light(ready.sky);
-                        if sky_changed {
-                            to_rebuild.push(ready.position);
-                        }
                     }
                 }
                 Err(_) => break,
-            }
-        }
-        for [cx, cy, cz] in to_rebuild {
-            for npos in [
-                [cx+1,cy,cz],[cx-1,cy,cz],
-                [cx,cy,cz+1],[cx,cy,cz-1],
-                [cx,cy+1,cz],[cx,cy-1,cz],
-            ] {
-                if let Some(n) = self.chunks.get_mut(&npos) {
-                    n.mark_for_rebuild();
-                }
             }
         }
     }
@@ -453,6 +454,15 @@ impl World {
         self.active_spread.retain(|&[wx, wy, wz]| {
             self.chunks.contains_key(&[wx.div_euclid(16), wy.div_euclid(16), wz.div_euclid(16)])
         });
+
+        // Announce unique XZ columns that just lost all their chunks.
+        let mut seen: HashSet<[i32; 2]> = HashSet::new();
+        for &[cx, _, cz] in &removed {
+            if seen.insert([cx, cz]) {
+                self.unloaded_columns.push([cx, cz]);
+                self.notified_columns.remove(&[cx, cz]);
+            }
+        }
     }
 
     /// Replace a block at world coords and mark the chunk (plus border neighbors) for rebuild.
@@ -503,10 +513,10 @@ impl World {
             above: if a_loaded { self.chunks[&[cx,cy+1,cz]].edge_bottom() } else { [[BlockType::Air; 16]; 16] },
             below: if d_loaded { self.chunks[&[cx,cy-1,cz]].edge_top()    } else { [[BlockType::Air; 16]; 16] },
             above_sky: if a_loaded { self.chunks[&[cx,cy+1,cz]].sky_light_bottom()      } else { [[15u8; 16]; 16] },
-            right_sky: if r_loaded { self.chunks[&[cx+1,cy,cz]].sky_light_edge_right()  } else { [[15u8; 16]; 16] },
-            left_sky:  if l_loaded { self.chunks[&[cx-1,cy,cz]].sky_light_edge_left()   } else { [[15u8; 16]; 16] },
-            front_sky: if f_loaded { self.chunks[&[cx,cy,cz+1]].sky_light_edge_front()  } else { [[15u8; 16]; 16] },
-            back_sky:  if b_loaded { self.chunks[&[cx,cy,cz-1]].sky_light_edge_back()   } else { [[15u8; 16]; 16] },
+            right_sky: if r_loaded { self.chunks[&[cx+1,cy,cz]].sky_light_edge_right()  } else { [[0u8; 16]; 16] },
+            left_sky:  if l_loaded { self.chunks[&[cx-1,cy,cz]].sky_light_edge_left()   } else { [[0u8; 16]; 16] },
+            front_sky: if f_loaded { self.chunks[&[cx,cy,cz+1]].sky_light_edge_front()  } else { [[0u8; 16]; 16] },
+            back_sky:  if b_loaded { self.chunks[&[cx,cy,cz-1]].sky_light_edge_back()   } else { [[0u8; 16]; 16] },
             below_sky: if d_loaded { self.chunks[&[cx,cy-1,cz]].sky_light_edge_top()    } else { [[0u8;  16]; 16] },
             wl_right: if r_loaded { self.water_edge_at_lx(cx+1, cy, cz, 0)  } else { [[0u8; 16]; 16] },
             wl_left:  if l_loaded { self.water_edge_at_lx(cx-1, cy, cz, 15) } else { [[0u8; 16]; 16] },
@@ -583,6 +593,31 @@ impl World {
         // Column is considered meshed when the surface chunk (cy=4, world Y 64–79) is ready.
         let surface_cy = SEA_LEVEL / 16;
         self.chunks.get(&[cx, surface_cy, cz]).map_or(false, |c| c.mesh.is_some())
+    }
+
+    /// XZ columns whose last chunk was removed this frame (call once per frame).
+    pub fn take_unloaded_columns(&mut self) -> Vec<[i32; 2]> {
+        std::mem::take(&mut self.unloaded_columns)
+    }
+
+    /// XZ columns whose entity-supporting band (cy 4–10) just became fully loaded (call once per frame).
+    pub fn take_loaded_columns(&mut self) -> Vec<[i32; 2]> {
+        std::mem::take(&mut self.loaded_columns)
+    }
+
+    pub fn is_chunk_loaded(&self, cx: i32, cy: i32, cz: i32) -> bool {
+        self.chunks.contains_key(&[cx, cy, cz])
+    }
+
+    /// Allow a column to be re-announced via take_loaded_columns() once its missing chunks arrive.
+    pub fn reset_column_notification(&mut self, cx: i32, cz: i32) {
+        self.notified_columns.remove(&[cx, cz]);
+    }
+
+    /// All XZ columns whose entity-supporting band is currently fully loaded.
+    /// Use once at game-start to seed the spawned-columns set from already-loaded terrain.
+    pub fn all_loaded_columns(&self) -> Vec<[i32; 2]> {
+        self.notified_columns.iter().copied().collect()
     }
 
     pub fn chunk_count(&self) -> usize {

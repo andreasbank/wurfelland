@@ -14,6 +14,16 @@ pub struct EntitySave {
     pub health:   f32,
 }
 
+/// An entity serialized into a dormant (unloaded) chunk column.
+#[derive(Serialize, Deserialize, Clone)]
+pub struct DormantEntitySave {
+    pub chunk_x:  i32,
+    pub chunk_z:  i32,
+    pub position: [f32; 3],
+    pub yaw:      f32,
+    pub health:   f32,
+}
+
 // ── Per-item-entity snapshot ───────────────────────────────────────────────
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -59,6 +69,8 @@ pub struct SaveData {
     #[serde(default)]
     pub pigs: Vec<EntitySave>,
     #[serde(default)]
+    pub penguins: Vec<EntitySave>,
+    #[serde(default)]
     pub items: Vec<ItemSave>,
     #[serde(default)]
     pub inventory: Vec<InventorySlotSave>,
@@ -66,6 +78,16 @@ pub struct SaveData {
     pub selected_slot: usize,
     #[serde(default)]
     pub hotbar: Vec<InventorySlotSave>,  // reuses same struct; index = hotbar slot 0–8
+    #[serde(default)]
+    pub dormant_chickens: Vec<DormantEntitySave>,
+    #[serde(default)]
+    pub dormant_pigs:     Vec<DormantEntitySave>,
+    #[serde(default)]
+    pub dormant_penguins: Vec<DormantEntitySave>,
+    /// XZ chunk columns that have already had their initial entity spawn, so we
+    /// don't re-populate them on reload.
+    #[serde(default)]
+    pub visited_columns: Vec<[i32; 2]>,
 }
 
 impl SaveData {

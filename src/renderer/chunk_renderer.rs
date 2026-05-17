@@ -162,7 +162,7 @@ impl ChunkRenderer {
                     vec3 offsetWorld = worldPos + normalize(normal) * shadowTexelSizes[cascade];
                     vec4 fragPosLS   = lightSpaceMatrices[cascade] * vec4(offsetWorld, 1.0);
                     vec3 projCoords  = fragPosLS.xyz / fragPosLS.w * 0.5 + 0.5;
-                    if (projCoords.z > 1.0) return 0.0;
+                    if (projCoords.z > 1.0) return 1.0;
                     float currentDepth = projCoords.z;
                     float shadow = 0.0;
                     const vec2 texelSize = vec2(1.0 / 2048.0);
@@ -192,8 +192,8 @@ impl ChunkRenderer {
 
                     float shadow = calcShadow(vWorldPos, vNormal, fragDist);
                     float outdoor_sun = ambientLight + directionalLight * (1.0 - shadow);
-                    // Caves receive a fraction of ambient only; no directional sun.
-                    float cave_ambient = ambientLight * 0.25;
+                    // Caves have a fixed dim floor — not tied to time of day.
+                    float cave_ambient = 0.03;
                     float sun_light = mix(cave_ambient, outdoor_sun, vSkyLight);
                     float torch_dist = length(vWorldPos - u_torch_pos);
                     float torch_atten = max(0.0, 1.0 - torch_dist / 12.0);

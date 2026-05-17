@@ -206,7 +206,7 @@ impl EntityRenderer {
                     vec3 offset = worldPos + vec3(0.0, u_texel_sizes[cascade], 0.0);
                     vec4 fragPosLS  = u_light_space[cascade] * vec4(offset, 1.0);
                     vec3 projCoords = fragPosLS.xyz / fragPosLS.w * 0.5 + 0.5;
-                    if (projCoords.z > 1.0) return 0.0;
+                    if (projCoords.z > 1.0) return 1.0;
                     float currentDepth = projCoords.z - 0.001;
                     float shadow = 0.0;
                     const vec2 texelSize = vec2(1.0 / 2048.0);
