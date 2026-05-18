@@ -3,6 +3,9 @@ use std::os::raw::c_void;
 use std::ptr;
 use std::time::Instant;
 
+/// Set to true during development to start with debug overlays enabled.
+const DEBUG: bool = true;
+
 mod save;
 
 mod game;
@@ -223,8 +226,8 @@ fn main() {
         let stats_renderer         = StatsRenderer::new();
         let chunk_outline_renderer    = ChunkOutlineRenderer::new();
         let placed_object_renderer    = PlacedObjectRenderer::new();
-        let mut chunk_outlines     = false;
-        let mut entity_outlines    = false;
+        let mut chunk_outlines     = DEBUG;
+        let mut entity_outlines    = DEBUG;
         let mut pending_load: Option<save::SaveData> = None;
 
         // ── Network state ─────────────────────────────────────────────────────
@@ -288,7 +291,7 @@ fn main() {
         let mut paused = false;
         let mut loading_menu_timer: f32 = 0.0; // time spent in LoadingMenu state
         let mut outline_enabled = true;
-        let mut stats_enabled = false;
+        let mut stats_enabled = DEBUG;
         let mut hi_res = true;
         let mut win_w: f32 = 1600.0;
         let mut win_h: f32 = 1200.0;
@@ -308,6 +311,7 @@ fn main() {
         const DAY_LENGTH_SECS: f32 = 300.0;
         let mut sun_angle: f32 = std::f32::consts::FRAC_PI_4;
         let mut total_time: f32 = 0.0;
+        let mut time_frozen: bool = false;
 
         // Digging / hit state
         let mut lmb_held = false;
@@ -867,6 +871,22 @@ fn main() {
                                                 console.push_line("GOD MODE DISABLED");
                                             }
                                         }
+                                        ConsoleAction::Day => {
+                                            sun_angle = std::f32::consts::FRAC_PI_2;
+                                            console.push_line("TIME SET TO DAY");
+                                        }
+                                        ConsoleAction::Night => {
+                                            sun_angle = 3.0 * std::f32::consts::FRAC_PI_2;
+                                            console.push_line("TIME SET TO NIGHT");
+                                        }
+                                        ConsoleAction::FreezeTime => {
+                                            time_frozen = !time_frozen;
+                                            if time_frozen {
+                                                console.push_line("TIME FROZEN");
+                                            } else {
+                                                console.push_line("TIME UNFROZEN");
+                                            }
+                                        }
                                         ConsoleAction::None => {}
                                     }
                                 } else if console_open && key == Key::Backspace {
@@ -906,6 +926,7 @@ fn main() {
                                         first_mouse = true;
                                     }
                                 } else if !paused && !console_open {
+                                    keys_pressed.insert(key, true);
                                     if key == Key::Space {
                                         let px = player.position[0] as i32;
                                         let pz = player.position[2] as i32;
@@ -929,9 +950,7 @@ fn main() {
                                     } {
                                         selected_slot = slot;
                                     } else if key == Key::D && modifiers.contains(glfw::Modifiers::Control) {
-                                        println!("CTRL+D pressed");
-                                    } else {
-                                        keys_pressed.insert(key, true);
+                                        if DEBUG { println!("CTRL+D pressed"); }
                                     }
                                 }
                             }
@@ -1155,20 +1174,28 @@ fn main() {
                             *keys_pressed.get(&Key::D).unwrap_or(&false),
                             *keys_pressed.get(&Key::LeftShift).unwrap_or(&false),
                             in_water,
+                            player.flying,
                         );
                         if in_water && *keys_pressed.get(&Key::Space).unwrap_or(&false) {
                             player.swim_up();
                         }
-                        if player.flying {
-                            if *keys_pressed.get(&Key::Space).unwrap_or(&false) {
+                        let space_held = *keys_pressed.get(&Key::Space).unwrap_or(&false);
+                        let shift_held = *keys_pressed.get(&Key::LeftShift).unwrap_or(&false);
+                        if god_mode && !in_water {
+                            if space_held {
+                                player.flying = true;
                                 player.fly_up();
-                            } else if *keys_pressed.get(&Key::LeftShift).unwrap_or(&false) {
+                            } else if shift_held && player.flying {
                                 player.fly_down();
                             }
+                        } else if player.flying {
+                            if space_held { player.fly_up(); }
+                            else if shift_held { player.fly_down(); }
                         }
                         player.apply_physics(delta_time, in_water, |x, y, z| world.get_block(x, y, z).is_solid());
-                        // Landing while flying stops the flight
-                        if player.flying && player.on_ground {
+                        // Landing stops flight only outside godmode; in godmode the player
+                        // walks on the ground when not holding space.
+                        if player.flying && player.on_ground && !god_mode {
                             player.stop_flying();
                         }
                         let fall_dmg = player.tick_fall(in_water);
@@ -1497,8 +1524,10 @@ fn main() {
 
             // ── Sun / sky (common to all states) ──────────────────────────────
             total_time += delta_time;
-            sun_angle += delta_time * (std::f32::consts::TAU / DAY_LENGTH_SECS);
-            if sun_angle > std::f32::consts::TAU { sun_angle -= std::f32::consts::TAU; }
+            if !time_frozen {
+                sun_angle += delta_time * (std::f32::consts::TAU / DAY_LENGTH_SECS);
+                if sun_angle > std::f32::consts::TAU { sun_angle -= std::f32::consts::TAU; }
+            }
 
             let sun_pos  = glam::Vec3::new(sun_angle.cos(), sun_angle.sin(), 0.3);
             let moon_pos = -sun_pos;

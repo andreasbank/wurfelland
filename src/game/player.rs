@@ -15,6 +15,7 @@ const MAX_WATER_FALL: f32 = -2.0;
 const HALF_WIDTH: f32 = 0.3; // Player is 0.6 wide
 const PLAYER_HEIGHT: f32 = 1.8;
 const FLY_SPEED: f32 = 10.0;
+const FLY_MOVE_SPEED: f32 = MOVE_SPEED * 3.0;
 
 pub struct Player {
     pub health: u32,
@@ -107,8 +108,8 @@ impl Player {
         self.velocity[1] = 0.0;
     }
 
-    pub fn walk(&mut self, forward: bool, back: bool, left: bool, right: bool, running: bool, in_water: bool) {
-        let speed = if in_water { WATER_SPEED } else if running { RUN_SPEED } else { MOVE_SPEED };
+    pub fn walk(&mut self, forward: bool, back: bool, left: bool, right: bool, running: bool, in_water: bool, flying: bool) {
+        let speed = if flying { FLY_MOVE_SPEED } else if in_water { WATER_SPEED } else if running { RUN_SPEED } else { MOVE_SPEED };
         let mut vx = 0.0f32;
         let mut vz = 0.0f32;
 

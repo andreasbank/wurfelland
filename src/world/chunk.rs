@@ -200,7 +200,7 @@ impl Chunk {
         ));
         if wy_base > MAX_SURF_Y + 1 {
             // Entire chunk is above the highest possible terrain — leave all-air.
-            let sky_light = compute_sky_light(&blocks);
+            let sky_light = Box::new([[[0u8; 16]; 16]; 16]);
             return Chunk { position, blocks, mesh: None, needs_rebuild: true, model, sky_light };
         }
 
@@ -480,7 +480,7 @@ impl Chunk {
             }
         }
 
-        let sky_light = compute_sky_light(&blocks);
+        let sky_light = Box::new([[[0u8; 16]; 16]; 16]);
         Chunk { position, blocks, mesh: None, needs_rebuild: true, model, sky_light }
     }
 
@@ -653,28 +653,32 @@ impl Chunk {
         // 16³ * 0.10 * 3 faces * 6 verts * 12 floats ≈ 8748. Sized to avoid early reallocs.
         let mut vertices = Vec::with_capacity(9216);
 
-        // Sky-light: vertical column scan (no diminishing) + BFS horizontal spread.
-        // Vertical pass: propagate above_sky straight down through transparent blocks.
+        // Sky-light: vertical column scan + BFS horizontal spread.
+        //
+        // The vertical scan WITHOUT diminishing is only valid for direct sky columns
+        // (above_sky == 15). When above_sky is 1–14 the value was obtained by BFS
+        // spreading in the chunk above (not a straight vertical shaft), so it must be
+        // treated like any other BFS seed: one extra step of diminishing applies at
+        // the chunk boundary, and BFS handles further propagation.
         let mut sky = [[[0u8; 16]; 16]; 16];
         for x in 0..16usize {
             for z in 0..16usize {
-                let top = edges.above_sky[x][z];
-                if top == 0 { continue; }
+                if edges.above_sky[x][z] != 15 { continue; }
                 for y in (0..16usize).rev() {
                     if blocks[x][y][z].is_opaque() { break; }
-                    sky[x][y][z] = top;
+                    sky[x][y][z] = 15;
                 }
             }
         }
 
         // BFS horizontal spread: light bleeds sideways from lit blocks into cave
-        // entrances, diminishing by 1 per block.  Also seeds from horizontal
-        // neighbour edges so light carries across chunk boundaries.
+        // entrances, diminishing by 1 per block.  Also seeds from all neighbour
+        // edges so light carries across chunk boundaries in every direction.
         {
             use std::collections::VecDeque;
             let mut queue: VecDeque<(i32, i32, i32)> = VecDeque::new();
 
-            // Seed queue from vertical scan results.
+            // Seed queue from vertical scan results (sky columns).
             for x in 0..16usize {
                 for y in 0..16usize {
                     for z in 0..16usize {
@@ -685,8 +689,8 @@ impl Chunk {
                 }
             }
 
-            // Seed from horizontal neighbour sky edges (value already diminished by 1
-            // because the source block is one step outside this chunk).
+            // Each neighbour edge value is already the sky_light of the block just
+            // outside this chunk, so crossing the boundary costs one diminish step.
             let seed = |sky: &mut [[[u8;16];16];16], x: usize, y: usize, z: usize, val: u8,
                             queue: &mut VecDeque<(i32,i32,i32)>| {
                 if val > 0 && !blocks[x][y][z].is_opaque() && sky[x][y][z] < val {
@@ -694,6 +698,7 @@ impl Chunk {
                     queue.push_back((x as i32, y as i32, z as i32));
                 }
             };
+            // Horizontal neighbours
             for y in 0..16usize {
                 for z in 0..16usize {
                     seed(&mut sky, 0,  y, z, edges.left_sky [y][z].saturating_sub(1), &mut queue);
@@ -702,6 +707,17 @@ impl Chunk {
                 for x in 0..16usize {
                     seed(&mut sky, x, y, 0,  edges.back_sky [y][x].saturating_sub(1), &mut queue);
                     seed(&mut sky, x, y, 15, edges.front_sky[y][x].saturating_sub(1), &mut queue);
+                }
+            }
+            // above_sky < 15: BFS-lit value from the chunk above — seed the top face
+            // with one extra diminish step (the chunk boundary counts as one hop).
+            // Sky columns (above_sky == 15) are already handled by the vertical scan.
+            for x in 0..16usize {
+                for z in 0..16usize {
+                    let a = edges.above_sky[x][z];
+                    if a > 0 && a < 15 {
+                        seed(&mut sky, x, 15, z, a.saturating_sub(1), &mut queue);
+                    }
                 }
             }
 
@@ -787,7 +803,7 @@ impl Chunk {
                             // Use sky_light of the adjacent open block, not this block's own value.
                             // A cliff side-face looks into outdoor air (sky=15) and must be lit.
                             let sl = Self::neighbor_sky(&sky, edges, x as i32, y as i32, z as i32, face);
-                            let ao = Self::compute_ao(blocks, x as i32, y as i32, z as i32, face);
+                            let ao = Self::compute_ao(blocks, edges, x as i32, y as i32, z as i32, face);
                             vertices.extend(Self::face_vertices_real_(
                                 x as f32, y as f32, z as f32, face, block, ao, sl,
                             ));
@@ -931,20 +947,37 @@ impl Chunk {
         !neighbor.is_opaque()
     }
 
-    fn block_is_solid_local(blocks: &Blocks, x: i32, y: i32, z: i32) -> bool {
-        if x < 0 || x >= 16 || y < 0 || y >= 16 || z < 0 || z >= 16 {
-            return false;
+    // Solid lookup for AO that crosses chunk boundaries via neighbour edge data.
+    // when the position steps outside the current chunk.  This prevents AO from
+    // treating neighbour chunk blocks as air, which was causing a subtle bright
+    // seam at every chunk border.
+    fn block_is_solid_ao(blocks: &Blocks, edges: &NeighborEdges, x: i32, y: i32, z: i32) -> bool {
+        let xb = x < 0 || x >= 16;
+        let yb = y < 0 || y >= 16;
+        let zb = z < 0 || z >= 16;
+        // Two or more dimensions out of bounds = chunk corner we can't look up.
+        if (xb as u8) + (yb as u8) + (zb as u8) > 1 { return false; }
+        if !xb && !yb && !zb {
+            blocks[x as usize][y as usize][z as usize].is_solid()
+        } else if xb {
+            let (y, z) = (y as usize, z as usize);
+            if x < 0 { edges.left [y][z].is_solid() } else { edges.right[y][z].is_solid() }
+        } else if zb {
+            let (y, x) = (y as usize, x as usize);
+            if z < 0 { edges.back [y][x].is_solid() } else { edges.front[y][x].is_solid() }
+        } else {
+            let (x, z) = (x as usize, z as usize);
+            if y < 0 { edges.below[x][z].is_solid() } else { edges.above[x][z].is_solid() }
         }
-        blocks[x as usize][y as usize][z as usize].is_solid()
     }
 
-    fn compute_ao(blocks: &Blocks, x: i32, y: i32, z: i32, face: Face) -> [f32; 4] {
+    fn compute_ao(blocks: &Blocks, edges: &NeighborEdges, x: i32, y: i32, z: i32, face: Face) -> [f32; 4] {
         let neighbors = face.ao_neighbors();
         let mut ao = [1.0f32; 4];
         for (vi, [s1, s2, c]) in neighbors.iter().enumerate() {
-            let side1  = Self::block_is_solid_local(blocks, x + s1.0, y + s1.1, z + s1.2);
-            let side2  = Self::block_is_solid_local(blocks, x + s2.0, y + s2.1, z + s2.2);
-            let corner = Self::block_is_solid_local(blocks, x + c.0,  y + c.1,  z + c.2);
+            let side1  = Self::block_is_solid_ao(blocks, edges, x + s1.0, y + s1.1, z + s1.2);
+            let side2  = Self::block_is_solid_ao(blocks, edges, x + s2.0, y + s2.1, z + s2.2);
+            let corner = Self::block_is_solid_ao(blocks, edges, x + c.0,  y + c.1,  z + c.2);
             ao[vi] = if side1 && side2 {
                 0.4
             } else {

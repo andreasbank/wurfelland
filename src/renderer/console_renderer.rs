@@ -16,6 +16,9 @@ pub enum ConsoleAction {
     None,
     Exit,
     GodMode,
+    Day,
+    Night,
+    FreezeTime,
 }
 
 pub struct ConsoleRenderer {
@@ -62,12 +65,18 @@ impl ConsoleRenderer {
             "help" => {
                 self.push_line(&format!("{} V{}", GAME_NAME, GAME_VERSION));
                 self.push_line("COMMANDS:");
-                self.push_line("  HELP     -  SHOW THIS MESSAGE");
-                self.push_line("  GODMODE  -  TOGGLE GOD MODE");
-                self.push_line("  EXIT     -  QUIT THE GAME");
+                self.push_line("  HELP       -  SHOW THIS MESSAGE");
+                self.push_line("  GODMODE    -  TOGGLE GOD MODE");
+                self.push_line("  DAY        -  SET TIME TO DAY");
+                self.push_line("  NIGHT      -  SET TIME TO NIGHT");
+                self.push_line("  FREEZE     -  TOGGLE TIME FREEZE");
+                self.push_line("  EXIT       -  QUIT THE GAME");
             }
             "exit" => return ConsoleAction::Exit,
             "godmode" => return ConsoleAction::GodMode,
+            "day" => return ConsoleAction::Day,
+            "night" => return ConsoleAction::Night,
+            "freeze" | "stoptime" => return ConsoleAction::FreezeTime,
             "" => {}
             _ => {
                 self.push_line(&format!("UNKNOWN COMMAND: {}", cmd.to_uppercase()));

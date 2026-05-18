@@ -331,15 +331,16 @@ impl World {
                         chunk.finalize_mesh(ready.vertices);
                         chunk.update_sky_light(ready.sky);
                     }
-                    // Sky-light edges changed: only vertical neighbours need a rebuild.
-                    // The chunk below reads above_sky from us; the chunk above reads
-                    // below_sky from us.  Horizontal spreading is handled entirely by
-                    // the BFS inside build_vertices using the stored sky-edge seeds, so
-                    // horizontal cascade rebuilds are unnecessary and expensive.
+                    // Sky-light edges changed: rebuild all 6 axis-aligned neighbours.
+                    // With sky_light initialised to 0, underground chunks see
+                    // sky_edges_changed=false immediately, so the cascade is cheap —
+                    // it only fans out through surface-adjacent chunks where sky
+                    // values actually differ between passes.
                     if sky_changed {
                         for npos in [
-                            [cx, cy - 1, cz],
-                            [cx, cy + 1, cz],
+                            [cx - 1, cy, cz], [cx + 1, cy, cz],
+                            [cx, cy - 1, cz], [cx, cy + 1, cz],
+                            [cx, cy, cz - 1], [cx, cy, cz + 1],
                         ] {
                             if !self.pending_meshes.contains(&npos) {
                                 if let Some(n) = self.chunks.get_mut(&npos) {
