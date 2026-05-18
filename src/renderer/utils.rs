@@ -153,6 +153,9 @@ pub fn create_item_atlas() -> u32 {
     // === TILE 11: Bed ===
     fill_tile_placeholder(&mut pixels, 11, 204, 90, 64);
 
+    // === TILE 15: Furnace ===
+    fill_tile_placeholder(&mut pixels, 15, 100, 100, 100);
+
     unsafe {
         let mut id = 0u32;
         gl::GenTextures(1, &mut id);
@@ -201,6 +204,11 @@ pub fn create_block_atlas() -> u32 {
         [230, 240, 255], // 15: Snow
         [128, 128, 128], // 16: Copper ore (stone base, copper specks added below)
         [128, 128, 128], // 17: Coal ore   (stone base, dark specks added below)
+        [128, 128, 128], // 18: Iron ore   (stone base, rust-tan specks added below)
+        [100, 100, 100], // 19: Furnace sides/top (dark cobblestone bricks)
+        [ 60,  60,  60], // 20: Furnace front (dark chamber + glow, generated below)
+        [200,  70,  10], // 21: Lava (bright orange base, bright spots + dark cracks)
+        [112, 112, 112], // 22: Cobblestone (stone base with irregular dark cracks)
     ];
 
     let mut pixels = vec![0u8; ATLAS_SIZE * ATLAS_SIZE * 4];
@@ -250,6 +258,60 @@ pub fn create_block_atlas() -> u32 {
                     17 => {
                         let h = (px.wrapping_mul(11) ^ py.wrapping_mul(7) ^ px.wrapping_mul(py).wrapping_mul(5)) % 16;
                         if h < 4 { [30u8, 30, 30] } else { base_color }
+                    }
+                    // Iron ore: stone base with rust-tan blobs
+                    18 => {
+                        let h = (px.wrapping_mul(9) ^ py.wrapping_mul(17) ^ px.wrapping_mul(py).wrapping_mul(7)) % 16;
+                        if h < 4 { [160u8, 107, 75] } else { base_color }
+                    }
+                    // Furnace sides/top: cobblestone brick pattern — dark mortar lines on a grid
+                    19 => {
+                        // Mortar grid: 1-px lines every 5 px (horizontal) and every 8 px offset
+                        // by 4 px alternating rows (running-bond brick layout).
+                        let row       = py / 5;
+                        let col_off   = if row % 2 == 0 { 0usize } else { 4 };
+                        let local_x   = (px + col_off) % 8;
+                        let local_y   = py % 5;
+                        let is_mortar = local_x == 0 || local_y == 0;
+                        if is_mortar { [55u8, 55, 55] } else { base_color }
+                    }
+                    // Furnace front: dark chamber with orange glow around the mouth opening
+                    20 => {
+                        // Chamber opening: a rounded rectangle centred in the tile
+                        let (cx, cy) = (px as i32 - 8, py as i32 - 10);
+                        let in_chamber = cx.abs() <= 4 && cy >= -2 && cy <= 4;
+                        // Thin mortar border (same as tile 19 for consistency)
+                        let row     = py / 5;
+                        let col_off = if row % 2 == 0 { 0usize } else { 4 };
+                        let is_mortar = (px + col_off) % 8 == 0 || py % 5 == 0;
+                        if in_chamber {
+                            // Glow: bright orange-yellow at centre, fades to dark
+                            let dist = (cx.abs() + cy.abs()) as u8;
+                            if dist <= 2 { [230u8, 140, 30] } else { [140, 70, 10] }
+                        } else if is_mortar {
+                            [55u8, 55, 55]
+                        } else {
+                            base_color
+                        }
+                    }
+                    // Cobblestone: stone base with irregular dark cracks at rounded-rect boundaries
+                    22 => {
+                        let cx = (px as i32 % 8 - 4).abs();
+                        let cy = (py as i32 % 6 - 3).abs();
+                        let crack = (px.wrapping_mul(5) ^ py.wrapping_mul(3)
+                            ^ (px / 8).wrapping_mul(17) ^ (py / 6).wrapping_mul(13)) % 6;
+                        if cx >= 3 || cy >= 2 || crack == 0 { [70u8, 70, 70] } else { base_color }
+                    }
+                    // Lava: orange-red base with bright glowing blobs and dark cracks
+                    21 => {
+                        let h = (px.wrapping_mul(7) ^ py.wrapping_mul(13)
+                            ^ px.wrapping_mul(py).wrapping_mul(11)) % 32;
+                        let crack = (px.wrapping_mul(3) ^ py.wrapping_mul(5)
+                            ^ px.wrapping_add(py).wrapping_mul(7)) % 12;
+                        if crack == 0       { [60u8, 20, 5] }      // dark crack
+                        else if h < 4      { [255u8, 200, 60] }    // bright hot spot
+                        else if h < 9      { [240u8, 120, 20] }    // warm orange
+                        else               { base_color }           // base red-orange
                     }
                     // Grass side: green stripe at top
                     4 if py >= TILE_SIZE - 4 => [120u8, 172, 48],

@@ -302,8 +302,10 @@ impl ItemRenderer {
                     ItemType::Egg         => (self.vao_stone, self.cube_vert_count),
                     ItemType::ChickenMeat => (self.vao_stone, self.cube_vert_count),
                     ItemType::PorkChop    => (self.vao_stone, self.cube_vert_count),
+                    ItemType::Furnace     => (self.vao_stone, self.cube_vert_count),
                     ItemType::RawCopper   => continue, // handled by sprite pass above
                     ItemType::Coal        => continue, // handled by sprite pass above
+                    ItemType::RawIron     => continue, // handled by sprite pass above
                     ItemType::StoneAxe    => continue, // handled by geo pass below
                     ItemType::Torch       => continue, // handled by geo pass below
                 };

@@ -112,6 +112,13 @@ impl GameClient {
         }
     }
 
+    pub fn send_block_place(&mut self, x: i32, y: i32, z: i32, block_id: u8) {
+        let msg = ClientMessage::PlaceBlock { x, y, z, block_id };
+        if let Ok(bytes) = bincode::serialize(&msg) {
+            self.client.send_message(DefaultChannel::ReliableOrdered, bytes);
+        }
+    }
+
     pub fn remote_players(&self) -> Vec<([f32; 3], f32)> {
         self.remote_players
             .values()

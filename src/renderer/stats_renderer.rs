@@ -161,6 +161,8 @@ impl StatsRenderer {
         let genq_tex     = s("GEN Q",    &stats.terrain_queued.to_string());
         let genrun_tex   = s("GEN RUN",  &stats.terrain_inflight.to_string());
         let meshrun_tex  = s("MESH RUN", &stats.mesh_inflight.to_string());
+        let gens_tex     = s("GEN/S",    &format!("{:.0}", stats.gen_per_sec));
+        let meshs_tex    = s("MESH/S",   &format!("{:.0}", stats.mesh_per_sec));
 
         // Panel sizing
         // Title "WURFELLAND" at scale 3: (5*10+9*2)*3 = 204 px wide
@@ -174,7 +176,7 @@ impl StatsRenderer {
             + SEP_H                   // separator
             + 3.0 * BODY_LH           // x, y, z
             + SEP_H                   // separator
-            + 6.0 * BODY_LH           // 6 chunk stats
+            + 8.0 * BODY_LH           // 8 chunk stats
             + PAD;
 
         unsafe {
@@ -230,7 +232,8 @@ impl StatsRenderer {
 
         // Chunk stats
         for tex in &[&loaded_tex, &meshed_tex, &drawn_tex,
-                     &genq_tex, &genrun_tex, &meshrun_tex] {
+                     &genq_tex, &genrun_tex, &meshrun_tex,
+                     &gens_tex, &meshs_tex] {
             self.draw_line(tex, tx, ty, win_w, win_h, COL_CHUNK);
             ty += BODY_LH;
         }

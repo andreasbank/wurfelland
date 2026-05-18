@@ -73,19 +73,24 @@ impl ShadowPass {
             let vs = compile_shader(gl::VERTEX_SHADER, r#"#version 330 core
                 layout(location = 0) in vec3 aPos;
                 layout(location = 2) in vec2 aTexCoord;
+                layout(location = 5) in vec2 aTileBase;
                 out vec2 TexCoord;
+                out vec2 vTileBase;
                 uniform mat4 lightSpaceMatrix;
                 uniform mat4 model;
                 void main() {
                     gl_Position = lightSpaceMatrix * model * vec4(aPos, 1.0);
-                    TexCoord = aTexCoord;
+                    TexCoord   = aTexCoord;
+                    vTileBase  = aTileBase;
                 }"#)?;
 
             let fs = compile_shader(gl::FRAGMENT_SHADER, r#"#version 330 core
                 in vec2 TexCoord;
+                in vec2 vTileBase;
                 uniform sampler2D atlas;
                 void main() {
-                    if (texture(atlas, TexCoord).a < 0.5) discard;
+                    vec2 uv = vTileBase + fract(TexCoord) * (1.0 / 16.0);
+                    if (texture(atlas, uv).a < 0.5) discard;
                 }"#)?;
 
             let shader = gl::CreateProgram();

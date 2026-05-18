@@ -16,7 +16,8 @@ pub struct GameServer {
     server: RenetServer,
     transport: NetcodeServerTransport,
     remote_players: HashMap<u64, RemotePlayer>,
-    pending_block_breaks: Vec<[i32; 3]>,
+    pending_block_breaks:  Vec<[i32; 3]>,
+    pending_block_places:  Vec<[i32; 4]>, // [x, y, z, block_id]
 }
 
 impl GameServer {
@@ -45,6 +46,7 @@ impl GameServer {
             transport,
             remote_players: HashMap::new(),
             pending_block_breaks: Vec::new(),
+            pending_block_places: Vec::new(),
         })
     }
 
@@ -95,8 +97,18 @@ impl GameServer {
                     match msg {
                         ClientMessage::BreakBlock { x, y, z } => {
                             self.pending_block_breaks.push([x, y, z]);
-                            // Rebroadcast to all other clients as BlockChange(Air)
                             let out = ServerMessage::BlockChange { x, y, z, block_id: 0 };
+                            if let Ok(out_bytes) = bincode::serialize(&out) {
+                                self.server.broadcast_message_except(
+                                    client_id,
+                                    DefaultChannel::ReliableOrdered,
+                                    out_bytes,
+                                );
+                            }
+                        }
+                        ClientMessage::PlaceBlock { x, y, z, block_id } => {
+                            self.pending_block_places.push([x, y, z, block_id as i32]);
+                            let out = ServerMessage::BlockChange { x, y, z, block_id };
                             if let Ok(out_bytes) = bincode::serialize(&out) {
                                 self.server.broadcast_message_except(
                                     client_id,
@@ -138,6 +150,10 @@ impl GameServer {
 
     pub fn drain_block_breaks(&mut self) -> Vec<[i32; 3]> {
         std::mem::take(&mut self.pending_block_breaks)
+    }
+
+    pub fn drain_block_places(&mut self) -> Vec<[i32; 4]> {
+        std::mem::take(&mut self.pending_block_places)
     }
 
     pub fn broadcast_block_change(&mut self, x: i32, y: i32, z: i32, block_id: u8) {

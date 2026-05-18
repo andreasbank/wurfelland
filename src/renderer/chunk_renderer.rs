@@ -59,6 +59,7 @@ impl ChunkRenderer {
                 layout(location = 2) in vec2 aTexCoord;
                 layout(location = 3) in vec3 aNormal;
                 layout(location = 4) in float aSkyLight;
+                layout(location = 5) in vec2 aTileBase;
 
                 out vec3 ourColor;
                 out vec2 TexCoord;
@@ -66,6 +67,7 @@ impl ChunkRenderer {
                 out vec3 vWorldPos;
                 out vec3 vNormal;
                 out float vSkyLight;
+                out vec2 vTileBase;
 
                 uniform mat4  model;
                 uniform mat4  view;
@@ -99,6 +101,7 @@ impl ChunkRenderer {
                     // Chunks are translation-only, so mat3(model) == identity.
                     vNormal      = mat3(model) * aNormal;
                     vSkyLight    = aSkyLight;
+                    vTileBase    = aTileBase;
                 }"#
             )?;
 
@@ -113,6 +116,7 @@ impl ChunkRenderer {
                 in vec3 vWorldPos;
                 in vec3 vNormal;
                 in float vSkyLight;
+                in vec2 vTileBase;
                 out vec4 FragColor;
 
                 uniform sampler2D      texture_atlas;
@@ -182,7 +186,8 @@ impl ChunkRenderer {
 
                     vec4 texSample;
                     if (use_textures) {
-                        texSample = texture(texture_atlas, TexCoord);
+                        vec2 atlas_uv = vTileBase + fract(TexCoord) * (1.0 / 16.0);
+                        texSample = texture(texture_atlas, atlas_uv);
                         if (texSample.a < 0.1) discard;
                     } else {
                         texSample = vec4(1.0);

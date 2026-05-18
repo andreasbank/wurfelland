@@ -26,8 +26,8 @@ impl ChunkMesh {
                 gl::STATIC_DRAW,
             );
             
-            // Layout: [x, y, z,  r, g, b,  u, v,  nx, ny, nz,  sky_light] = 12 floats per vertex
-            let stride = (12 * mem::size_of::<f32>()) as GLsizei;
+            // Layout: [x, y, z,  r, g, b,  u, v,  nx, ny, nz,  sky_light,  tile_bu, tile_bv] = 14 floats per vertex
+            let stride = (14 * mem::size_of::<f32>()) as GLsizei;
 
             // location 0: position (3 floats, offset 0)
             gl::VertexAttribPointer(0, 3, gl::FLOAT, gl::FALSE, stride, ptr::null());
@@ -37,7 +37,7 @@ impl ChunkMesh {
             gl::VertexAttribPointer(1, 3, gl::FLOAT, gl::FALSE, stride, (3 * mem::size_of::<f32>()) as *const c_void);
             gl::EnableVertexAttribArray(1);
 
-            // location 2: tex coords (2 floats, offset 6)
+            // location 2: tex coords tile-local (2 floats, offset 6)
             gl::VertexAttribPointer(2, 2, gl::FLOAT, gl::FALSE, stride, (6 * mem::size_of::<f32>()) as *const c_void);
             gl::EnableVertexAttribArray(2);
 
@@ -49,13 +49,17 @@ impl ChunkMesh {
             gl::VertexAttribPointer(4, 1, gl::FLOAT, gl::FALSE, stride, (11 * mem::size_of::<f32>()) as *const c_void);
             gl::EnableVertexAttribArray(4);
 
+            // location 5: tile base UV in atlas (2 floats, offset 12)
+            gl::VertexAttribPointer(5, 2, gl::FLOAT, gl::FALSE, stride, (12 * mem::size_of::<f32>()) as *const c_void);
+            gl::EnableVertexAttribArray(5);
+
             gl::BindBuffer(gl::ARRAY_BUFFER, 0);
             gl::BindVertexArray(0);
 
             ChunkMesh {
                 vao,
                 vbo,
-                vertex_count: vertices.len() as i32 / 12, // 12 floats per vertex
+                vertex_count: vertices.len() as i32 / 14, // 14 floats per vertex
             }
         }
     }

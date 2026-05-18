@@ -7,6 +7,7 @@ pub const SERVER_PORT: u16 = 25565;
 pub enum ClientMessage {
     PlayerState { x: f32, y: f32, z: f32, yaw: f32, pitch: f32 },
     BreakBlock  { x: i32, y: i32, z: i32 },
+    PlaceBlock  { x: i32, y: i32, z: i32, block_id: u8 },
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

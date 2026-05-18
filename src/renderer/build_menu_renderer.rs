@@ -70,6 +70,12 @@ impl BuildMenuRenderer {
             "THE NIGHT.",
         ]);
 
+        add("furnace", "FURNACE", &[
+            "SMELT ORES AND",
+            "COOK FOOD.",
+            "COSTS 8 STONE.",
+        ]);
+
         BuildMenuRenderer {
             window: Window::new(),
             title:  create_text_texture("BUILD"),

@@ -1,8 +1,9 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
+use std::time::Instant;
 
-use crate::world::chunk::{Chunk, Blocks, NeighborEdges, WaterLevels, SkyLight};
+use crate::world::chunk::{Chunk, NeighborEdges, WaterLevels, SkyLight};
 use crate::world::block::BlockType;
 use crate::world::{SEA_LEVEL, WORLD_HEIGHT_CHUNKS};
 use crate::renderer::ChunkRenderer;
@@ -15,6 +16,8 @@ pub struct WorldStats {
     pub terrain_queued:   usize,
     pub terrain_inflight: usize,
     pub mesh_inflight:    usize,
+    pub gen_per_sec:      f32,
+    pub mesh_per_sec:     f32,
 }
 
 /// Only generate chunks up to this Y level; above is always air.
@@ -27,11 +30,16 @@ struct BlockReady {
     chunk: Chunk,
 }
 
-// Phase 2: vertex data arrives from mesh thread
+// Phase 2: sky-light BFS result arrives from sky thread
+struct SkyReady {
+    position: [i32; 3],
+    sky: Box<SkyLight>,
+}
+
+// Phase 3: vertex data arrives from mesh thread
 struct MeshReady {
     position: [i32; 3],
     vertices: Vec<f32>,
-    sky: Box<SkyLight>,
 }
 
 pub struct World {
@@ -41,6 +49,9 @@ pub struct World {
     pending_meshes: HashSet<[i32; 3]>,  // mesh threads currently in flight
     block_tx: Sender<BlockReady>,
     block_rx: Receiver<BlockReady>,
+    sky_tx:   Sender<SkyReady>,
+    sky_rx:   Receiver<SkyReady>,
+    pending_sky: HashSet<[i32; 3]>,
     mesh_tx: Sender<MeshReady>,
     mesh_rx: Receiver<MeshReady>,
     loaded_radius: i32,
@@ -50,6 +61,10 @@ pub struct World {
     active_water: HashSet<[i32; 3]>,              // water blocks that currently have air below them
     active_spread: HashSet<[i32; 3]>,             // water blocks (level>2) that still have air neighbors at same Y
     water_levels: HashMap<[i32; 3], Box<[[[u8; 16]; 16]; 16]>>, // chunk-coord → [lx][ly][lz] water level
+    pending_lava: HashMap<[i32; 3], (f32, u8)>,  // position → (countdown ~3s, level to place)
+    active_lava: HashSet<[i32; 3]>,               // lava blocks with air/water below
+    active_lava_spread: HashSet<[i32; 3]>,        // lava blocks (level>1) with air/water neighbors at same Y
+    lava_levels: HashMap<[i32; 3], Box<[[[u8; 16]; 16]; 16]>>,  // chunk-coord → [lx][ly][lz] lava level
     // Player-authored block changes (breaks/placements); applied to newly generated
     // chunks so loaded saves always see the same terrain modifications.
     block_changes: HashMap<[i32; 3], BlockType>,
@@ -57,19 +72,29 @@ pub struct World {
     unloaded_columns: Vec<[i32; 2]>,
     loaded_columns:   Vec<[i32; 2]>,
     notified_columns: HashSet<[i32; 2]>, // columns already announced as loaded
+    // Throughput tracking — reset every ~0.5 s.
+    gen_completed:   u32,
+    mesh_completed:  u32,
+    rate_instant:    Instant,
+    last_gen_rate:   f32,
+    last_mesh_rate:  f32,
 }
 
 impl World {
     pub fn new(loaded_radius: i32, seed: u32) -> Self {
         let (block_tx, block_rx) = mpsc::channel();
-        let (mesh_tx, mesh_rx) = mpsc::channel();
+        let (sky_tx,   sky_rx)   = mpsc::channel();
+        let (mesh_tx,  mesh_rx)  = mpsc::channel();
         World {
             chunks: HashMap::new(),
             terrain_queue: HashSet::new(),
             pending_blocks: HashSet::new(),
+            pending_sky:   HashSet::new(),
             pending_meshes: HashSet::new(),
             block_tx,
             block_rx,
+            sky_tx,
+            sky_rx,
             mesh_tx,
             mesh_rx,
             loaded_radius,
@@ -79,10 +104,19 @@ impl World {
             active_water: HashSet::new(),
             active_spread: HashSet::new(),
             water_levels: HashMap::new(),
+            pending_lava: HashMap::new(),
+            active_lava: HashSet::new(),
+            active_lava_spread: HashSet::new(),
+            lava_levels: HashMap::new(),
             block_changes: HashMap::new(),
             unloaded_columns: Vec::new(),
             loaded_columns:   Vec::new(),
             notified_columns: HashSet::new(),
+            gen_completed:  0,
+            mesh_completed: 0,
+            rate_instant:   Instant::now(),
+            last_gen_rate:  0.0,
+            last_mesh_rate: 0.0,
         }
     }
 
@@ -127,9 +161,13 @@ impl World {
             self.player_chunk = new_chunk;
         }
 
-        self.dispatch_terrain_threads();
+        // Finalize before dispatch so freed thread slots are visible immediately.
         self.finalize_blocks(16);
-        self.finalize_meshes(4);
+        self.finalize_sky(16);
+        self.finalize_meshes(8);
+        self.dispatch_terrain_threads();
+        self.dispatch_sky_threads();
+        self.dispatch_mesh_threads();
     }
 
     /// Queue terrain generation for the outer buffer ring (no meshing — data only).
@@ -212,6 +250,7 @@ impl World {
 
         for ready in arrived {
             self.pending_blocks.remove(&ready.position);
+            self.gen_completed += 1;
             let [cx, cy, cz] = ready.position;
             let mut chunk = ready.chunk;
             // Re-apply recorded player block changes that fall in this chunk.
@@ -254,7 +293,8 @@ impl World {
                 }
             }
 
-            // Invalidate all six face-adjacent neighbors for correct border culling.
+            // Invalidate all six face-adjacent neighbors for correct border culling,
+            // and mark them sky-dirty so lighting is recomputed at the new boundary.
             for npos in [
                 [cx + 1, cy,     cz    ],
                 [cx - 1, cy,     cz    ],
@@ -265,13 +305,76 @@ impl World {
             ] {
                 if let Some(neighbor) = self.chunks.get_mut(&npos) {
                     neighbor.mark_for_rebuild();
+                    neighbor.mark_sky_dirty();
                 }
             }
         }
+    }
 
-        // Dispatch mesh threads up to the total in-flight cap, not just per-frame.
-        // This prevents dozens of concurrent mesh threads competing for CPU cores.
-        const MAX_MESH_THREADS: usize = 4;
+    fn dispatch_sky_threads(&mut self) {
+        const MAX_SKY_THREADS: usize = 8;
+        let slots = MAX_SKY_THREADS.saturating_sub(self.pending_sky.len());
+        if slots == 0 { return; }
+        let pc = self.player_chunk;
+        let render_r2 = (self.loaded_radius + 2) * (self.loaded_radius + 2);
+        let mut needs_sky: Vec<[i32; 3]> = self.chunks.iter()
+            .filter(|(pos, c)| {
+                let dx = pos[0] - pc[0]; let dz = pos[2] - pc[2];
+                c.needs_sky_rebuild()
+                    && !self.pending_sky.contains(*pos)
+                    && dx * dx + dz * dz <= render_r2
+            })
+            .map(|(pos, _)| *pos)
+            .collect();
+        needs_sky.sort_unstable_by_key(|&[x, y, z]| {
+            let dx = x - pc[0]; let dz = z - pc[2];
+            (dx * dx + dz * dz, -(y as i64))
+        });
+        for pos in needs_sky.into_iter().take(slots) {
+            let blocks = self.chunks[&pos].blocks_snapshot();
+            let edges  = self.build_neighbor_edges(pos[0], pos[1], pos[2]);
+            self.chunks.get_mut(&pos).unwrap().mark_sky_dispatched();
+            self.pending_sky.insert(pos);
+            let tx = self.sky_tx.clone();
+            thread::spawn(move || {
+                let sky = Chunk::build_sky(&blocks, &edges);
+                let _ = tx.send(SkyReady { position: pos, sky });
+            });
+        }
+    }
+
+    fn finalize_sky(&mut self, max: usize) {
+        for _ in 0..max {
+            match self.sky_rx.try_recv() {
+                Ok(ready) => {
+                    self.pending_sky.remove(&ready.position);
+                    let [cx, cy, cz] = ready.position;
+                    let sky_changed = self.chunks.get(&ready.position)
+                        .map(|c| c.sky_edges_changed(&ready.sky))
+                        .unwrap_or(false);
+                    if let Some(chunk) = self.chunks.get_mut(&ready.position) {
+                        chunk.update_sky_light(ready.sky); // also sets sky_ready = true
+                        chunk.mark_for_rebuild();
+                    }
+                    if sky_changed {
+                        for npos in [
+                            [cx-1,cy,cz],[cx+1,cy,cz],
+                            [cx,cy-1,cz],[cx,cy+1,cz],
+                            [cx,cy,cz-1],[cx,cy,cz+1],
+                        ] {
+                            if let Some(n) = self.chunks.get_mut(&npos) {
+                                n.mark_sky_dirty();
+                            }
+                        }
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    }
+
+    fn dispatch_mesh_threads(&mut self) {
+        const MAX_MESH_THREADS: usize = 12;
         let mesh_slots = MAX_MESH_THREADS.saturating_sub(self.pending_meshes.len());
         if mesh_slots == 0 { return; }
         let pc = self.player_chunk;
@@ -281,73 +384,39 @@ impl World {
                 let dx = pos[0] - pc[0]; let dz = pos[2] - pc[2];
                 c.needs_mesh()
                     && !self.pending_meshes.contains(*pos)
-                    && dx * dx + dz * dz <= render_r2  // skip buffer-ring chunks
+                    && dx * dx + dz * dz <= render_r2
             })
             .map(|(pos, _)| *pos)
             .collect();
         needs_mesh.sort_unstable_by_key(|&[x, y, z]| {
             let dx = x - pc[0]; let dz = z - pc[2];
-            // Primary: closest horizontal ring first.
-            // Secondary: highest cy first — terrain chunks build before cave chunks below
-            // them, so cave chunks get correct above_sky on first build and the sky-light
-            // cascade shrinks to near-zero.
             (dx * dx + dz * dz, -(y as i64))
         });
-        let needs_mesh: Vec<[i32; 3]> = needs_mesh.into_iter().take(mesh_slots).collect();
-
-        for pos in needs_mesh {
+        for pos in needs_mesh.into_iter().take(mesh_slots) {
             let [cx, cy, cz] = pos;
-
-            let blocks: Blocks = self.chunks[&pos].blocks_snapshot();
-            let water_levels: WaterLevels = self.water_levels_snapshot(cx, cy, cz);
-            let edges = self.build_neighbor_edges(cx, cy, cz);
-
+            let blocks      = self.chunks[&pos].blocks_snapshot();
+            let sky         = self.chunks[&pos].sky_snapshot();
+            let water_levels = self.water_levels_snapshot(cx, cy, cz);
+            let edges       = self.build_neighbor_edges(cx, cy, cz);
             self.chunks.get_mut(&pos).unwrap().mark_mesh_dispatched();
             self.pending_meshes.insert(pos);
-
             let tx = self.mesh_tx.clone();
             thread::spawn(move || {
-                let (vertices, sky) = Chunk::build_vertices(&blocks, &edges, &water_levels);
-                let _ = tx.send(MeshReady { position: pos, vertices, sky });
+                let vertices = Chunk::build_vertices(&blocks, &edges, &sky, &water_levels);
+                let _ = tx.send(MeshReady { position: pos, vertices });
             });
         }
     }
 
     /// Upload finished vertex buffers to the GPU (main thread only).
-    /// Also stores the corrected sky-light back onto the chunk. If any edge values
-    /// changed, affected neighbours are marked for rebuild so they read the correct
-    /// sky edge data on their next pass. Sky values can only go from 15→0 (never
-    /// the reverse), so this cascade converges in at most 2 passes per chunk.
     fn finalize_meshes(&mut self, max: usize) {
         for _ in 0..max {
             match self.mesh_rx.try_recv() {
                 Ok(ready) => {
                     self.pending_meshes.remove(&ready.position);
-                    let [cx, cy, cz] = ready.position;
-                    let sky_changed = self.chunks.get(&ready.position)
-                        .map(|c| c.sky_edges_changed(&ready.sky))
-                        .unwrap_or(false);
+                    self.mesh_completed += 1;
                     if let Some(chunk) = self.chunks.get_mut(&ready.position) {
                         chunk.finalize_mesh(ready.vertices);
-                        chunk.update_sky_light(ready.sky);
-                    }
-                    // Sky-light edges changed: rebuild all 6 axis-aligned neighbours.
-                    // With sky_light initialised to 0, underground chunks see
-                    // sky_edges_changed=false immediately, so the cascade is cheap —
-                    // it only fans out through surface-adjacent chunks where sky
-                    // values actually differ between passes.
-                    if sky_changed {
-                        for npos in [
-                            [cx - 1, cy, cz], [cx + 1, cy, cz],
-                            [cx, cy - 1, cz], [cx, cy + 1, cz],
-                            [cx, cy, cz - 1], [cx, cy, cz + 1],
-                        ] {
-                            if !self.pending_meshes.contains(&npos) {
-                                if let Some(n) = self.chunks.get_mut(&npos) {
-                                    n.mark_for_rebuild();
-                                }
-                            }
-                        }
                     }
                 }
                 Err(_) => break,
@@ -389,6 +458,117 @@ impl World {
                 self.active_spread.insert(pos);
             } else {
                 self.active_spread.remove(&pos);
+            }
+        }
+    }
+
+    fn lava_level_at(&self, wx: i32, wy: i32, wz: i32) -> u8 {
+        let cx = wx.div_euclid(16); let cy = wy.div_euclid(16); let cz = wz.div_euclid(16);
+        self.lava_levels.get(&[cx, cy, cz])
+            .map(|ll| ll[wx.rem_euclid(16) as usize][wy.rem_euclid(16) as usize][wz.rem_euclid(16) as usize])
+            .unwrap_or(0)
+    }
+
+    fn refresh_active_lava(&mut self, wx: i32, wy: i32, wz: i32) {
+        for (py, pz, px) in [(wy, wz, wx), (wy + 1, wz, wx)] {
+            let pos = [px, py, pz];
+            let below = self.get_block(px, py - 1, pz);
+            if self.get_block(px, py, pz) == BlockType::Lava
+                && (below == BlockType::Air || below == BlockType::Water)
+            {
+                self.active_lava.insert(pos);
+            } else {
+                self.active_lava.remove(&pos);
+            }
+        }
+    }
+
+    fn refresh_active_lava_spread(&mut self, wx: i32, wy: i32, wz: i32) {
+        for (px, pz) in [(wx, wz), (wx+1, wz), (wx-1, wz), (wx, wz+1), (wx, wz-1)] {
+            let pos = [px, wy, pz];
+            let lvl = self.lava_level_at(px, wy, pz);
+            let open = [[px+1,pz],[px-1,pz],[px,pz+1],[px,pz-1]].iter()
+                .any(|&[nx,nz]| {
+                    let b = self.get_block(nx, wy, nz);
+                    b == BlockType::Air || b == BlockType::Water
+                });
+            if lvl > 1 && open {
+                self.active_lava_spread.insert(pos);
+            } else {
+                self.active_lava_spread.remove(&pos);
+            }
+        }
+    }
+
+    pub fn tick_lava(&mut self, dt: f32) {
+        // 1. Downward flow.
+        let down: Vec<([i32; 3], u8)> = self.active_lava.iter().copied()
+            .filter(|&[wx, wy, wz]| {
+                let b = self.get_block(wx, wy, wz);
+                let below = self.get_block(wx, wy - 1, wz);
+                b == BlockType::Lava
+                    && (below == BlockType::Air || below == BlockType::Water)
+                    && !self.pending_lava.contains_key(&[wx, wy - 1, wz])
+            })
+            .map(|[wx, wy, wz]| ([wx, wy - 1, wz], 4u8))
+            .collect();
+        for (pos, lvl) in down {
+            self.pending_lava.insert(pos, (3.0, lvl));
+        }
+
+        // 2. Horizontal spread — only blocks with level > 1 and open neighbors.
+        let h: Vec<([i32; 3], u8)> = self.active_lava_spread.iter().copied()
+            .filter_map(|[wx, wy, wz]| {
+                let lvl = self.lava_level_at(wx, wy, wz);
+                if lvl > 1 { Some(([wx, wy, wz], lvl)) } else { None }
+            })
+            .collect();
+        for ([wx, wy, wz], lvl) in h {
+            let new_lvl = lvl - 1;
+            let mut still_active = false;
+            for [nx, nz] in [[wx+1,wz],[wx-1,wz],[wx,wz+1],[wx,wz-1]] {
+                let npos = [nx, wy, nz];
+                let nb = self.get_block(nx, wy, nz);
+                if nb == BlockType::Air || nb == BlockType::Water {
+                    still_active = true;
+                    if !self.pending_lava.contains_key(&npos) {
+                        self.pending_lava.insert(npos, (3.0, new_lvl));
+                    }
+                }
+            }
+            if !still_active {
+                self.active_lava_spread.remove(&[wx, wy, wz]);
+            }
+        }
+
+        // 3. Tick timers.
+        let mut to_fill: Vec<([i32; 3], u8)> = Vec::new();
+        self.pending_lava.retain(|pos, (timer, lvl)| {
+            *timer -= dt;
+            if *timer <= 0.0 { to_fill.push((*pos, *lvl)); false } else { true }
+        });
+
+        // 4. Fill — handle water/lava interaction.
+        for ([wx, wy, wz], lvl) in to_fill {
+            let current = self.get_block(wx, wy, wz);
+            if current == BlockType::Water {
+                // Lava flowing into water → cobblestone at that cell.
+                self.set_block(wx, wy, wz, BlockType::Cobblestone);
+            } else if current == BlockType::Air {
+                let adj_water = [[wx+1,wy,wz],[wx-1,wy,wz],[wx,wy+1,wz],
+                                 [wx,wy,wz+1],[wx,wy,wz-1],[wx,wy-1,wz]]
+                    .iter().any(|&[x,y,z]| self.get_block(x,y,z) == BlockType::Water);
+                if adj_water {
+                    // Lava hitting water wall → cobblestone plug.
+                    self.set_block(wx, wy, wz, BlockType::Cobblestone);
+                } else {
+                    let cx = wx.div_euclid(16); let cy = wy.div_euclid(16); let cz = wz.div_euclid(16);
+                    self.lava_levels
+                        .entry([cx, cy, cz])
+                        .or_insert_with(|| Box::new([[[0u8; 16]; 16]; 16]))
+                        [wx.rem_euclid(16) as usize][wy.rem_euclid(16) as usize][wz.rem_euclid(16) as usize] = lvl;
+                    self.set_block(wx, wy, wz, BlockType::Lava);
+                }
             }
         }
     }
@@ -448,13 +628,24 @@ impl World {
 
         // 4. Fill — only if still air (player may have placed something there).
         for ([wx, wy, wz], lvl) in to_fill {
-            if self.get_block(wx, wy, wz) == BlockType::Air {
+            let current = self.get_block(wx, wy, wz);
+            if current == BlockType::Lava {
+                // Water flowing into lava → cobblestone.
+                self.set_block(wx, wy, wz, BlockType::Cobblestone);
+            } else if current == BlockType::Air {
                 let cx = wx.div_euclid(16); let cy = wy.div_euclid(16); let cz = wz.div_euclid(16);
                 self.water_levels
                     .entry([cx, cy, cz])
                     .or_insert_with(|| Box::new([[[0u8; 16]; 16]; 16]))
                     [wx.rem_euclid(16) as usize][wy.rem_euclid(16) as usize][wz.rem_euclid(16) as usize] = lvl;
                 self.set_block(wx, wy, wz, BlockType::Water);
+                // Convert any adjacent lava to cobblestone.
+                for [nx, ny, nz] in [[wx+1,wy,wz],[wx-1,wy,wz],[wx,wy+1,wz],
+                                     [wx,wy,wz+1],[wx,wy,wz-1],[wx,wy-1,wz]] {
+                    if self.get_block(nx, ny, nz) == BlockType::Lava {
+                        self.set_block(nx, ny, nz, BlockType::Cobblestone);
+                    }
+                }
             }
         }
     }
@@ -472,12 +663,16 @@ impl World {
             let dz = pos[2] - center[2];
             dx * dx + dz * dz <= r2
         });
-        // Drop water data for each removed chunk in O(1) per chunk.
+        // Drop water/lava data for each removed chunk in O(1) per chunk.
         for pos in &removed {
             self.water_levels.remove(pos);
+            self.lava_levels.remove(pos);
         }
-        // active_spread is small (player-triggered water only); retain is fine.
+        // active_spread / active_lava_spread are small; retain is fine.
         self.active_spread.retain(|&[wx, wy, wz]| {
+            self.chunks.contains_key(&[wx.div_euclid(16), wy.div_euclid(16), wz.div_euclid(16)])
+        });
+        self.active_lava_spread.retain(|&[wx, wy, wz]| {
             self.chunks.contains_key(&[wx.div_euclid(16), wy.div_euclid(16), wz.div_euclid(16)])
         });
 
@@ -509,19 +704,30 @@ impl World {
             let wl = self.water_levels.entry([cx, cy, cz]).or_insert_with(|| Box::new([[[0u8; 16]; 16]; 16]));
             if wl[lx][ly][lz] == 0 { wl[lx][ly][lz] = 8; }
         }
+        if block != BlockType::Lava {
+            if let Some(ll) = self.lava_levels.get_mut(&[cx, cy, cz]) {
+                ll[lx][ly][lz] = 0;
+            }
+        } else {
+            let ll = self.lava_levels.entry([cx, cy, cz]).or_insert_with(|| Box::new([[[0u8; 16]; 16]; 16]));
+            if ll[lx][ly][lz] == 0 { ll[lx][ly][lz] = 4; }
+        }
 
         if let Some(chunk) = self.chunks.get_mut(&[cx, cy, cz]) {
             chunk.set_block(lx, ly, lz, block);
             chunk.mark_for_rebuild();
+            chunk.mark_sky_dirty();
         }
-        if lx == 0  { if let Some(c) = self.chunks.get_mut(&[cx-1, cy, cz]) { c.mark_for_rebuild(); } }
-        if lx == 15 { if let Some(c) = self.chunks.get_mut(&[cx+1, cy, cz]) { c.mark_for_rebuild(); } }
-        if lz == 0  { if let Some(c) = self.chunks.get_mut(&[cx, cy, cz-1]) { c.mark_for_rebuild(); } }
-        if lz == 15 { if let Some(c) = self.chunks.get_mut(&[cx, cy, cz+1]) { c.mark_for_rebuild(); } }
-        if ly == 0  { if let Some(c) = self.chunks.get_mut(&[cx, cy-1, cz]) { c.mark_for_rebuild(); } }
-        if ly == 15 { if let Some(c) = self.chunks.get_mut(&[cx, cy+1, cz]) { c.mark_for_rebuild(); } }
+        if lx == 0  { if let Some(c) = self.chunks.get_mut(&[cx-1, cy, cz]) { c.mark_for_rebuild(); c.mark_sky_dirty(); } }
+        if lx == 15 { if let Some(c) = self.chunks.get_mut(&[cx+1, cy, cz]) { c.mark_for_rebuild(); c.mark_sky_dirty(); } }
+        if lz == 0  { if let Some(c) = self.chunks.get_mut(&[cx, cy, cz-1]) { c.mark_for_rebuild(); c.mark_sky_dirty(); } }
+        if lz == 15 { if let Some(c) = self.chunks.get_mut(&[cx, cy, cz+1]) { c.mark_for_rebuild(); c.mark_sky_dirty(); } }
+        if ly == 0  { if let Some(c) = self.chunks.get_mut(&[cx, cy-1, cz]) { c.mark_for_rebuild(); c.mark_sky_dirty(); } }
+        if ly == 15 { if let Some(c) = self.chunks.get_mut(&[cx, cy+1, cz]) { c.mark_for_rebuild(); c.mark_sky_dirty(); } }
         self.refresh_active_water(wx, wy, wz);
         self.refresh_active_spread(wx, wy, wz);
+        self.refresh_active_lava(wx, wy, wz);
+        self.refresh_active_lava_spread(wx, wy, wz);
     }
 
     fn build_neighbor_edges(&self, cx: i32, cy: i32, cz: i32) -> NeighborEdges {
@@ -605,9 +811,12 @@ impl World {
             self.load_chunks_around_terrain_only(new_chunk, self.loaded_radius + 2);
             self.player_chunk = new_chunk;
         }
-        self.dispatch_terrain_threads();
         self.finalize_blocks(64);
+        self.finalize_sky(64);
         self.finalize_meshes(64);
+        self.dispatch_terrain_threads();
+        self.dispatch_sky_threads();
+        self.dispatch_mesh_threads();
     }
 
     pub fn set_radius(&mut self, radius: i32) {
@@ -812,13 +1021,23 @@ impl World {
         }
     }
 
-    pub fn world_stats(&self) -> WorldStats {
+    pub fn world_stats(&mut self) -> WorldStats {
+        let elapsed = self.rate_instant.elapsed().as_secs_f32();
+        if elapsed >= 0.5 {
+            self.last_gen_rate  = self.gen_completed  as f32 / elapsed;
+            self.last_mesh_rate = self.mesh_completed as f32 / elapsed;
+            self.gen_completed  = 0;
+            self.mesh_completed = 0;
+            self.rate_instant   = Instant::now();
+        }
         WorldStats {
             loaded:           self.chunks.len(),
             meshed:           self.chunks.values().filter(|c| c.mesh.is_some()).count(),
             terrain_queued:   self.terrain_queue.len(),
             terrain_inflight: self.pending_blocks.len(),
             mesh_inflight:    self.pending_meshes.len(),
+            gen_per_sec:      self.last_gen_rate,
+            mesh_per_sec:     self.last_mesh_rate,
         }
     }
 

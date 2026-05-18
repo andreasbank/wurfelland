@@ -148,34 +148,16 @@ pub struct Chunk {
     blocks: Blocks,
     pub mesh: Option<ChunkMesh>,
     needs_rebuild: bool,
+    /// True when sky light needs to be (re)computed before the next mesh build.
+    sky_dirty: bool,
+    /// True once sky light has been computed at least once; mesh dispatch waits for this.
+    sky_ready: bool,
     // Precomputed translation matrix — the chunk never moves, so compute once.
     model: glam::Mat4,
     /// Sky-light per block: 15 = unobstructed sky above, 0 = underground.
-    /// Computed once after generate(); used to seed the chunk below via above_sky.
     sky_light: Box<SkyLight>,
 }
 
-/// Column-scan sky-light: assumes open sky enters from above this chunk.
-/// Each (x,z) column is lit (=15) from the top down until the first opaque
-/// block; everything at or below that block is 0.
-fn compute_sky_light(blocks: &Blocks) -> Box<SkyLight> {
-    let mut sky = Box::new([[[0u8; 16]; 16]; 16]);
-    for x in 0..16usize {
-        for z in 0..16usize {
-            let mut lit = true;
-            for y in (0..16usize).rev() {
-                if lit {
-                    if blocks[x][y][z].is_opaque() {
-                        lit = false;
-                    } else {
-                        sky[x][y][z] = 15;
-                    }
-                }
-            }
-        }
-    }
-    sky
-}
 
 impl Chunk {
     pub fn generate(position: [i32; 3], seed: u32) -> Self {
@@ -201,7 +183,8 @@ impl Chunk {
         if wy_base > MAX_SURF_Y + 1 {
             // Entire chunk is above the highest possible terrain — leave all-air.
             let sky_light = Box::new([[[0u8; 16]; 16]; 16]);
-            return Chunk { position, blocks, mesh: None, needs_rebuild: true, model, sky_light };
+            return Chunk { position, blocks, mesh: None, needs_rebuild: true,
+                           sky_dirty: true, sky_ready: false, model, sky_light };
         }
 
         // ── Block placement ──────────────────────────────────────────────────
@@ -406,6 +389,22 @@ impl Chunk {
             }
         }
 
+        // ── Lava fill (Bedrock-style) ─────────────────────────────────────────
+        // Any air pocket carved at Y=1..9 (above bedrock row, below Y=10) becomes lava.
+        // This naturally fills cave floors near the bottom of the world, matching
+        // how Minecraft Bedrock generates underground lava lakes.
+        for x in 0..16usize {
+            for ly in 0..16usize {
+                let wy = wy_base + ly as i32;
+                if wy < 1 || wy >= 10 { continue; }
+                for z in 0..16usize {
+                    if blocks[x][ly][z] == BlockType::Air {
+                        blocks[x][ly][z] = BlockType::Lava;
+                    }
+                }
+            }
+        }
+
         // ── Copper ore veins ─────────────────────────────────────────────────
         // Generates Y=0..112 with a triangular peak at Y=48, matching Minecraft.
         // ~6 vein attempts per chunk column; each vein walks 4–7 blocks.
@@ -480,8 +479,72 @@ impl Chunk {
             }
         }
 
+        // ── Iron ore veins ───────────────────────────────────────────────────
+        // Two distributions matching Minecraft 1.18+:
+        //   Main  — triangular peak at Y=16, range Y=0..80,  ~9 attempts, veins 4–8 blocks.
+        //   Upper — triangular peak at Y=128, range Y=64..192, ~3 attempts, veins 3–5 blocks.
+        let iron_seed = seed.wrapping_mul(2_891_336_453).wrapping_add(
+            (position[0].wrapping_mul(1_574_083) ^ position[1].wrapping_mul(311) ^ position[2].wrapping_mul(5_771_977)) as u32
+        );
+        let mut irng = iron_seed;
+
+        // Main distribution: peak Y=16, range 0..80, 9 attempts.
+        for _ in 0..9 {
+            let rx       = (next(&mut irng) % 16) as i32;
+            let rz       = (next(&mut irng) % 16) as i32;
+            let r1       = next(&mut irng) % 80;
+            let r2       = next(&mut irng) % 80;
+            let start_wy = r1.min(r2) as i32; // triangular: peak at 0, bias toward low Y
+            let vein_len = 4 + (next(&mut irng) % 5) as i32;
+
+            for step in 0..vein_len {
+                let wy = start_wy + step;
+                if wy < 1 || wy > 80 { continue; }
+                let ly = wy - wy_base;
+                if ly < 0 || ly >= 16 { continue; }
+                let lx = rx as usize;
+                let lz = rz as usize;
+                if blocks[lx][ly as usize][lz] == BlockType::Stone {
+                    blocks[lx][ly as usize][lz] = BlockType::IronOre;
+                }
+                let spread_x = ((next(&mut irng) % 3) as i32 - 1 + rx).clamp(0, 15) as usize;
+                let spread_z = ((next(&mut irng) % 3) as i32 - 1 + rz).clamp(0, 15) as usize;
+                if blocks[spread_x][ly as usize][spread_z] == BlockType::Stone {
+                    blocks[spread_x][ly as usize][spread_z] = BlockType::IronOre;
+                }
+            }
+        }
+
+        // Upper distribution: peak Y=128, range 64..192, 3 attempts.
+        for _ in 0..3 {
+            let rx       = (next(&mut irng) % 16) as i32;
+            let rz       = (next(&mut irng) % 16) as i32;
+            let r1       = next(&mut irng) % 128 + 64;
+            let r2       = next(&mut irng) % 128 + 64;
+            let start_wy = ((r1 + r2) / 2) as i32; // average of two → triangular peak at 128
+            let vein_len = 3 + (next(&mut irng) % 3) as i32;
+
+            for step in 0..vein_len {
+                let wy = start_wy + step;
+                if wy < 64 || wy > 192 { continue; }
+                let ly = wy - wy_base;
+                if ly < 0 || ly >= 16 { continue; }
+                let lx = rx as usize;
+                let lz = rz as usize;
+                if blocks[lx][ly as usize][lz] == BlockType::Stone {
+                    blocks[lx][ly as usize][lz] = BlockType::IronOre;
+                }
+                let spread_x = ((next(&mut irng) % 3) as i32 - 1 + rx).clamp(0, 15) as usize;
+                let spread_z = ((next(&mut irng) % 3) as i32 - 1 + rz).clamp(0, 15) as usize;
+                if blocks[spread_x][ly as usize][spread_z] == BlockType::Stone {
+                    blocks[spread_x][ly as usize][spread_z] = BlockType::IronOre;
+                }
+            }
+        }
+
         let sky_light = Box::new([[[0u8; 16]; 16]; 16]);
-        Chunk { position, blocks, mesh: None, needs_rebuild: true, model, sky_light }
+        Chunk { position, blocks, mesh: None, needs_rebuild: true,
+                sky_dirty: true, sky_ready: false, model, sky_light }
     }
 
     pub fn get_block(&self, x: usize, y: usize, z: usize) -> BlockType {
@@ -577,7 +640,7 @@ impl Chunk {
     }
 
     pub fn needs_mesh(&self) -> bool {
-        self.needs_rebuild
+        self.needs_rebuild && self.sky_ready
     }
 
     pub fn mark_for_rebuild(&mut self) {
@@ -589,9 +652,22 @@ impl Chunk {
         self.needs_rebuild = false;
     }
 
-    /// Replace stored sky-light with the corrected values from the last mesh build.
+    pub fn needs_sky_rebuild(&self) -> bool { self.sky_dirty }
+    #[allow(dead_code)]
+    pub fn is_sky_ready(&self)      -> bool { self.sky_ready }
+
+    pub fn mark_sky_dirty(&mut self) { self.sky_dirty = true; }
+
+    /// Called just before dispatching a sky thread.
+    pub fn mark_sky_dispatched(&mut self) { self.sky_dirty = false; }
+
+    /// Returns a copy of the stored sky-light for passing to a mesh thread.
+    pub fn sky_snapshot(&self) -> Box<SkyLight> { Box::new(*self.sky_light) }
+
+    /// Store newly computed sky-light. Marks sky as ready so meshing can proceed.
     pub fn update_sky_light(&mut self, new_sky: Box<SkyLight>) {
         self.sky_light = new_sky;
+        self.sky_ready = true;
     }
 
     /// Returns true if any edge face of `new_sky` differs from the current stored sky_light.
@@ -636,30 +712,45 @@ impl Chunk {
             Face::Back  => (x,     y,     z - 1),
         };
         // Each face changes exactly one coordinate, so only one branch fires.
-        if nx <  0  { return edges.left_sky [ny as usize][nz as usize] as f32 / 15.0; }
-        if nx >= 16 { return edges.right_sky[ny as usize][nz as usize] as f32 / 15.0; }
-        if nz <  0  { return edges.back_sky [ny as usize][nx as usize] as f32 / 15.0; }
-        if nz >= 16 { return edges.front_sky[ny as usize][nx as usize] as f32 / 15.0; }
-        if ny <  0  { return edges.below_sky[nx as usize][nz as usize] as f32 / 15.0; }
-        if ny >= 16 { return edges.above_sky[nx as usize][nz as usize] as f32 / 15.0; }
+        // For cross-chunk faces: if the neighbour block is lava, return its emission
+        // level directly — this avoids a one-frame dark flash before the cascade
+        // propagates the updated sky edges back to this chunk's mesh.
+        if nx <  0  {
+            if edges.left [ny as usize][nz as usize] == BlockType::Lava { return 14.0 / 15.0; }
+            return edges.left_sky [ny as usize][nz as usize] as f32 / 15.0;
+        }
+        if nx >= 16 {
+            if edges.right[ny as usize][nz as usize] == BlockType::Lava { return 14.0 / 15.0; }
+            return edges.right_sky[ny as usize][nz as usize] as f32 / 15.0;
+        }
+        if nz <  0  {
+            if edges.back [ny as usize][nx as usize] == BlockType::Lava { return 14.0 / 15.0; }
+            return edges.back_sky [ny as usize][nx as usize] as f32 / 15.0;
+        }
+        if nz >= 16 {
+            if edges.front[ny as usize][nx as usize] == BlockType::Lava { return 14.0 / 15.0; }
+            return edges.front_sky[ny as usize][nx as usize] as f32 / 15.0;
+        }
+        if ny <  0  {
+            if edges.below[nx as usize][nz as usize] == BlockType::Lava { return 14.0 / 15.0; }
+            return edges.below_sky[nx as usize][nz as usize] as f32 / 15.0;
+        }
+        if ny >= 16 {
+            if edges.above[nx as usize][nz as usize] == BlockType::Lava { return 14.0 / 15.0; }
+            return edges.above_sky[nx as usize][nz as usize] as f32 / 15.0;
+        }
         sky[nx as usize][ny as usize][nz as usize] as f32 / 15.0
     }
 
     /// Build vertex data off the main thread.
     /// Returns vertices and the corrected sky-light array (seeded from above_sky) so the
     /// chunk can update its stored sky_light and neighbours can read correct edge values.
-    pub fn build_vertices(blocks: &Blocks, edges: &NeighborEdges, water_levels: &WaterLevels) -> (Vec<f32>, Box<SkyLight>) {
-        // Rough estimate: ~10% of blocks are surface blocks with ~3 visible faces on average.
-        // 16³ * 0.10 * 3 faces * 6 verts * 12 floats ≈ 8748. Sized to avoid early reallocs.
-        let mut vertices = Vec::with_capacity(9216);
+    /// Compute sky-light for this chunk from block data and neighbour sky edges.
+    /// Run on a background thread; result is stored via `update_sky_light`.
+    pub fn build_sky(blocks: &Blocks, edges: &NeighborEdges) -> Box<SkyLight> {
+        use std::collections::VecDeque;
 
-        // Sky-light: vertical column scan + BFS horizontal spread.
-        //
-        // The vertical scan WITHOUT diminishing is only valid for direct sky columns
-        // (above_sky == 15). When above_sky is 1–14 the value was obtained by BFS
-        // spreading in the chunk above (not a straight vertical shaft), so it must be
-        // treated like any other BFS seed: one extra step of diminishing applies at
-        // the chunk boundary, and BFS handles further propagation.
+        // Vertical scan: direct sky columns only (above_sky == 15).
         let mut sky = [[[0u8; 16]; 16]; 16];
         for x in 0..16usize {
             for z in 0..16usize {
@@ -671,149 +762,473 @@ impl Chunk {
             }
         }
 
-        // BFS horizontal spread: light bleeds sideways from lit blocks into cave
-        // entrances, diminishing by 1 per block.  Also seeds from all neighbour
-        // edges so light carries across chunk boundaries in every direction.
-        {
-            use std::collections::VecDeque;
-            let mut queue: VecDeque<(i32, i32, i32)> = VecDeque::new();
-
-            // Seed queue from vertical scan results (sky columns).
-            for x in 0..16usize {
-                for y in 0..16usize {
-                    for z in 0..16usize {
-                        if sky[x][y][z] > 0 {
-                            queue.push_back((x as i32, y as i32, z as i32));
-                        }
-                    }
-                }
-            }
-
-            // Each neighbour edge value is already the sky_light of the block just
-            // outside this chunk, so crossing the boundary costs one diminish step.
-            let seed = |sky: &mut [[[u8;16];16];16], x: usize, y: usize, z: usize, val: u8,
-                            queue: &mut VecDeque<(i32,i32,i32)>| {
-                if val > 0 && !blocks[x][y][z].is_opaque() && sky[x][y][z] < val {
-                    sky[x][y][z] = val;
-                    queue.push_back((x as i32, y as i32, z as i32));
-                }
-            };
-            // Horizontal neighbours
+        // BFS: spread from sky columns + neighbour edges, diminishing by 1 per hop.
+        let mut queue: VecDeque<(i32, i32, i32)> = VecDeque::new();
+        for x in 0..16usize {
             for y in 0..16usize {
                 for z in 0..16usize {
-                    seed(&mut sky, 0,  y, z, edges.left_sky [y][z].saturating_sub(1), &mut queue);
-                    seed(&mut sky, 15, y, z, edges.right_sky[y][z].saturating_sub(1), &mut queue);
-                }
-                for x in 0..16usize {
-                    seed(&mut sky, x, y, 0,  edges.back_sky [y][x].saturating_sub(1), &mut queue);
-                    seed(&mut sky, x, y, 15, edges.front_sky[y][x].saturating_sub(1), &mut queue);
+                    if sky[x][y][z] > 0 { queue.push_back((x as i32, y as i32, z as i32)); }
                 }
             }
-            // above_sky < 15: BFS-lit value from the chunk above — seed the top face
-            // with one extra diminish step (the chunk boundary counts as one hop).
-            // Sky columns (above_sky == 15) are already handled by the vertical scan.
+        }
+        let seed = |sky: &mut [[[u8;16];16];16], x: usize, y: usize, z: usize, val: u8,
+                        queue: &mut VecDeque<(i32,i32,i32)>| {
+            if val > 0 && !blocks[x][y][z].is_opaque() && sky[x][y][z] < val {
+                sky[x][y][z] = val;
+                queue.push_back((x as i32, y as i32, z as i32));
+            }
+        };
+        for y in 0..16usize {
+            for z in 0..16usize {
+                seed(&mut sky, 0,  y, z, edges.left_sky [y][z].saturating_sub(1), &mut queue);
+                seed(&mut sky, 15, y, z, edges.right_sky[y][z].saturating_sub(1), &mut queue);
+            }
             for x in 0..16usize {
-                for z in 0..16usize {
-                    let a = edges.above_sky[x][z];
-                    if a > 0 && a < 15 {
-                        seed(&mut sky, x, 15, z, a.saturating_sub(1), &mut queue);
-                    }
-                }
+                seed(&mut sky, x, y, 0,  edges.back_sky [y][x].saturating_sub(1), &mut queue);
+                seed(&mut sky, x, y, 15, edges.front_sky[y][x].saturating_sub(1), &mut queue);
             }
-
-            // BFS flood-fill: spread to all 6 neighbours, diminishing by 1.
-            while let Some((x, y, z)) = queue.pop_front() {
-                let cur = sky[x as usize][y as usize][z as usize];
-                if cur == 0 { continue; }
-                let spread = cur - 1;
-                for (dx, dy, dz) in [(-1i32,0,0),(1,0,0),(0,-1,0),(0,1,0),(0,0,-1i32),(0,0,1)] {
-                    let (nx, ny, nz) = (x+dx, y+dy, z+dz);
-                    if nx < 0 || nx >= 16 || ny < 0 || ny >= 16 || nz < 0 || nz >= 16 { continue; }
-                    let (nxu, nyu, nzu) = (nx as usize, ny as usize, nz as usize);
-                    if blocks[nxu][nyu][nzu].is_opaque() { continue; }
-                    if sky[nxu][nyu][nzu] < spread {
-                        sky[nxu][nyu][nzu] = spread;
-                        queue.push_back((nx, ny, nz));
+        }
+        for x in 0..16usize {
+            for z in 0..16usize {
+                let a = edges.above_sky[x][z];
+                if a > 0 && a < 15 { seed(&mut sky, x, 15, z, a.saturating_sub(1), &mut queue); }
+                // Propagate light upward from the chunk below (e.g. lava glow rising).
+                let b = edges.below_sky[x][z];
+                if b > 0 { seed(&mut sky, x, 0, z, b.saturating_sub(1), &mut queue); }
+            }
+        }
+        // Block-light emitters: lava at level 15.
+        // Lava is opaque so we seed its 6 non-opaque neighbours at 14 directly.
+        // Within-chunk lava:
+        for x in 0..16usize {
+            for y in 0..16usize {
+                for z in 0..16usize {
+                    if blocks[x][y][z] != BlockType::Lava { continue; }
+                    for (dx, dy, dz) in [(-1i32,0,0),(1,0,0),(0,-1,0),(0,1,0),(0,0,-1i32),(0,0,1)] {
+                        let (nx, ny, nz) = (x as i32+dx, y as i32+dy, z as i32+dz);
+                        if nx < 0 || nx >= 16 || ny < 0 || ny >= 16 || nz < 0 || nz >= 16 { continue; }
+                        seed(&mut sky, nx as usize, ny as usize, nz as usize, 14, &mut queue);
                     }
                 }
             }
         }
+        // Lava in neighbouring chunks: seed our border blocks at 14.
+        for y in 0..16usize {
+            for z in 0..16usize {
+                if edges.left [y][z] == BlockType::Lava { seed(&mut sky,  0, y, z, 14, &mut queue); }
+                if edges.right[y][z] == BlockType::Lava { seed(&mut sky, 15, y, z, 14, &mut queue); }
+            }
+            for x in 0..16usize {
+                if edges.back [y][x] == BlockType::Lava { seed(&mut sky, x, y,  0, 14, &mut queue); }
+                if edges.front[y][x] == BlockType::Lava { seed(&mut sky, x, y, 15, 14, &mut queue); }
+            }
+        }
+        for x in 0..16usize {
+            for z in 0..16usize {
+                if edges.above[x][z] == BlockType::Lava { seed(&mut sky, x, 15, z, 14, &mut queue); }
+                if edges.below[x][z] == BlockType::Lava { seed(&mut sky, x,  0, z, 14, &mut queue); }
+            }
+        }
 
+        while let Some((x, y, z)) = queue.pop_front() {
+            let cur = sky[x as usize][y as usize][z as usize];
+            if cur == 0 { continue; }
+            let spread = cur - 1;
+            for (dx, dy, dz) in [(-1i32,0,0),(1,0,0),(0,-1,0),(0,1,0),(0,0,-1i32),(0,0,1)] {
+                let (nx, ny, nz) = (x+dx, y+dy, z+dz);
+                if nx < 0 || nx >= 16 || ny < 0 || ny >= 16 || nz < 0 || nz >= 16 { continue; }
+                let (nxu, nyu, nzu) = (nx as usize, ny as usize, nz as usize);
+                if blocks[nxu][nyu][nzu].is_opaque() { continue; }
+                if sky[nxu][nyu][nzu] < spread {
+                    sky[nxu][nyu][nzu] = spread;
+                    queue.push_back((nx, ny, nz));
+                }
+            }
+        }
+        // Lava blocks are opaque so the BFS never writes a sky value into them,
+        // but adjacent block faces read their neighbor's sky_light to shade themselves.
+        // Assign lava its emission level so every bordering face sees a non-zero value,
+        // including faces in neighboring chunks reading this chunk's edge via left_sky etc.
+        for x in 0..16usize {
+            for y in 0..16usize {
+                for z in 0..16usize {
+                    if blocks[x][y][z] == BlockType::Lava {
+                        sky[x][y][z] = 14;
+                    }
+                }
+            }
+        }
+        Box::new(sky)
+    }
+
+    /// True for blocks handled by the greedy solid pass (excludes water / vegetation).
+    #[inline(always)]
+    fn is_greedy_eligible(block: BlockType) -> bool {
+        block.is_solid() && !block.is_fluid()
+            && block != BlockType::TallGrass
+            && block != BlockType::GrassShort
+    }
+
+    /// Emit a merged quad (6 vertices × 14 floats) into `out`.
+    /// `pos[4]` and `uv[4]` describe corners v0..v3. AO-diagonal flip applied.
+    fn emit_greedy_quad(
+        out:       &mut Vec<f32>,
+        pos:       [[f32; 3]; 4],
+        uv:        [[f32; 2]; 4],
+        tile_base: [f32; 2],
+        normal:    [f32; 3],
+        ao:        [f32; 4],
+        sky:       f32,
+        color:     [f32; 3],
+        brightness: f32,
+    ) {
+        // Use the diagonal whose two triangles each include a brighter corner.
+        let indices: [usize; 6] = if ao[0] + ao[2] < ao[1] + ao[3] {
+            [1, 2, 3, 1, 3, 0]
+        } else {
+            [0, 1, 2, 0, 2, 3]
+        };
+        for &vi in &indices {
+            let light = brightness * ao[vi];
+            out.push(pos[vi][0]);
+            out.push(pos[vi][1]);
+            out.push(pos[vi][2]);
+            out.push(color[0] * light);
+            out.push(color[1] * light);
+            out.push(color[2] * light);
+            out.push(uv[vi][0]);
+            out.push(uv[vi][1]);
+            out.push(normal[0]);
+            out.push(normal[1]);
+            out.push(normal[2]);
+            out.push(sky);
+            out.push(tile_base[0]);
+            out.push(tile_base[1]);
+        }
+    }
+
+    /// Build geometry for this chunk. Sky-light must already be computed and
+    /// stored; pass a snapshot via `sky_snapshot()` before dispatching the thread.
+    pub fn build_vertices(blocks: &Blocks, edges: &NeighborEdges, sky: &SkyLight, water_levels: &WaterLevels) -> Vec<f32> {
+        let mut vertices = Vec::with_capacity(9216);
+
+        // ── Pass 1: water and vegetation (no greedy merging) ─────────────────
         for x in 0..16usize {
             for y in 0..16usize {
                 for z in 0..16usize {
                     let block = blocks[x][y][z];
-                    // Block's own sky_light — used for vegetation/water that are always outdoors.
                     let own_sl = sky[x][y][z] as f32 / 15.0;
-
-                    if block == BlockType::Air {
-                        continue;
-                    }
-
-                    if block == BlockType::TallGrass {
-                        vertices.extend(Self::cross_vertices(x as f32, y as f32, z as f32, block, 1.0, own_sl));
-                        continue;
-                    }
-                    if block == BlockType::GrassShort {
-                        vertices.extend(Self::cross_vertices(x as f32, y as f32, z as f32, block, 0.45, own_sl));
-                        continue;
-                    }
-
-                    // Water gets variable-height geometry driven by water_levels.
-                    if block == BlockType::Water {
-                        let lxi = x as i32;
-                        let lyi = y as i32;
-                        let lzi = z as i32;
-                        for face in [Face::Right, Face::Left, Face::Up, Face::Down, Face::Front, Face::Back] {
-                            if !Self::is_face_visible(blocks, x, y, z, face, edges) { continue; }
-                            let corners: [f32; 4] = match face {
-                                Face::Up => [
-                                    Self::water_corner_h(lxi,   lyi, lzi+1, blocks, water_levels, edges),
-                                    Self::water_corner_h(lxi+1, lyi, lzi+1, blocks, water_levels, edges),
-                                    Self::water_corner_h(lxi+1, lyi, lzi,   blocks, water_levels, edges),
-                                    Self::water_corner_h(lxi,   lyi, lzi,   blocks, water_levels, edges),
-                                ],
-                                Face::Right => [0.0,
-                                    Self::water_corner_h(lxi+1, lyi, lzi,   blocks, water_levels, edges),
-                                    Self::water_corner_h(lxi+1, lyi, lzi+1, blocks, water_levels, edges),
-                                    0.0],
-                                Face::Left => [0.0,
-                                    Self::water_corner_h(lxi,   lyi, lzi+1, blocks, water_levels, edges),
-                                    Self::water_corner_h(lxi,   lyi, lzi,   blocks, water_levels, edges),
-                                    0.0],
-                                Face::Front => [0.0,
-                                    Self::water_corner_h(lxi+1, lyi, lzi+1, blocks, water_levels, edges),
-                                    Self::water_corner_h(lxi,   lyi, lzi+1, blocks, water_levels, edges),
-                                    0.0],
-                                Face::Back => [0.0,
-                                    Self::water_corner_h(lxi,   lyi, lzi,   blocks, water_levels, edges),
-                                    Self::water_corner_h(lxi+1, lyi, lzi,   blocks, water_levels, edges),
-                                    0.0],
-                                Face::Down => [0.0; 4],
-                            };
-                            vertices.extend(Self::water_face_vertices(
-                                x as f32, y as f32, z as f32, face, block, corners, own_sl,
-                            ));
+                    match block {
+                        BlockType::Air => {}
+                        BlockType::TallGrass => {
+                            vertices.extend(Self::cross_vertices(x as f32, y as f32, z as f32, block, 1.0, own_sl));
                         }
-                        continue;
-                    }
-
-                    for face in [Face::Right, Face::Left, Face::Up, Face::Down, Face::Front, Face::Back] {
-                        if Self::is_face_visible(blocks, x, y, z, face, edges) {
-                            // Use sky_light of the adjacent open block, not this block's own value.
-                            // A cliff side-face looks into outdoor air (sky=15) and must be lit.
-                            let sl = Self::neighbor_sky(&sky, edges, x as i32, y as i32, z as i32, face);
-                            let ao = Self::compute_ao(blocks, edges, x as i32, y as i32, z as i32, face);
-                            vertices.extend(Self::face_vertices_real_(
-                                x as f32, y as f32, z as f32, face, block, ao, sl,
-                            ));
+                        BlockType::GrassShort => {
+                            vertices.extend(Self::cross_vertices(x as f32, y as f32, z as f32, block, 0.45, own_sl));
                         }
+                        BlockType::Water => {
+                            let (lxi, lyi, lzi) = (x as i32, y as i32, z as i32);
+                            for face in [Face::Right, Face::Left, Face::Up, Face::Down, Face::Front, Face::Back] {
+                                if !Self::is_face_visible(blocks, x, y, z, face, edges) { continue; }
+                                let corners: [f32; 4] = match face {
+                                    Face::Up => [
+                                        Self::water_corner_h(lxi,   lyi, lzi+1, blocks, water_levels, edges),
+                                        Self::water_corner_h(lxi+1, lyi, lzi+1, blocks, water_levels, edges),
+                                        Self::water_corner_h(lxi+1, lyi, lzi,   blocks, water_levels, edges),
+                                        Self::water_corner_h(lxi,   lyi, lzi,   blocks, water_levels, edges),
+                                    ],
+                                    Face::Right => [0.0, Self::water_corner_h(lxi+1, lyi, lzi,   blocks, water_levels, edges),
+                                                       Self::water_corner_h(lxi+1, lyi, lzi+1, blocks, water_levels, edges), 0.0],
+                                    Face::Left  => [0.0, Self::water_corner_h(lxi,   lyi, lzi+1, blocks, water_levels, edges),
+                                                       Self::water_corner_h(lxi,   lyi, lzi,   blocks, water_levels, edges), 0.0],
+                                    Face::Front => [0.0, Self::water_corner_h(lxi+1, lyi, lzi+1, blocks, water_levels, edges),
+                                                       Self::water_corner_h(lxi,   lyi, lzi+1, blocks, water_levels, edges), 0.0],
+                                    Face::Back  => [0.0, Self::water_corner_h(lxi,   lyi, lzi,   blocks, water_levels, edges),
+                                                       Self::water_corner_h(lxi+1, lyi, lzi,   blocks, water_levels, edges), 0.0],
+                                    Face::Down  => [0.0; 4],
+                                };
+                                vertices.extend(Self::water_face_vertices(x as f32, y as f32, z as f32, face, block, corners, own_sl));
+                            }
+                        }
+                        BlockType::Lava => {
+                            // Flat self-luminous surface — always full brightness, no AO.
+                            for face in [Face::Right, Face::Left, Face::Up, Face::Down, Face::Front, Face::Back] {
+                                if !Self::is_face_visible(blocks, x, y, z, face, edges) { continue; }
+                                let corners: [f32; 4] = match face {
+                                    Face::Up                                              => [1.0; 4],
+                                    Face::Right | Face::Left | Face::Front | Face::Back  => [0.0, 1.0, 1.0, 0.0],
+                                    Face::Down                                            => [0.0; 4],
+                                };
+                                vertices.extend(Self::water_face_vertices(x as f32, y as f32, z as f32, face, block, corners, 1.0));
+                            }
+                        }
+                        _ => {} // solid blocks handled by greedy passes below
                     }
                 }
             }
         }
 
-        (vertices, Box::new(sky))
+        // ── Pass 2: greedy meshing for solid blocks ───────────────────────────
+        // Each cell in the 16×16 mask stores block type + AO bits + sky bits.
+        // Two cells merge only if ALL fields match (identical AO → correct merged corners).
+        #[derive(Copy, Clone, PartialEq, Eq)]
+        struct GCell { block: BlockType, ao: [u32; 4], sky: u32 }
+
+        // Helper: build mask + greedy rects for one face direction and one layer.
+        // Returns the (pos, uv, ao, sky, block) for each found rectangle.
+        // We inline the 6 face directions to avoid function-pointer overhead.
+
+        // ── Up face (Y+): layer=y, grid=(x,z), u=x, v=z ─────────────────────
+        for ly in 0..16usize {
+            let mut mask = [[None::<GCell>; 16]; 16]; // [lx][lz]
+            for lx in 0..16usize {
+                for lz in 0..16usize {
+                    let b = blocks[lx][ly][lz];
+                    if !Self::is_greedy_eligible(b) { continue; }
+                    if Self::is_face_visible(blocks, lx, ly, lz, Face::Up, edges) {
+                        let sky_val = Self::neighbor_sky(sky, edges, lx as i32, ly as i32, lz as i32, Face::Up);
+                        let ao = Self::compute_ao(blocks, edges, lx as i32, ly as i32, lz as i32, Face::Up);
+                        mask[lx][lz] = Some(GCell { block: b, ao: ao.map(f32::to_bits), sky: sky_val.to_bits() });
+                    }
+                }
+            }
+            for lx in 0..16usize {
+                let mut lz = 0usize;
+                while lz < 16 {
+                    if let Some(cell) = mask[lx][lz] {
+                        let mut w = 1usize; // width in z
+                        while lz + w < 16 && mask[lx][lz + w] == Some(cell) { w += 1; }
+                        let mut h = 1usize; // height in x
+                        'h: while lx + h < 16 {
+                            for dz in 0..w { if mask[lx + h][lz + dz] != Some(cell) { break 'h; } }
+                            h += 1;
+                        }
+                        for dx in 0..h { for dz in 0..w { mask[lx + dx][lz + dz] = None; } }
+                        let (lxf, lyf, lzf, wf, hf) = (lx as f32, ly as f32, lz as f32, w as f32, h as f32);
+                        let ao = cell.ao.map(f32::from_bits);
+                        let sky_f = f32::from_bits(cell.sky);
+                        // v0=(lx,ly+1,lz+w) v1=(lx+h,ly+1,lz+w) v2=(lx+h,ly+1,lz) v3=(lx,ly+1,lz)
+                        Self::emit_greedy_quad(&mut vertices,
+                            [[lxf, lyf+1.0, lzf+wf], [lxf+hf, lyf+1.0, lzf+wf], [lxf+hf, lyf+1.0, lzf], [lxf, lyf+1.0, lzf]],
+                            [[0.0, wf], [hf, wf], [hf, 0.0], [0.0, 0.0]],
+                            Self::tile_base_for(cell.block.texture_id(Face::Up)),
+                            [0.0, 1.0, 0.0], ao, sky_f, cell.block.color(), 1.0);
+                        lz += w;
+                    } else { lz += 1; }
+                }
+            }
+        }
+
+        // ── Down face (Y-): layer=y, grid=(x,z), u=x, v=z ───────────────────
+        for ly in 0..16usize {
+            let mut mask = [[None::<GCell>; 16]; 16];
+            for lx in 0..16usize {
+                for lz in 0..16usize {
+                    let b = blocks[lx][ly][lz];
+                    if !Self::is_greedy_eligible(b) { continue; }
+                    if Self::is_face_visible(blocks, lx, ly, lz, Face::Down, edges) {
+                        let sky_val = Self::neighbor_sky(sky, edges, lx as i32, ly as i32, lz as i32, Face::Down);
+                        let ao = Self::compute_ao(blocks, edges, lx as i32, ly as i32, lz as i32, Face::Down);
+                        mask[lx][lz] = Some(GCell { block: b, ao: ao.map(f32::to_bits), sky: sky_val.to_bits() });
+                    }
+                }
+            }
+            for lx in 0..16usize {
+                let mut lz = 0usize;
+                while lz < 16 {
+                    if let Some(cell) = mask[lx][lz] {
+                        let mut w = 1usize;
+                        while lz + w < 16 && mask[lx][lz + w] == Some(cell) { w += 1; }
+                        let mut h = 1usize;
+                        'h: while lx + h < 16 {
+                            for dz in 0..w { if mask[lx + h][lz + dz] != Some(cell) { break 'h; } }
+                            h += 1;
+                        }
+                        for dx in 0..h { for dz in 0..w { mask[lx + dx][lz + dz] = None; } }
+                        let (lxf, lyf, lzf, wf, hf) = (lx as f32, ly as f32, lz as f32, w as f32, h as f32);
+                        let ao = cell.ao.map(f32::from_bits);
+                        let sky_f = f32::from_bits(cell.sky);
+                        // v0=(lx,ly,lz) v1=(lx+h,ly,lz) v2=(lx+h,ly,lz+w) v3=(lx,ly,lz+w)
+                        Self::emit_greedy_quad(&mut vertices,
+                            [[lxf, lyf, lzf], [lxf+hf, lyf, lzf], [lxf+hf, lyf, lzf+wf], [lxf, lyf, lzf+wf]],
+                            [[0.0, 0.0], [hf, 0.0], [hf, wf], [0.0, wf]],
+                            Self::tile_base_for(cell.block.texture_id(Face::Down)),
+                            [0.0, -1.0, 0.0], ao, sky_f, cell.block.color(), 0.5);
+                        lz += w;
+                    } else { lz += 1; }
+                }
+            }
+        }
+
+        // ── Right face (X+): layer=x, grid=(z,y), w=z, h=y ──────────────────
+        for lx in 0..16usize {
+            let mut mask = [[None::<GCell>; 16]; 16]; // [lz][ly]
+            for lz in 0..16usize {
+                for ly in 0..16usize {
+                    let b = blocks[lx][ly][lz];
+                    if !Self::is_greedy_eligible(b) { continue; }
+                    if Self::is_face_visible(blocks, lx, ly, lz, Face::Right, edges) {
+                        let sky_val = Self::neighbor_sky(sky, edges, lx as i32, ly as i32, lz as i32, Face::Right);
+                        let ao = Self::compute_ao(blocks, edges, lx as i32, ly as i32, lz as i32, Face::Right);
+                        mask[lz][ly] = Some(GCell { block: b, ao: ao.map(f32::to_bits), sky: sky_val.to_bits() });
+                    }
+                }
+            }
+            for lz in 0..16usize {
+                let mut ly = 0usize;
+                while ly < 16 {
+                    if let Some(cell) = mask[lz][ly] {
+                        let mut h = 1usize; // height in y
+                        while ly + h < 16 && mask[lz][ly + h] == Some(cell) { h += 1; }
+                        let mut w = 1usize; // width in z
+                        'w: while lz + w < 16 {
+                            for dy in 0..h { if mask[lz + w][ly + dy] != Some(cell) { break 'w; } }
+                            w += 1;
+                        }
+                        for dz in 0..w { for dy in 0..h { mask[lz + dz][ly + dy] = None; } }
+                        let (lxf, lyf, lzf, wf, hf) = (lx as f32, ly as f32, lz as f32, w as f32, h as f32);
+                        let ao = cell.ao.map(f32::from_bits);
+                        let sky_f = f32::from_bits(cell.sky);
+                        // v0=(lx+1,ly,lz) uv=(w,0)  v1=(lx+1,ly+h,lz) uv=(w,h)
+                        // v2=(lx+1,ly+h,lz+w) uv=(0,h)  v3=(lx+1,ly,lz+w) uv=(0,0)
+                        Self::emit_greedy_quad(&mut vertices,
+                            [[lxf+1.0, lyf, lzf], [lxf+1.0, lyf+hf, lzf], [lxf+1.0, lyf+hf, lzf+wf], [lxf+1.0, lyf, lzf+wf]],
+                            [[wf, 0.0], [wf, hf], [0.0, hf], [0.0, 0.0]],
+                            Self::tile_base_for(cell.block.texture_id(Face::Right)),
+                            [1.0, 0.0, 0.0], ao, sky_f, cell.block.color(), 0.65);
+                        ly += h;
+                    } else { ly += 1; }
+                }
+            }
+        }
+
+        // ── Left face (X-): layer=x, grid=(z,y), w=z, h=y ───────────────────
+        for lx in 0..16usize {
+            let mut mask = [[None::<GCell>; 16]; 16];
+            for lz in 0..16usize {
+                for ly in 0..16usize {
+                    let b = blocks[lx][ly][lz];
+                    if !Self::is_greedy_eligible(b) { continue; }
+                    if Self::is_face_visible(blocks, lx, ly, lz, Face::Left, edges) {
+                        let sky_val = Self::neighbor_sky(sky, edges, lx as i32, ly as i32, lz as i32, Face::Left);
+                        let ao = Self::compute_ao(blocks, edges, lx as i32, ly as i32, lz as i32, Face::Left);
+                        mask[lz][ly] = Some(GCell { block: b, ao: ao.map(f32::to_bits), sky: sky_val.to_bits() });
+                    }
+                }
+            }
+            for lz in 0..16usize {
+                let mut ly = 0usize;
+                while ly < 16 {
+                    if let Some(cell) = mask[lz][ly] {
+                        let mut h = 1usize;
+                        while ly + h < 16 && mask[lz][ly + h] == Some(cell) { h += 1; }
+                        let mut w = 1usize;
+                        'w: while lz + w < 16 {
+                            for dy in 0..h { if mask[lz + w][ly + dy] != Some(cell) { break 'w; } }
+                            w += 1;
+                        }
+                        for dz in 0..w { for dy in 0..h { mask[lz + dz][ly + dy] = None; } }
+                        let (lxf, lyf, lzf, wf, hf) = (lx as f32, ly as f32, lz as f32, w as f32, h as f32);
+                        let ao = cell.ao.map(f32::from_bits);
+                        let sky_f = f32::from_bits(cell.sky);
+                        // v0=(lx,ly,lz+w) uv=(0,0)  v1=(lx,ly+h,lz+w) uv=(0,h)
+                        // v2=(lx,ly+h,lz) uv=(w,h)  v3=(lx,ly,lz) uv=(w,0)
+                        Self::emit_greedy_quad(&mut vertices,
+                            [[lxf, lyf, lzf+wf], [lxf, lyf+hf, lzf+wf], [lxf, lyf+hf, lzf], [lxf, lyf, lzf]],
+                            [[0.0, 0.0], [0.0, hf], [wf, hf], [wf, 0.0]],
+                            Self::tile_base_for(cell.block.texture_id(Face::Left)),
+                            [-1.0, 0.0, 0.0], ao, sky_f, cell.block.color(), 0.65);
+                        ly += h;
+                    } else { ly += 1; }
+                }
+            }
+        }
+
+        // ── Front face (Z+): layer=z, grid=(x,y), w=x, h=y ──────────────────
+        for lz in 0..16usize {
+            let mut mask = [[None::<GCell>; 16]; 16]; // [lx][ly]
+            for lx in 0..16usize {
+                for ly in 0..16usize {
+                    let b = blocks[lx][ly][lz];
+                    if !Self::is_greedy_eligible(b) { continue; }
+                    if Self::is_face_visible(blocks, lx, ly, lz, Face::Front, edges) {
+                        let sky_val = Self::neighbor_sky(sky, edges, lx as i32, ly as i32, lz as i32, Face::Front);
+                        let ao = Self::compute_ao(blocks, edges, lx as i32, ly as i32, lz as i32, Face::Front);
+                        mask[lx][ly] = Some(GCell { block: b, ao: ao.map(f32::to_bits), sky: sky_val.to_bits() });
+                    }
+                }
+            }
+            for lx in 0..16usize {
+                let mut ly = 0usize;
+                while ly < 16 {
+                    if let Some(cell) = mask[lx][ly] {
+                        let mut h = 1usize; // height in y
+                        while ly + h < 16 && mask[lx][ly + h] == Some(cell) { h += 1; }
+                        let mut w = 1usize; // width in x
+                        'w: while lx + w < 16 {
+                            for dy in 0..h { if mask[lx + w][ly + dy] != Some(cell) { break 'w; } }
+                            w += 1;
+                        }
+                        for dx in 0..w { for dy in 0..h { mask[lx + dx][ly + dy] = None; } }
+                        let (lxf, lyf, lzf, wf, hf) = (lx as f32, ly as f32, lz as f32, w as f32, h as f32);
+                        let ao = cell.ao.map(f32::from_bits);
+                        let sky_f = f32::from_bits(cell.sky);
+                        // v0=(lx+w,ly,lz+1) uv=(w,0)  v1=(lx+w,ly+h,lz+1) uv=(w,h)
+                        // v2=(lx,ly+h,lz+1) uv=(0,h)  v3=(lx,ly,lz+1) uv=(0,0)
+                        Self::emit_greedy_quad(&mut vertices,
+                            [[lxf+wf, lyf, lzf+1.0], [lxf+wf, lyf+hf, lzf+1.0], [lxf, lyf+hf, lzf+1.0], [lxf, lyf, lzf+1.0]],
+                            [[wf, 0.0], [wf, hf], [0.0, hf], [0.0, 0.0]],
+                            Self::tile_base_for(cell.block.texture_id(Face::Front)),
+                            [0.0, 0.0, 1.0], ao, sky_f, cell.block.color(), 0.8);
+                        ly += h;
+                    } else { ly += 1; }
+                }
+            }
+        }
+
+        // ── Back face (Z-): layer=z, grid=(x,y), w=x, h=y ───────────────────
+        for lz in 0..16usize {
+            let mut mask = [[None::<GCell>; 16]; 16];
+            for lx in 0..16usize {
+                for ly in 0..16usize {
+                    let b = blocks[lx][ly][lz];
+                    if !Self::is_greedy_eligible(b) { continue; }
+                    if Self::is_face_visible(blocks, lx, ly, lz, Face::Back, edges) {
+                        let sky_val = Self::neighbor_sky(sky, edges, lx as i32, ly as i32, lz as i32, Face::Back);
+                        let ao = Self::compute_ao(blocks, edges, lx as i32, ly as i32, lz as i32, Face::Back);
+                        mask[lx][ly] = Some(GCell { block: b, ao: ao.map(f32::to_bits), sky: sky_val.to_bits() });
+                    }
+                }
+            }
+            for lx in 0..16usize {
+                let mut ly = 0usize;
+                while ly < 16 {
+                    if let Some(cell) = mask[lx][ly] {
+                        let mut h = 1usize;
+                        while ly + h < 16 && mask[lx][ly + h] == Some(cell) { h += 1; }
+                        let mut w = 1usize;
+                        'w: while lx + w < 16 {
+                            for dy in 0..h { if mask[lx + w][ly + dy] != Some(cell) { break 'w; } }
+                            w += 1;
+                        }
+                        for dx in 0..w { for dy in 0..h { mask[lx + dx][ly + dy] = None; } }
+                        let (lxf, lyf, lzf, wf, hf) = (lx as f32, ly as f32, lz as f32, w as f32, h as f32);
+                        let ao = cell.ao.map(f32::from_bits);
+                        let sky_f = f32::from_bits(cell.sky);
+                        // v0=(lx,ly,lz) uv=(0,0)  v1=(lx,ly+h,lz) uv=(0,h)
+                        // v2=(lx+w,ly+h,lz) uv=(w,h)  v3=(lx+w,ly,lz) uv=(w,0)
+                        Self::emit_greedy_quad(&mut vertices,
+                            [[lxf, lyf, lzf], [lxf, lyf+hf, lzf], [lxf+wf, lyf+hf, lzf], [lxf+wf, lyf, lzf]],
+                            [[0.0, 0.0], [0.0, hf], [wf, hf], [wf, 0.0]],
+                            Self::tile_base_for(cell.block.texture_id(Face::Back)),
+                            [0.0, 0.0, -1.0], ao, sky_f, cell.block.color(), 0.8);
+                        ly += h;
+                    } else { ly += 1; }
+                }
+            }
+        }
+
+        vertices
     }
 
     // ── Water helpers ────────────────────────────────────────────────────────
@@ -873,7 +1288,11 @@ impl Chunk {
             }
             Face::Down => {}
         }
-        let tex = face.texture_coords(block_type.texture_id(face), 16);
+        let tex_id = block_type.texture_id(face);
+        let tb     = Self::tile_base_for(tex_id);
+        let ts     = 1.0_f32 / 16.0;
+        let atlas_tc = face.texture_coords(tex_id, 16);
+        let tex: [[f32; 2]; 4] = atlas_tc.map(|[u, v]| [(u - tb[0]) / ts, (v - tb[1]) / ts]);
         let [r, g, b] = block_type.color();
         let bright = match face {
             Face::Up                  => 1.0,
@@ -896,6 +1315,8 @@ impl Chunk {
             verts.push(normal[1]);
             verts.push(normal[2]);
             verts.push(sky_light);
+            verts.push(tb[0]);
+            verts.push(tb[1]);
         }
         verts
     }
@@ -944,7 +1365,9 @@ impl Chunk {
             return false;
         }
 
-        !neighbor.is_opaque()
+        // Lava renders below full block height (0.9 scale), so solid faces
+        // bordering lava must remain visible to fill the gap.
+        !neighbor.is_opaque() || neighbor == BlockType::Lava
     }
 
     // Solid lookup for AO that crosses chunk boundaries via neighbour edge data.
@@ -990,14 +1413,13 @@ impl Chunk {
     fn cross_vertices(x: f32, y: f32, z: f32, block: BlockType, height: f32, sky_light: f32) -> Vec<f32> {
         let [r, g, b] = block.color();
 
-        const N: f32 = 16.0;
-        let ts = 1.0 / N;
-        let tile_u = block.texture_id(Face::Front) as f32;
-        let u0 = tile_u * ts;
-        let u1 = (tile_u + 1.0) * ts;
-        // Map UVs so shorter grass shows only the bottom portion of the tile.
-        let v1 = ts;
-        let v0 = v1 - ts * height;
+        let tex_id = block.texture_id(Face::Front);
+        let tb = Self::tile_base_for(tex_id);
+        // Tile-local UVs: u 0..1, v (1-height)..1 (show bottom portion of tile).
+        let u0 = 0.0_f32;
+        let u1 = 1.0_f32;
+        let v1 = 1.0_f32;
+        let v0 = 1.0 - height;
 
         let mut v: Vec<f32> = Vec::new();
 
@@ -1005,10 +1427,10 @@ impl Chunk {
             let uvs = [[u0, v1], [u1, v1], [u1, v0], [u0, v0]];
             let (nx, ny, nz) = (0.0f32, 1.0, 0.0);
             for &i in &[0usize, 1, 2, 0, 2, 3] {
-                v.extend_from_slice(&[p[i][0], p[i][1], p[i][2], r, g, b, uvs[i][0], uvs[i][1], nx, ny, nz, sky_light]);
+                v.extend_from_slice(&[p[i][0], p[i][1], p[i][2], r, g, b, uvs[i][0], uvs[i][1], nx, ny, nz, sky_light, tb[0], tb[1]]);
             }
             for &i in &[2usize, 1, 0, 3, 2, 0] {
-                v.extend_from_slice(&[p[i][0], p[i][1], p[i][2], r, g, b, uvs[i][0], uvs[i][1], nx, ny, nz, sky_light]);
+                v.extend_from_slice(&[p[i][0], p[i][1], p[i][2], r, g, b, uvs[i][0], uvs[i][1], nx, ny, nz, sky_light, tb[0], tb[1]]);
             }
         };
 
@@ -1029,39 +1451,12 @@ impl Chunk {
         v
     }
 
-    fn face_vertices_real_(x: f32, y: f32, z: f32, face: Face, block_type: BlockType, ao: [f32; 4], sky_light: f32) -> Vec<f32> {
-        let mut vertices = Vec::new();
-        let positions  = face.positions(x, y, z);
-        let tex_coords = face.texture_coords(block_type.texture_id(face), 16);
-        let base_color = block_type.color();
-        let normal     = face.normal();
-
-        let brightness = match face {
-            Face::Up    => 1.0,
-            Face::Down  => 0.5,
-            Face::Front | Face::Back => 0.8,
-            Face::Left  | Face::Right => 0.65,
-        };
-
-        // Vertex layout: [x, y, z,  r, g, b,  u, v,  nx, ny, nz,  sky_light] = 12 floats
-        for &vertex_idx in &[0usize, 1, 2, 0, 2, 3] {
-            let light = brightness * ao[vertex_idx];
-            vertices.push(positions[vertex_idx][0]);
-            vertices.push(positions[vertex_idx][1]);
-            vertices.push(positions[vertex_idx][2]);
-            vertices.push(base_color[0] * light);
-            vertices.push(base_color[1] * light);
-            vertices.push(base_color[2] * light);
-            vertices.push(tex_coords[vertex_idx][0]);
-            vertices.push(tex_coords[vertex_idx][1]);
-            vertices.push(normal[0]);
-            vertices.push(normal[1]);
-            vertices.push(normal[2]);
-            vertices.push(sky_light);
-        }
-
-        vertices
+    /// Tile base UV [col/16, row/16] for the given atlas texture index.
+    #[inline(always)]
+    fn tile_base_for(texture_id: u32) -> [f32; 2] {
+        [(texture_id % 16) as f32 / 16.0, (texture_id / 16) as f32 / 16.0]
     }
+
 
     pub fn is_in_frustum(&self, frustum: &Frustum) -> bool {
         let min = Vec3::new(

@@ -15,7 +15,7 @@ impl BlockMaterial {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum BlockType {
     Air,
     Grass,
@@ -31,6 +31,10 @@ pub enum BlockType {
     Bed,
     CopperOre,
     CoalOre,
+    IronOre,
+    Furnace,
+    Lava,
+    Cobblestone,
 }
 
 impl BlockType {
@@ -50,34 +54,38 @@ impl BlockType {
             BlockType::Bed        => [0.80, 0.35, 0.25],
             BlockType::CopperOre  => [0.72, 0.45, 0.20],
             BlockType::CoalOre    => [0.15, 0.15, 0.15],
+            BlockType::IronOre    => [0.62, 0.42, 0.30],
+            BlockType::Furnace    => [0.50, 0.50, 0.50],
+            BlockType::Lava        => [1.00, 0.45, 0.00],
+            BlockType::Cobblestone => [0.44, 0.44, 0.44],
         }
     }
-    
+
     pub fn is_opaque(&self) -> bool {
         match self {
             BlockType::Air | BlockType::Water | BlockType::Leaves
             | BlockType::TallGrass | BlockType::GrassShort => false,
-            BlockType::Bed | BlockType::CopperOre => true,
             _ => true,
         }
     }
 
     pub fn is_solid(&self) -> bool {
         match self {
-            BlockType::Air | BlockType::Water | BlockType::TallGrass | BlockType::GrassShort => false,
+            BlockType::Air | BlockType::Water | BlockType::Lava
+            | BlockType::TallGrass | BlockType::GrassShort => false,
             _ => true,
         }
     }
 
     pub fn is_targetable(&self) -> bool {
         match self {
-            BlockType::Air | BlockType::Water => false,
+            BlockType::Air | BlockType::Water | BlockType::Lava => false,
             _ => true,
         }
     }
 
     pub fn is_fluid(&self) -> bool {
-        matches!(self, BlockType::Water)
+        matches!(self, BlockType::Water | BlockType::Lava)
     }
 
     /// Base dig time in seconds with bare hands (None = cannot be dug).
@@ -87,11 +95,15 @@ impl BlockType {
         match self {
             BlockType::Air        => None,
             BlockType::Water      => None,
+            BlockType::Lava       => None,
+            BlockType::Cobblestone => Some(2.0),
             BlockType::TallGrass  => Some(0.05),
             BlockType::GrassShort => Some(0.05),
             BlockType::Snow       => Some(0.2),
             BlockType::CopperOre  => Some(3.0),
             BlockType::CoalOre    => Some(3.0),
+            BlockType::IronOre    => Some(3.0),
+            BlockType::Furnace    => Some(3.5),
             BlockType::Leaves     => Some(0.2),
             BlockType::Grass      => Some(0.5),
             BlockType::Dirt       => Some(0.5),
@@ -123,6 +135,10 @@ impl BlockType {
             BlockType::Bed       => vec![ItemType::Bed],
             BlockType::CopperOre => vec![ItemType::RawCopper],
             BlockType::CoalOre   => vec![ItemType::Coal],
+            BlockType::IronOre   => vec![ItemType::RawIron],
+            BlockType::Furnace   => vec![ItemType::Furnace],
+            BlockType::Lava        => vec![],
+            BlockType::Cobblestone => vec![ItemType::StoneChunk],
             _ => vec![],
         }
     }
@@ -135,10 +151,14 @@ impl BlockType {
             BlockType::Log | BlockType::Bed  => Some(BlockMaterial::Wood),
             BlockType::CopperOre             => Some(BlockMaterial::Stone),
             BlockType::CoalOre               => Some(BlockMaterial::Stone),
+            BlockType::IronOre               => Some(BlockMaterial::Stone),
+            BlockType::Furnace               => Some(BlockMaterial::Stone),
             BlockType::Leaves => Some(BlockMaterial::Leaves),
             BlockType::Sand   => Some(BlockMaterial::Sand),
             BlockType::Snow   => Some(BlockMaterial::Snow),
-            _                 => None,
+            BlockType::Lava        => None,
+            BlockType::Cobblestone => Some(BlockMaterial::Stone),
+            _                      => None,
         }
     }
 
@@ -167,6 +187,10 @@ impl BlockType {
             BlockType::Bed        => 11,
             BlockType::CopperOre  => 12,
             BlockType::CoalOre    => 13,
+            BlockType::IronOre    => 14,
+            BlockType::Furnace    => 15,
+            BlockType::Lava        => 16,
+            BlockType::Cobblestone => 17,
         }
     }
 
@@ -185,6 +209,10 @@ impl BlockType {
             11 => Self::Bed,
             12 => Self::CopperOre,
             13 => Self::CoalOre,
+            14 => Self::IronOre,
+            15 => Self::Furnace,
+            16 => Self::Lava,
+            17 => Self::Cobblestone,
             _  => Self::Air,
         }
     }
@@ -212,6 +240,13 @@ impl BlockType {
             BlockType::Bed        => 5,   // reuse log-side texture (brown)
             BlockType::CopperOre  => 16,
             BlockType::CoalOre    => 17,
+            BlockType::IronOre    => 18,
+            BlockType::Furnace    => match face {
+                crate::world::Face::Front | crate::world::Face::Back => 20,
+                _                                                     => 19,
+            },
+            BlockType::Lava        => 21,
+            BlockType::Cobblestone => 22,
         }
     }
 

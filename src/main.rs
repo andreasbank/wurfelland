@@ -750,6 +750,25 @@ fn main() {
                                                 }
                                                 player.pick_up(ItemType::Bed);
                                             }
+                                        } else if recipe == "furnace" {
+                                            let stone_count: u32 = player.inventory.iter()
+                                                .filter_map(|s| if let Some((ItemType::StoneChunk, c)) = s { Some(*c) } else { None })
+                                                .sum();
+                                            if god_mode || stone_count >= 8 {
+                                                if !god_mode {
+                                                    let mut to_consume = 8u32;
+                                                    for slot in player.inventory.iter_mut() {
+                                                        if to_consume == 0 { break; }
+                                                        if let Some((ItemType::StoneChunk, c)) = slot {
+                                                            let take = (*c).min(to_consume);
+                                                            *c -= take;
+                                                            to_consume -= take;
+                                                            if *c == 0 { *slot = None; }
+                                                        }
+                                                    }
+                                                }
+                                                player.pick_up(ItemType::Furnace);
+                                            }
                                         }
                                     }
                                 }
@@ -761,8 +780,27 @@ fn main() {
                         if game_state == GameState::Playing && !paused && !bag_open && !build_open {
                             let ro = [camera.position.x, camera.position.y, camera.position.z];
                             let rd = [camera.front.x,    camera.front.y,    camera.front.z];
+                            let holding_furnace = hotbar[selected_slot].map_or(false, |(item, _)| item == ItemType::Furnace);
                             let holding_bed = hotbar[selected_slot].map_or(false, |(item, _)| item == ItemType::Bed);
-                            if holding_bed {
+                            if holding_furnace {
+                                if let Some((_hit, adj)) = world.raycast_face(ro, rd, 5.0) {
+                                    if world.get_block(adj[0], adj[1], adj[2]) == BlockType::Air {
+                                        world.set_block_recorded(adj[0], adj[1], adj[2], BlockType::Furnace);
+                                        let bid = BlockType::Furnace.to_net_id();
+                                        if let Some(ref mut server) = net_server {
+                                            server.broadcast_block_change(adj[0], adj[1], adj[2], bid);
+                                        }
+                                        if let Some(ref mut client) = net_client {
+                                            client.send_block_place(adj[0], adj[1], adj[2], bid);
+                                        }
+                                        if !god_mode {
+                                            if let Some((_, count)) = &mut hotbar[selected_slot] {
+                                                if *count > 1 { *count -= 1; } else { hotbar[selected_slot] = None; }
+                                            }
+                                        }
+                                    }
+                                }
+                            } else if holding_bed {
                                 if let Some((_hit, adj)) = world.raycast_face(ro, rd, 5.0) {
                                     // Second block: step in the dominant horizontal facing direction
                                     let (dx2, dz2) = if rd[0].abs() >= rd[2].abs() {
@@ -776,6 +814,15 @@ fn main() {
                                     {
                                         world.set_block_recorded(adj[0], adj[1], adj[2], BlockType::Bed);
                                         world.set_block_recorded(adj2[0], adj2[1], adj2[2], BlockType::Bed);
+                                        let bid = BlockType::Bed.to_net_id();
+                                        if let Some(ref mut server) = net_server {
+                                            server.broadcast_block_change(adj[0], adj[1], adj[2], bid);
+                                            server.broadcast_block_change(adj2[0], adj2[1], adj2[2], bid);
+                                        }
+                                        if let Some(ref mut client) = net_client {
+                                            client.send_block_place(adj[0], adj[1], adj[2], bid);
+                                            client.send_block_place(adj2[0], adj2[1], adj2[2], bid);
+                                        }
                                         if !god_mode {
                                             if let Some((_, count)) = &mut hotbar[selected_slot] {
                                                 if *count > 1 { *count -= 1; } else { hotbar[selected_slot] = None; }
@@ -1495,6 +1542,7 @@ fn main() {
                         }
 
                         world.tick_water(delta_time);
+                        world.tick_lava(delta_time);
                     }
 
                     // ── Network tick ──────────────────────────────────────────
@@ -1502,6 +1550,9 @@ fn main() {
                         server.update(delta_time);
                         for [x, y, z] in server.drain_block_breaks() {
                             world.set_block(x, y, z, world::BlockType::Air);
+                        }
+                        for [x, y, z, block_id] in server.drain_block_places() {
+                            world.set_block(x, y, z, world::BlockType::from_net_id(block_id as u8));
                         }
                         server.broadcast_host_position(
                             player.position[0], player.position[1], player.position[2],
