@@ -464,9 +464,11 @@ impl World {
 
     fn lava_level_at(&self, wx: i32, wy: i32, wz: i32) -> u8 {
         let cx = wx.div_euclid(16); let cy = wy.div_euclid(16); let cz = wz.div_euclid(16);
-        self.lava_levels.get(&[cx, cy, cz])
+        let stored = self.lava_levels.get(&[cx, cy, cz])
             .map(|ll| ll[wx.rem_euclid(16) as usize][wy.rem_euclid(16) as usize][wz.rem_euclid(16) as usize])
-            .unwrap_or(0)
+            .unwrap_or(0);
+        // Terrain-generated lava has no lava_levels entry; treat it as a source block.
+        if stored == 0 && self.get_block(wx, wy, wz) == BlockType::Lava { 4 } else { stored }
     }
 
     fn refresh_active_lava(&mut self, wx: i32, wy: i32, wz: i32) {

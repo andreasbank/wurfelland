@@ -207,7 +207,7 @@ pub fn create_block_atlas() -> u32 {
         [128, 128, 128], // 18: Iron ore   (stone base, rust-tan specks added below)
         [100, 100, 100], // 19: Furnace sides/top (dark cobblestone bricks)
         [ 60,  60,  60], // 20: Furnace front (dark chamber + glow, generated below)
-        [200,  70,  10], // 21: Lava (bright orange base, bright spots + dark cracks)
+        [200,  60,   0], // 21: Lava (Minecraft-style: red-orange base, yellow cores, dark rock)
         [112, 112, 112], // 22: Cobblestone (stone base with irregular dark cracks)
     ];
 
@@ -302,16 +302,37 @@ pub fn create_block_atlas() -> u32 {
                             ^ (px / 8).wrapping_mul(17) ^ (py / 6).wrapping_mul(13)) % 6;
                         if cx >= 3 || cy >= 2 || crack == 0 { [70u8, 70, 70] } else { base_color }
                     }
-                    // Lava: orange-red base with bright glowing blobs and dark cracks
+                    // Lava: Minecraft-style — dark rocky crust with bright yellow/orange glowing cores.
+                    // Uses a low-frequency blob to carve out glowing regions, then a separate
+                    // high-frequency hash for dark rock cracks between them.
                     21 => {
-                        let h = (px.wrapping_mul(7) ^ py.wrapping_mul(13)
-                            ^ px.wrapping_mul(py).wrapping_mul(11)) % 32;
-                        let crack = (px.wrapping_mul(3) ^ py.wrapping_mul(5)
-                            ^ px.wrapping_add(py).wrapping_mul(7)) % 12;
-                        if crack == 0       { [60u8, 20, 5] }      // dark crack
-                        else if h < 4      { [255u8, 200, 60] }    // bright hot spot
-                        else if h < 9      { [240u8, 120, 20] }    // warm orange
-                        else               { base_color }           // base red-orange
+                        // Low-frequency "blob" field separates bright lava pools from dark rock.
+                        let blob = (px.wrapping_mul(3).wrapping_add(py.wrapping_mul(5))
+                            ^ px.wrapping_mul(py).wrapping_mul(7)
+                            ^ (px / 3).wrapping_mul(11) ^ (py / 3).wrapping_mul(13)) % 24;
+                        // High-frequency hash for yellow hottest-core pixels inside blobs.
+                        let hot = (px.wrapping_mul(17) ^ py.wrapping_mul(23)
+                            ^ px.wrapping_add(py).wrapping_mul(31)) % 8;
+                        // Dark rock cracks along the borders of lava pools.
+                        let rock = (px.wrapping_mul(5) ^ py.wrapping_mul(7)
+                            ^ (px / 4).wrapping_mul(3) ^ (py / 4).wrapping_mul(9)) % 10;
+
+                        if blob < 6 {
+                            // Cooler lava: deep red, darker but still orange-red (no brown)
+                            if rock == 0 { [140u8, 20, 0] } else { [180u8, 40, 0] }
+                        } else if blob < 10 {
+                            // Transition: rich orange
+                            [220u8, 80, 0]
+                        } else if hot == 0 {
+                            // Hottest core: near-white yellow
+                            [255u8, 248, 120]
+                        } else if hot < 3 {
+                            // Bright yellow
+                            [255u8, 210, 30]
+                        } else {
+                            // Main lava body: vivid red-orange
+                            base_color
+                        }
                     }
                     // Grass side: green stripe at top
                     4 if py >= TILE_SIZE - 4 => [120u8, 172, 48],

@@ -195,11 +195,17 @@ impl ChunkRenderer {
                     if (!transparent_pass && texSample.a < 0.99) discard;
                     if ( transparent_pass && texSample.a >= 0.99) discard;
 
+                    // vSkyLight == -1.0 is the emissive sentinel (lava): always sun_light=1.0,
+                    // no shadows, independent of time of day or sky exposure.
+                    float is_emissive = step(0.5, -vSkyLight);
+                    float safe_sky    = max(0.0, vSkyLight);
                     float shadow = calcShadow(vWorldPos, vNormal, fragDist);
-                    float outdoor_sun = ambientLight + directionalLight * (1.0 - shadow);
+                    // Only apply sun shadows to blocks with true sky exposure (sky level 15).
+                    float shadow_factor = shadow * step(0.999, safe_sky) * (1.0 - is_emissive);
+                    float outdoor_sun = ambientLight + directionalLight * (1.0 - shadow_factor);
                     // Caves have a fixed dim floor — not tied to time of day.
                     float cave_ambient = 0.03;
-                    float sun_light = mix(cave_ambient, outdoor_sun, vSkyLight);
+                    float sun_light = mix(mix(cave_ambient, outdoor_sun, safe_sky), 1.0, is_emissive);
                     float torch_dist = length(vWorldPos - u_torch_pos);
                     float torch_atten = max(0.0, 1.0 - torch_dist / 12.0);
                     torch_atten = torch_atten * sqrt(torch_atten);

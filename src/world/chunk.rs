@@ -951,7 +951,8 @@ impl Chunk {
                             }
                         }
                         BlockType::Lava => {
-                            // Flat self-luminous surface — always full brightness, no AO.
+                            // Self-luminous: sky_light sentinel -1.0 tells the shader to use
+                            // sun_light=1.0 unconditionally, bypassing shadows and time-of-day.
                             for face in [Face::Right, Face::Left, Face::Up, Face::Down, Face::Front, Face::Back] {
                                 if !Self::is_face_visible(blocks, x, y, z, face, edges) { continue; }
                                 let corners: [f32; 4] = match face {
@@ -959,7 +960,7 @@ impl Chunk {
                                     Face::Right | Face::Left | Face::Front | Face::Back  => [0.0, 1.0, 1.0, 0.0],
                                     Face::Down                                            => [0.0; 4],
                                 };
-                                vertices.extend(Self::water_face_vertices(x as f32, y as f32, z as f32, face, block, corners, 1.0));
+                                vertices.extend(Self::water_face_vertices(x as f32, y as f32, z as f32, face, block, corners, -1.0));
                             }
                         }
                         _ => {} // solid blocks handled by greedy passes below
