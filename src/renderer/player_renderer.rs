@@ -335,7 +335,7 @@ impl PlayerRenderer {
                 mode: PlayerDrawMode, swing_angle: f32,
                 fog_start: f32, fog_end: f32, screen_w: f32, screen_h: f32, sky_tex: u32,
                 fog_override: f32, fog_color_override: glam::Vec3) {
-        let rot_angle = -(yaw.to_radians() + FRAC_PI_2);
+        let rot_angle = FRAC_PI_2 - yaw.to_radians();
         let model = glam::Mat4::from_translation(glam::Vec3::from(position))
             * glam::Mat4::from_rotation_y(rot_angle);
         let mvp = *projection * *view * model;

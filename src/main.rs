@@ -515,12 +515,12 @@ fn main() {
                             GameState::MultiplayerMenu => {
                                 match mp_menu.handle_click(last_mouse_x, last_mouse_y, win_w, win_h) {
                                     Some("host") => {
-                                        match GameServer::new(SERVER_PORT) {
+                                        let seed = std::time::SystemTime::now()
+                                            .duration_since(std::time::UNIX_EPOCH)
+                                            .unwrap_or_default().subsec_nanos();
+                                        match GameServer::new(SERVER_PORT, seed) {
                                             Ok(server) => {
                                                 net_server = Some(server);
-                                                let seed = std::time::SystemTime::now()
-                                                    .duration_since(std::time::UNIX_EPOCH)
-                                                    .unwrap_or_default().subsec_nanos();
                                                 world = World::new(8, seed);
                                                 world.update([8.5, 0.0, 8.5]);
                                                 chickens.clear();
@@ -1092,6 +1092,15 @@ fn main() {
                 }
 
                 GameState::LoadingGame => {
+                    // Receive WorldInfo from the server so we generate the same world.
+                    if let Some(ref mut client) = net_client {
+                        for msg in client.update(delta_time) {
+                            if let crate::net::messages::ServerMessage::WorldInfo { seed } = msg {
+                                world = World::new(8, seed);
+                            }
+                        }
+                    }
+
                     // Pump the async pipeline as fast as possible each frame.
                     for _ in 0..8 { world.update_loading([8.5, 0.0, 8.5]); }
 

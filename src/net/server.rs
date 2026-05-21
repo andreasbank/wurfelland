@@ -18,10 +18,11 @@ pub struct GameServer {
     remote_players: HashMap<u64, RemotePlayer>,
     pending_block_breaks:  Vec<[i32; 3]>,
     pending_block_places:  Vec<[i32; 4]>, // [x, y, z, block_id]
+    seed: u32,
 }
 
 impl GameServer {
-    pub fn new(port: u16) -> anyhow::Result<Self> {
+    pub fn new(port: u16, seed: u32) -> anyhow::Result<Self> {
         let current_time = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap_or(Duration::ZERO);
@@ -47,6 +48,7 @@ impl GameServer {
             remote_players: HashMap::new(),
             pending_block_breaks: Vec::new(),
             pending_block_places: Vec::new(),
+            seed,
         })
     }
 
@@ -64,6 +66,11 @@ impl GameServer {
                         position: [0.0, 0.0, 0.0],
                         yaw: 0.0,
                     });
+                    // Send world seed to the new client so they generate the same world
+                    let info = ServerMessage::WorldInfo { seed: self.seed };
+                    if let Ok(bytes) = bincode::serialize(&info) {
+                        self.server.send_message(client_id, DefaultChannel::ReliableOrdered, bytes);
+                    }
                     // Broadcast PeerJoined to all OTHER clients
                     let msg = ServerMessage::PeerJoined { id: client_id };
                     if let Ok(bytes) = bincode::serialize(&msg) {

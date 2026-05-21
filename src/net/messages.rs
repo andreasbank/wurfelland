@@ -12,6 +12,7 @@ pub enum ClientMessage {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum ServerMessage {
+    WorldInfo   { seed: u32 },
     PeerJoined  { id: u64 },
     PeerLeft    { id: u64 },
     PeerState   { id: u64, x: f32, y: f32, z: f32, yaw: f32, pitch: f32 },
