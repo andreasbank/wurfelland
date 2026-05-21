@@ -1891,15 +1891,16 @@ fn main() {
                         shadow_pass.depth_texture_array(),
                         shadow_pass.light_space_matrices(),
                         shadow_pass.texel_world_sizes());
-                    let remote_peers: Vec<([f32; 3], f32)> = if let Some(ref server) = net_server {
+                    let remote_peers: Vec<([f32; 3], f32, u8)> = if let Some(ref server) = net_server {
                         server.remote_players()
                     } else if let Some(ref client) = net_client {
                         client.remote_players()
                     } else { vec![] };
-                    for (pos, yaw) in remote_peers {
+                    for (pos, yaw, health) in remote_peers {
                         player_renderer.draw(pos, yaw, &view, &projection, PlayerDrawMode::Full, 0.0,
                             fog_start, fog_end, fb_w as f32, fb_h as f32, sky_tex,
                             fog_override, fog_override_color);
+                        player_renderer.draw_health_bar(pos, health as f32 / 100.0, &view, &projection);
                     }
                 }
 

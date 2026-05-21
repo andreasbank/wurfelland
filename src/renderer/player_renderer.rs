@@ -158,6 +158,11 @@ pub struct PlayerRenderer {
     fpv_arm_vao: u32,
     fpv_arm_vbo: u32,
     fpv_arm_verts: i32,
+    bar_vao: u32,
+    bar_vbo: u32,
+    bar_shader: u32,
+    bar_mvp_loc: i32,
+    bar_color_loc: i32,
 }
 
 impl PlayerRenderer {
@@ -267,7 +272,38 @@ impl PlayerRenderer {
             gl::BindBuffer(gl::ARRAY_BUFFER, 0);
             gl::BindVertexArray(0);
 
-            PlayerRenderer { vao, vbo, shader, mvp_loc, tex_id, fog_start_loc, fog_end_loc, fog_override_loc, fog_color_override_loc, screen_size_loc, sky_sampler_loc, fpv_arm_vao, fpv_arm_vbo, fpv_arm_verts }
+            // Unit quad [0,0,0]→[1,1,0] for health bar drawing
+            let bar_verts: [f32; 18] = [
+                0.0, 0.0, 0.0,  1.0, 0.0, 0.0,  1.0, 1.0, 0.0,
+                0.0, 0.0, 0.0,  1.0, 1.0, 0.0,  0.0, 1.0, 0.0,
+            ];
+            let (mut bar_vao, mut bar_vbo) = (0u32, 0u32);
+            gl::GenVertexArrays(1, &mut bar_vao);
+            gl::GenBuffers(1, &mut bar_vbo);
+            gl::BindVertexArray(bar_vao);
+            gl::BindBuffer(gl::ARRAY_BUFFER, bar_vbo);
+            gl::BufferData(gl::ARRAY_BUFFER,
+                (bar_verts.len() * mem::size_of::<f32>()) as isize,
+                bar_verts.as_ptr() as *const c_void, gl::STATIC_DRAW);
+            gl::VertexAttribPointer(0, 3, gl::FLOAT, gl::FALSE,
+                (3 * mem::size_of::<f32>()) as i32, std::ptr::null());
+            gl::EnableVertexAttribArray(0);
+            gl::BindBuffer(gl::ARRAY_BUFFER, 0);
+            gl::BindVertexArray(0);
+
+            let bar_vert_src = compile_shader(gl::VERTEX_SHADER, r#"#version 330 core
+                layout(location = 0) in vec3 aPos;
+                uniform mat4 mvp;
+                void main() { gl_Position = mvp * vec4(aPos, 1.0); }"#).unwrap();
+            let bar_frag_src = compile_shader(gl::FRAGMENT_SHADER, r#"#version 330 core
+                uniform vec4 u_color;
+                out vec4 FragColor;
+                void main() { FragColor = u_color; }"#).unwrap();
+            let bar_shader   = link_program(bar_vert_src, bar_frag_src).unwrap();
+            let bar_mvp_loc   = gl::GetUniformLocation(bar_shader, c"mvp".as_ptr());
+            let bar_color_loc = gl::GetUniformLocation(bar_shader, c"u_color".as_ptr());
+
+            PlayerRenderer { vao, vbo, shader, mvp_loc, tex_id, fog_start_loc, fog_end_loc, fog_override_loc, fog_color_override_loc, screen_size_loc, sky_sampler_loc, fpv_arm_vao, fpv_arm_vbo, fpv_arm_verts, bar_vao, bar_vbo, bar_shader, bar_mvp_loc, bar_color_loc }
         }
     }
 
@@ -395,6 +431,66 @@ impl PlayerRenderer {
             gl::Enable(gl::CULL_FACE);
         }
     }
+
+    /// Draw a billboard health bar above a remote player's head.
+    /// `health_frac`: 0.0 = dead, 1.0 = full health.
+    pub fn draw_health_bar(&self, position: [f32; 3], health_frac: f32,
+                           view: &glam::Mat4, projection: &glam::Mat4) {
+        const BAR_W: f32 = 0.5;
+        const BAR_H: f32 = 0.05;
+        const BAR_Y: f32 = 2.05; // above head top (head top = 1.85)
+
+        // Extract camera right/up/forward from the view matrix rows
+        let cam_right = glam::Vec3::new(view.x_axis.x, view.y_axis.x, view.z_axis.x);
+        let cam_up    = glam::Vec3::new(view.x_axis.y, view.y_axis.y, view.z_axis.y);
+        let cam_fwd   = cam_right.cross(cam_up);
+
+        // Bottom-left corner of the full bar, centered horizontally
+        let origin = glam::Vec3::new(position[0], position[1] + BAR_Y, position[2])
+            - cam_right * (BAR_W * 0.5)
+            - cam_up    * (BAR_H * 0.5);
+
+        unsafe {
+            gl::Disable(gl::CULL_FACE);
+            gl::UseProgram(self.bar_shader);
+            gl::BindVertexArray(self.bar_vao);
+
+            // Black background (full width)
+            let bg = glam::Mat4::from_cols(
+                (cam_right * BAR_W).extend(0.0),
+                (cam_up    * BAR_H).extend(0.0),
+                cam_fwd.extend(0.0),
+                origin.extend(1.0),
+            );
+            gl::UniformMatrix4fv(self.bar_mvp_loc, 1, gl::FALSE,
+                (*projection * *view * bg).to_cols_array().as_ptr());
+            gl::Uniform4f(self.bar_color_loc, 0.0, 0.0, 0.0, 1.0);
+            gl::DrawArrays(gl::TRIANGLES, 0, 6);
+
+            // Green foreground (scaled by health fraction)
+            // PolygonOffset pulls the green quad slightly toward the camera so it
+            // wins the depth test against the coplanar black background.
+            let fw = (BAR_W * health_frac.clamp(0.0, 1.0)).max(0.0);
+            if fw > 0.0 {
+                gl::Enable(gl::POLYGON_OFFSET_FILL);
+                gl::PolygonOffset(-1.0, -1.0);
+                let fg = glam::Mat4::from_cols(
+                    (cam_right * fw).extend(0.0),
+                    (cam_up    * BAR_H).extend(0.0),
+                    cam_fwd.extend(0.0),
+                    origin.extend(1.0),
+                );
+                gl::UniformMatrix4fv(self.bar_mvp_loc, 1, gl::FALSE,
+                    (*projection * *view * fg).to_cols_array().as_ptr());
+                gl::Uniform4f(self.bar_color_loc, 0.18, 0.72, 0.18, 1.0);
+                gl::DrawArrays(gl::TRIANGLES, 0, 6);
+                gl::Disable(gl::POLYGON_OFFSET_FILL);
+            }
+
+            gl::BindVertexArray(0);
+            gl::Enable(gl::CULL_FACE);
+        }
+    }
 }
 
 impl Drop for PlayerRenderer {
@@ -404,7 +500,10 @@ impl Drop for PlayerRenderer {
             gl::DeleteBuffers(1, &self.vbo);
             gl::DeleteVertexArrays(1, &self.fpv_arm_vao);
             gl::DeleteBuffers(1, &self.fpv_arm_vbo);
+            gl::DeleteVertexArrays(1, &self.bar_vao);
+            gl::DeleteBuffers(1, &self.bar_vbo);
             gl::DeleteProgram(self.shader);
+            gl::DeleteProgram(self.bar_shader);
             gl::DeleteTextures(1, &self.tex_id);
         }
     }

@@ -225,10 +225,10 @@ impl GameServer {
         }
     }
 
-    pub fn remote_players(&self) -> Vec<([f32; 3], f32)> {
+    pub fn remote_players(&self) -> Vec<([f32; 3], f32, u8)> {
         self.remote_players
             .values()
-            .map(|p| (p.position, p.yaw))
+            .map(|p| (p.position, p.yaw, p.health))
             .collect()
     }
 }
