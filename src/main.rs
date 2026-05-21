@@ -210,7 +210,7 @@ fn main() {
         let mut menu_renderer   = MenuRenderer::new();
         let main_menu           = MainMenuRenderer::new();
         let outline_renderer    = BlockOutlineRenderer::new();
-        let player_renderer     = PlayerRenderer::new();
+        let player_renderer     = PlayerRenderer::new("assets/skins/default.png");
         let crack_renderer      = CrackRenderer::new();
         let item_renderer       = ItemRenderer::new();
         let entity_renderer     = EntityRenderer::new();

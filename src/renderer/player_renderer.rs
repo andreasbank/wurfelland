@@ -1,84 +1,129 @@
 use std::mem;
 use std::os::raw::c_void;
 use std::f32::consts::FRAC_PI_2;
-use crate::renderer::utils::{compile_shader, link_program};
+use crate::renderer::utils::{compile_shader, link_program, load_png_texture};
 
 // Vertex format: [x, y, z, shade, u, v] — 6 floats
 const STRIDE: usize = 6;
+
+// Skin atlas is 64×32 pixels.
+const TW: f32 = 64.0;
+const TH: f32 = 32.0;
 
 fn push_vertex(verts: &mut Vec<f32>, x: f32, y: f32, z: f32, shade: f32, u: f32, v: f32) {
     verts.extend_from_slice(&[x, y, z, shade, u, v]);
 }
 
-// p0..p3 are the four corners in CCW winding order when viewed from outside
-fn add_face(verts: &mut Vec<f32>, p: [[f32; 3]; 4], shade: f32) {
-    let uv = [[0.0f32, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]];
-    push_vertex(verts, p[0][0], p[0][1], p[0][2], shade, uv[0][0], uv[0][1]);
-    push_vertex(verts, p[1][0], p[1][1], p[1][2], shade, uv[1][0], uv[1][1]);
-    push_vertex(verts, p[2][0], p[2][1], p[2][2], shade, uv[2][0], uv[2][1]);
-    push_vertex(verts, p[0][0], p[0][1], p[0][2], shade, uv[0][0], uv[0][1]);
-    push_vertex(verts, p[2][0], p[2][1], p[2][2], shade, uv[2][0], uv[2][1]);
-    push_vertex(verts, p[3][0], p[3][1], p[3][2], shade, uv[3][0], uv[3][1]);
+// Pixel rect (image space, y=0 at top) → [u_min, v_min, u_max, v_max].
+// v_min maps to the top of the face, v_max to the bottom.
+fn px(x0: u32, y0: u32, x1: u32, y1: u32) -> [f32; 4] {
+    [x0 as f32 / TW, y0 as f32 / TH, x1 as f32 / TW, y1 as f32 / TH]
 }
 
-fn add_box(verts: &mut Vec<f32>, x0: f32, y0: f32, z0: f32, x1: f32, y1: f32, z1: f32) {
-    // Top (+Y)
-    add_face(verts, [[x0,y1,z0],[x1,y1,z0],[x1,y1,z1],[x0,y1,z1]], 1.0);
-    // Bottom (-Y)
-    add_face(verts, [[x0,y0,z1],[x1,y0,z1],[x1,y0,z0],[x0,y0,z0]], 0.5);
-    // Front (+Z)
-    add_face(verts, [[x0,y0,z1],[x1,y0,z1],[x1,y1,z1],[x0,y1,z1]], 0.8);
-    // Back (-Z)
-    add_face(verts, [[x1,y0,z0],[x0,y0,z0],[x0,y1,z0],[x1,y1,z0]], 0.8);
-    // Left (-X)
-    add_face(verts, [[x0,y0,z0],[x0,y0,z1],[x0,y1,z1],[x0,y1,z0]], 0.65);
-    // Right (+X)
-    add_face(verts, [[x1,y0,z1],[x1,y0,z0],[x1,y1,z0],[x1,y1,z1]], 0.65);
+// p0..p3: CCW winding viewed from outside. p[0]=BL, p[1]=BR, p[2]=TR, p[3]=TL.
+// uv = [u_min, v_min, u_max, v_max] — v_min = top of skin region.
+fn add_face(verts: &mut Vec<f32>, p: [[f32; 3]; 4], shade: f32, uv: [f32; 4]) {
+    let [u0, v0, u1, v1] = uv;
+    push_vertex(verts, p[0][0], p[0][1], p[0][2], shade, u0, v1);
+    push_vertex(verts, p[1][0], p[1][1], p[1][2], shade, u1, v1);
+    push_vertex(verts, p[2][0], p[2][1], p[2][2], shade, u1, v0);
+    push_vertex(verts, p[0][0], p[0][1], p[0][2], shade, u0, v1);
+    push_vertex(verts, p[2][0], p[2][1], p[2][2], shade, u1, v0);
+    push_vertex(verts, p[3][0], p[3][1], p[3][2], shade, u0, v0);
 }
+
+// Emits 6 textured faces for an axis-aligned box.
+// UV face order: top(+Y), bottom(-Y), front(+Z), back(-Z), left(-X), right(+X).
+fn add_box(verts: &mut Vec<f32>,
+           x0: f32, y0: f32, z0: f32, x1: f32, y1: f32, z1: f32,
+           top: [f32;4], bot: [f32;4], front: [f32;4], back: [f32;4],
+           left: [f32;4], right: [f32;4]) {
+    add_face(verts, [[x0,y1,z0],[x1,y1,z0],[x1,y1,z1],[x0,y1,z1]], 1.00, top);
+    add_face(verts, [[x0,y0,z1],[x1,y0,z1],[x1,y0,z0],[x0,y0,z0]], 0.50, bot);
+    add_face(verts, [[x0,y0,z1],[x1,y0,z1],[x1,y1,z1],[x0,y1,z1]], 0.80, front);
+    add_face(verts, [[x1,y0,z0],[x0,y0,z0],[x0,y1,z0],[x1,y1,z0]], 0.80, back);
+    add_face(verts, [[x0,y0,z0],[x0,y0,z1],[x0,y1,z1],[x0,y1,z0]], 0.65, left);
+    add_face(verts, [[x1,y0,z1],[x1,y0,z0],[x1,y1,z0],[x1,y1,z1]], 0.65, right);
+}
+
+// Skin atlas layout (64×32 PNG, y=0 at top):
+//
+//  HEAD — 8 px per face
+//   top    (8,0)→(16,8)     bottom (16,0)→(24,8)
+//   right  (0,8)→(8,16)     front  (8,8)→(16,16)
+//   left   (16,8)→(24,16)   back   (24,8)→(32,16)
+//
+//  TORSO — 4W × 7H × 2D px
+//   top    (34,0)→(38,2)    bottom (38,0)→(42,2)
+//   left   (32,2)→(34,9)    front  (34,2)→(38,9)
+//   right  (38,2)→(40,9)    back   (40,2)→(44,9)
+//
+//  LEFT ARM — 2W × 7H × 2D px (at x=44)
+//   top    (46,0)→(48,2)    bottom (48,0)→(50,2)
+//   left   (44,2)→(46,9)    front  (46,2)→(48,9)
+//   right  (48,2)→(50,9)    back   (50,2)→(52,9)
+//
+//  RIGHT ARM — 2W × 7H × 2D px (at x=52)
+//   top    (54,0)→(56,2)    bottom (56,0)→(58,2)
+//   left   (52,2)→(54,9)    front  (54,2)→(56,9)
+//   right  (56,2)→(58,9)    back   (58,2)→(60,9)
+//
+//  LEFT LEG — 4W × 8H × 2D px (at x=0, y=16)
+//   top    (2,16)→(6,18)    bottom (6,16)→(10,18)
+//   left   (0,18)→(2,26)    front  (2,18)→(6,26)
+//   right  (6,18)→(8,26)    back   (8,18)→(12,26)
+//
+//  RIGHT LEG — 4W × 8H × 2D px (at x=12, y=16)
+//   top    (14,16)→(18,18)  bottom (18,16)→(22,18)
+//   left   (12,18)→(14,26)  front  (14,18)→(18,26)
+//   right  (18,18)→(20,26)  back   (20,18)→(24,26)
 
 fn build_player_mesh() -> Vec<f32> {
     let mut v = Vec::new();
-    // Head  (0.4 × 0.4 × 0.4, centered, top at 1.85)
-    add_box(&mut v, -0.20,  1.45, -0.20,  0.20,  1.85,  0.20);
-    // Torso (0.4 wide, 0.7 tall, 0.2 deep)
-    add_box(&mut v, -0.20,  0.75, -0.10,  0.20,  1.45,  0.10);
-    // Left arm
-    add_box(&mut v, -0.35,  0.75, -0.10, -0.20,  1.45,  0.10);
-    // Right arm
-    add_box(&mut v,  0.20,  0.75, -0.10,  0.35,  1.45,  0.10);
-    // Left leg
-    add_box(&mut v, -0.15,  0.00, -0.10,  0.00,  0.75,  0.10);
-    // Right leg
-    add_box(&mut v,  0.00,  0.00, -0.10,  0.15,  0.75,  0.10);
-    v
-}
 
-// 16×16 gray-tiled texture: light gray fill, dark gray 1-px border
-fn create_player_texture() -> u32 {
-    const SZ: usize = 16;
-    let mut px = vec![0u8; SZ * SZ * 4];
-    for y in 0..SZ {
-        for x in 0..SZ {
-            let border = x == 0 || y == 0 || x == SZ - 1 || y == SZ - 1;
-            let val: u8 = if border { 110 } else { 205 };
-            let i = (y * SZ + x) * 4;
-            px[i] = val; px[i+1] = val; px[i+2] = val; px[i+3] = 255;
-        }
-    }
-    unsafe {
-        let mut id = 0u32;
-        gl::GenTextures(1, &mut id);
-        gl::BindTexture(gl::TEXTURE_2D, id);
-        gl::TexImage2D(gl::TEXTURE_2D, 0, gl::RGBA as i32,
-            SZ as i32, SZ as i32, 0,
-            gl::RGBA, gl::UNSIGNED_BYTE, px.as_ptr() as *const _);
-        gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::NEAREST as i32);
-        gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::NEAREST as i32);
-        gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_S, gl::REPEAT as i32);
-        gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_T, gl::REPEAT as i32);
-        gl::BindTexture(gl::TEXTURE_2D, 0);
-        id
-    }
+    // Head
+    add_box(&mut v, -0.20, 1.45, -0.20,  0.20, 1.85,  0.20,
+        px( 8, 0,16, 8), px(16, 0,24, 8),  // top, bottom
+        px( 8, 8,16,16), px(24, 8,32,16),  // front, back
+        px(16, 8,24,16), px( 0, 8, 8,16),  // left(-X), right(+X)
+    );
+
+    // Torso
+    add_box(&mut v, -0.20, 0.75, -0.10,  0.20, 1.45,  0.10,
+        px(34, 0,38, 2), px(38, 0,42, 2),  // top, bottom
+        px(34, 2,38, 9), px(40, 2,44, 9),  // front, back
+        px(32, 2,34, 9), px(38, 2,40, 9),  // left(-X), right(+X)
+    );
+
+    // Left arm  (-X side)
+    add_box(&mut v, -0.35, 0.75, -0.10, -0.20, 1.45,  0.10,
+        px(46, 0,48, 2), px(48, 0,50, 2),  // top, bottom
+        px(46, 2,48, 9), px(50, 2,52, 9),  // front, back
+        px(44, 2,46, 9), px(48, 2,50, 9),  // left(-X), right(+X)
+    );
+
+    // Right arm (+X side)
+    add_box(&mut v,  0.20, 0.75, -0.10,  0.35, 1.45,  0.10,
+        px(54, 0,56, 2), px(56, 0,58, 2),  // top, bottom
+        px(54, 2,56, 9), px(58, 2,60, 9),  // front, back
+        px(52, 2,54, 9), px(56, 2,58, 9),  // left(-X), right(+X)
+    );
+
+    // Left leg
+    add_box(&mut v, -0.15, 0.00, -0.10,  0.00, 0.75,  0.10,
+        px( 2,16, 6,18), px( 6,16,10,18),  // top, bottom
+        px( 2,18, 6,26), px( 8,18,12,26),  // front, back
+        px( 0,18, 2,26), px( 6,18, 8,26),  // left(-X), right(+X)
+    );
+
+    // Right leg
+    add_box(&mut v,  0.00, 0.00, -0.10,  0.15, 0.75,  0.10,
+        px(14,16,18,18), px(18,16,22,18),  // top, bottom
+        px(14,18,18,26), px(20,18,24,26),  // front, back
+        px(12,18,14,26), px(18,18,20,26),  // left(-X), right(+X)
+    );
+
+    v
 }
 
 pub enum PlayerDrawMode {
@@ -116,7 +161,7 @@ pub struct PlayerRenderer {
 }
 
 impl PlayerRenderer {
-    pub fn new() -> Self {
+    pub fn new(skin_path: &str) -> Self {
         let mesh = build_player_mesh();
 
         unsafe {
@@ -193,11 +238,15 @@ impl PlayerRenderer {
             let fog_color_override_loc = gl::GetUniformLocation(shader, c"u_fog_color_override".as_ptr());
             let screen_size_loc        = gl::GetUniformLocation(shader, c"u_screen_size".as_ptr());
             let sky_sampler_loc        = gl::GetUniformLocation(shader, c"u_sky_sampler".as_ptr());
-            let tex_id = create_player_texture();
+            let tex_id = load_png_texture(skin_path);
 
-            // FPV forearm: wrist at y=0, elbow at y=0.25
+            // FPV forearm — uses the right-arm skin region
             let mut arm_v: Vec<f32> = Vec::new();
-            add_box(&mut arm_v, -0.045, 0.0, -0.055, 0.045, 0.25, 0.055);
+            add_box(&mut arm_v, -0.045, 0.0, -0.055, 0.045, 0.25, 0.055,
+                px(54, 0,56, 2), px(56, 0,58, 2),  // top, bottom
+                px(54, 2,56, 9), px(58, 2,60, 9),  // front, back
+                px(52, 2,54, 9), px(56, 2,58, 9),  // left, right
+            );
             let fpv_arm_verts = (arm_v.len() / STRIDE) as i32;
             let (mut fpv_arm_vao, mut fpv_arm_vbo) = (0u32, 0u32);
             gl::GenVertexArrays(1, &mut fpv_arm_vao);
