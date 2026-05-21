@@ -52,6 +52,10 @@ impl GameClient {
         self.client.is_connected()
     }
 
+    pub fn is_disconnected(&self) -> bool {
+        self.client.is_disconnected()
+    }
+
     pub fn update(&mut self, dt: f32) -> Vec<ServerMessage> {
         let duration = Duration::from_secs_f32(dt);
 

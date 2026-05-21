@@ -321,6 +321,7 @@ fn main() {
         let mut swing_time: f32 = 0.0;
         let mut entity_hit_cooldown: f32 = 0.0;
         let mut item_pickup_cooldown: f32 = 0.0;
+        let mut mp_world_ready: bool = false; // set when WorldInfo received from server
 
         // Show OS cursor for the main menu
         window.set_cursor_mode(glfw::CursorMode::Normal);
@@ -514,7 +515,8 @@ fn main() {
                                 }
                             }
                             GameState::MultiplayerMenu => {
-                                match mp_menu.handle_click(last_mouse_x, last_mouse_y, win_w, win_h) {
+                                let connecting = net_client.is_some();
+                                match mp_menu.handle_click(last_mouse_x, last_mouse_y, win_w, win_h, connecting) {
                                     Some("host") => {
                                         let seed = std::time::SystemTime::now()
                                             .duration_since(std::time::UNIX_EPOCH)
@@ -545,22 +547,10 @@ fn main() {
                                         match addr_str.parse() {
                                             Ok(addr) => match GameClient::connect(addr) {
                                                 Ok(client) => {
+                                                    // Stay on MultiplayerMenu showing "CONNECTING..."
+                                                    // until the handshake completes.
                                                     net_client = Some(client);
-                                                    mp_menu.join_mode = false;
-                                                    let seed = std::time::SystemTime::now()
-                                                        .duration_since(std::time::UNIX_EPOCH)
-                                                        .unwrap_or_default().subsec_nanos();
-                                                    world = World::new(8, seed);
-                                                    world.update([8.5, 0.0, 8.5]);
-                                                    chickens.clear();
-                                                    penguins.clear();
-                                                    item_entities.clear();
-                                                    dormant.clear();
-                                                    spawned_columns.clear();
-                                                    menu_reveal_timer = 0.0;
-                                                    sun_angle  = std::f32::consts::FRAC_PI_4;
-                                                    total_time = 0.0;
-                                                    game_state = GameState::LoadingGame;
+                                                    mp_world_ready = false;
                                                 }
                                                 Err(e) => eprintln!("Failed to connect: {}", e),
                                             },
@@ -568,7 +558,9 @@ fn main() {
                                         }
                                     }
                                     Some("back") => {
-                                        if mp_menu.join_mode {
+                                        if net_client.is_some() {
+                                            net_client = None; // cancel pending connection
+                                        } else if mp_menu.join_mode {
                                             mp_menu.join_mode = false;
                                         } else {
                                             game_state = GameState::MainMenu;
@@ -851,7 +843,9 @@ fn main() {
                         if game_state == GameState::MultiplayerMenu {
                             if action == Action::Press {
                                 if key == Key::Escape {
-                                    if mp_menu.join_mode {
+                                    if net_client.is_some() {
+                                        net_client = None; // cancel pending connection
+                                    } else if mp_menu.join_mode {
                                         mp_menu.join_mode = false;
                                     } else {
                                         game_state = GameState::MainMenu;
@@ -1090,6 +1084,31 @@ fn main() {
                         for _ in 0..8 { world.update_loading([8.0, 80.0, 8.0]); }
                     }
                     mp_menu.update_ip(&mp_ip);
+
+                    // Pump a pending client connection.
+                    if let Some(ref mut client) = net_client {
+                        client.update(delta_time);
+                        if client.is_connected() {
+                            // Handshake complete — set up world and enter loading.
+                            mp_menu.join_mode = false;
+                            mp_world_ready = false;
+                            world = World::new(8, 0); // placeholder; real seed arrives as WorldInfo
+                            world.update([8.5, 0.0, 8.5]);
+                            chickens.clear();
+                            pigs.clear();
+                            penguins.clear();
+                            item_entities.clear();
+                            dormant.clear();
+                            spawned_columns.clear();
+                            menu_reveal_timer = 0.0;
+                            sun_angle  = std::f32::consts::FRAC_PI_4;
+                            total_time = 0.0;
+                            game_state = GameState::LoadingGame;
+                        } else if client.is_disconnected() {
+                            eprintln!("Connection failed — no server at that address.");
+                            net_client = None;
+                        }
+                    }
                 }
 
                 GameState::LoadingGame => {
@@ -1098,15 +1117,28 @@ fn main() {
                         for msg in client.update(delta_time) {
                             if let crate::net::messages::ServerMessage::WorldInfo { seed } = msg {
                                 world = World::new(8, seed);
+                                mp_world_ready = true;
                             }
+                        }
+                        if client.is_disconnected() {
+                            eprintln!("Connection failed — no server at that address.");
+                            net_client = None;
+                            mp_world_ready = false;
+                            game_state = GameState::MultiplayerMenu;
                         }
                     }
 
                     // Pump the async pipeline as fast as possible each frame.
-                    for _ in 0..8 { world.update_loading([8.5, 0.0, 8.5]); }
+                    // Clients wait for the server seed before generating any terrain.
+                    if net_client.is_none() || mp_world_ready {
+                        for _ in 0..8 { world.update_loading([8.5, 0.0, 8.5]); }
+                    }
 
                     // Wait until the 3×3 chunk area around spawn is fully meshed.
-                    let mut spawn_ready = true;
+                    // For clients, also wait until the server has confirmed the world seed.
+                    // Skip if the disconnect handler above already navigated away.
+                    if game_state != GameState::LoadingGame { continue; }
+                    let mut spawn_ready = net_client.is_none() || mp_world_ready;
                     for dx in -1..=1i32 { for dz in -1..=1i32 {
                         if !world.is_chunk_meshed(dx, dz) { spawn_ready = false; }
                     }}
@@ -2067,7 +2099,7 @@ fn main() {
                         let progress = (world.meshed_surface_chunk_count() as f32 / MENU_CHUNK_TARGET as f32).min(1.0);
                         main_menu.draw_loading_screen(progress, win_w, win_h);
                     }
-                    mp_menu.draw(win_w, win_h);
+                    mp_menu.draw(win_w, win_h, net_client.is_some());
                 }
                 GameState::CreditsMenu => {
                     credits_menu.draw(win_w, win_h, fb_w, fb_h);

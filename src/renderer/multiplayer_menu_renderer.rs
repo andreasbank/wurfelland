@@ -6,8 +6,10 @@ pub struct MultiplayerMenuRenderer {
     ip_label: TextTexture,
     ip_texture: Option<TextTexture>,
     ip_cached: String,
-    buttons_main: Vec<TextButton>,   // HOST, JOIN, BACK
-    buttons_join: Vec<TextButton>,   // CONNECT, BACK
+    buttons_main: Vec<TextButton>,        // HOST, JOIN, BACK
+    buttons_join: Vec<TextButton>,        // CONNECT, BACK
+    buttons_connecting: Vec<TextButton>,  // CANCEL
+    connecting_label: TextTexture,
     pub join_mode: bool,
 }
 
@@ -28,6 +30,12 @@ impl MultiplayerMenuRenderer {
             TextButton::new("back",    "BACK",    (0.35, 0.72, 0.65, 0.80)),
         ];
 
+        let buttons_connecting = vec![
+            TextButton::new("back", "CANCEL", (0.35, 0.60, 0.65, 0.68)),
+        ];
+
+        let connecting_label = create_text_texture_scaled("CONNECTING...", 2);
+
         MultiplayerMenuRenderer {
             renderer,
             title,
@@ -36,6 +44,8 @@ impl MultiplayerMenuRenderer {
             ip_cached: String::new(),
             buttons_main,
             buttons_join,
+            buttons_connecting,
+            connecting_label,
             join_mode: false,
         }
     }
@@ -52,7 +62,7 @@ impl MultiplayerMenuRenderer {
         }
     }
 
-    pub fn draw(&self, win_w: f32, win_h: f32) {
+    pub fn draw(&self, win_w: f32, win_h: f32, connecting: bool) {
         unsafe {
             gl::Disable(gl::DEPTH_TEST);
             gl::Enable(gl::BLEND);
@@ -71,7 +81,18 @@ impl MultiplayerMenuRenderer {
             0.5 + tw * 0.5, 0.35 + th * 0.5,
         );
 
-        if self.join_mode {
+        if connecting {
+            let cw = self.connecting_label.pixel_width  as f32 / win_w;
+            let ch = self.connecting_label.pixel_height as f32 / win_h;
+            self.renderer.draw_text(
+                &self.connecting_label,
+                0.5 - cw * 0.5, 0.50 - ch * 0.5,
+                0.5 + cw * 0.5, 0.50 + ch * 0.5,
+            );
+            for btn in &self.buttons_connecting {
+                btn.draw(&self.renderer, win_w, win_h);
+            }
+        } else if self.join_mode {
             // "IP:" label
             let lw = self.ip_label.pixel_width  as f32 / win_w;
             let lh = self.ip_label.pixel_height as f32 / win_h;
@@ -110,12 +131,18 @@ impl MultiplayerMenuRenderer {
         }
     }
 
-    /// Returns "host", "join", "connect", or "back" depending on the active
-    /// mode and which button (if any) was hit by the click.
-    pub fn handle_click(&self, mx: f32, my: f32, win_w: f32, win_h: f32) -> Option<&str> {
+    /// Returns "host", "join", "connect", "back", or "cancel" depending on the
+    /// active mode and which button (if any) was hit by the click.
+    pub fn handle_click(&self, mx: f32, my: f32, win_w: f32, win_h: f32, connecting: bool) -> Option<&str> {
         let nx = mx / win_w;
         let ny = my / win_h;
-        let buttons = if self.join_mode { &self.buttons_join } else { &self.buttons_main };
+        let buttons = if connecting {
+            &self.buttons_connecting
+        } else if self.join_mode {
+            &self.buttons_join
+        } else {
+            &self.buttons_main
+        };
         buttons.iter()
             .find(|b| b.is_hit(nx, ny))
             .map(|b| b.id.as_str())
