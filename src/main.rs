@@ -320,6 +320,7 @@ fn main() {
         let mut dig_sound_timer: f32 = 0.0;
         let mut swing_time: f32 = 0.0;
         let mut entity_hit_cooldown: f32 = 0.0;
+        let mut item_pickup_cooldown: f32 = 0.0;
 
         // Show OS cursor for the main menu
         window.set_cursor_mode(glfw::CursorMode::Normal);
@@ -1323,9 +1324,15 @@ fn main() {
                                     let len = (cam_dir[0]*cam_dir[0] + cam_dir[2]*cam_dir[2])
                                         .sqrt().max(0.001);
                                     let push = [cam_dir[0]/len, 0.0, cam_dir[2]/len];
-                                    if let Some(ci) = hit_chicken     { chickens[ci].take_hit(push); }
-                                    if let Some(pi) = hit_pig_idx     { pigs[pi].take_hit(push); }
-                                    if let Some(pi) = hit_penguin_idx { penguins[pi].take_hit(push); }
+                                    if net_client.is_none() {
+                                        if let Some(ci) = hit_chicken     { chickens[ci].take_hit(push); }
+                                        if let Some(pi) = hit_pig_idx     { pigs[pi].take_hit(push); }
+                                        if let Some(pi) = hit_penguin_idx { penguins[pi].take_hit(push); }
+                                    } else if let Some(ref mut client) = net_client {
+                                        if let Some(ci) = hit_chicken     { client.send_attack_entity(0, ci as u32, push[0], push[2]); }
+                                        if let Some(pi) = hit_pig_idx     { client.send_attack_entity(1, pi as u32, push[0], push[2]); }
+                                        if let Some(pi) = hit_penguin_idx { client.send_attack_entity(2, pi as u32, push[0], push[2]); }
+                                    }
                                     entity_hit_cooldown = 0.4;
                                 }
                                 dig_target   = None;
@@ -1400,6 +1407,8 @@ fn main() {
                         for entity in &mut item_entities {
                             entity.update(delta_time, |x, y, z| world.get_block(x, y, z));
                         }
+                        // Clients receive entity state from the server; skip local simulation.
+                        if net_client.is_none() {
                         // Compute simulation radius² for this frame.
                         let sim_r = SIM_RADII[entity_sim_radius_idx];
                         let sim_r2 = if sim_r == 0 { i32::MAX } else { sim_r * sim_r };
@@ -1456,20 +1465,39 @@ fn main() {
                             }
                         }
                         penguins.retain(|p| !p.is_dead());
+                        } // end net_client.is_none() guard
 
-                        item_entities.retain(|entity| {
-                            let dx = entity.position[0] + 0.5 - player.position[0];
-                            let dy = entity.position[1] + 0.5 - (player.position[1] + 0.9);
-                            let dz = entity.position[2] + 0.5 - player.position[2];
-                            if (dx*dx + dy*dy + dz*dz).sqrt() < 1.5 {
-                                !player.pick_up(entity.item)
-                            } else { true }
-                        });
+                        item_pickup_cooldown = (item_pickup_cooldown - delta_time).max(0.0);
+                        if net_client.is_none() {
+                            item_entities.retain(|entity| {
+                                let dx = entity.position[0] + 0.5 - player.position[0];
+                                let dy = entity.position[1] + 0.5 - (player.position[1] + 0.9);
+                                let dz = entity.position[2] + 0.5 - player.position[2];
+                                if (dx*dx + dy*dy + dz*dz).sqrt() < 1.5 {
+                                    !player.pick_up(entity.item)
+                                } else { true }
+                            });
+                        } else if item_pickup_cooldown <= 0.0 {
+                            // Client: request pickup from server for the nearest in-range item
+                            for entity in &item_entities {
+                                let dx = entity.position[0] + 0.5 - player.position[0];
+                                let dy = entity.position[1] + 0.5 - (player.position[1] + 0.9);
+                                let dz = entity.position[2] + 0.5 - player.position[2];
+                                if (dx*dx + dy*dy + dz*dz).sqrt() < 1.5 {
+                                    if let Some(ref mut client) = net_client {
+                                        client.send_pickup_item(entity.position[0], entity.position[1], entity.position[2]);
+                                        item_pickup_cooldown = 0.3;
+                                    }
+                                    break;
+                                }
+                            }
+                        }
 
                         world.update(player.position);
 
-                        // ── Entity dormancy ───────────────────────────────
-                        // Move entities whose column just unloaded into dormant store.
+                        // ── Entity dormancy (host/singleplayer only) ──────
+                        // Clients receive entities from the server; no local dormancy needed.
+                        if net_client.is_none() {
                         for col in world.take_unloaded_columns() {
                             let [ucx, ucz] = col;
                             let entry = dormant.entry(col).or_default();
@@ -1544,11 +1572,12 @@ fn main() {
                                     world.reset_column_notification(col_cx, col_cz);
                                     dormant.insert(col, leftover);
                                 }
-                            } else if spawned_columns.insert(col) {
+                            } else if spawned_columns.insert(col) && net_client.is_none() {
                                 // First time visiting this column — seed it with entities.
                                 spawn_column_entities(col_cx, col_cz, &world, &mut chickens, &mut pigs, &mut penguins, &entity_registry);
                             }
                         }
+                        } // end net_client.is_none() dormancy guard
 
                         world.tick_water(delta_time);
                         world.tick_lava(delta_time);
@@ -1566,17 +1595,105 @@ fn main() {
                         server.broadcast_host_position(
                             player.position[0], player.position[1], player.position[2],
                             player.yaw, player.pitch,
+                            player.health.min(255) as u8,
                         );
+                        let to_net = |pos: [f32;3], yaw: f32, health: f32, anim_time: f32| {
+                            net::messages::NetEntity { x: pos[0], y: pos[1], z: pos[2], yaw, health, anim_time }
+                        };
+                        server.broadcast_entity_update(
+                            chickens.iter().map(|e| to_net(e.position, e.yaw, e.health, e.anim_time)).collect(),
+                            pigs    .iter().map(|e| to_net(e.position, e.yaw, e.health, e.anim_time)).collect(),
+                            penguins.iter().map(|e| to_net(e.position, e.yaw, e.health, e.anim_time)).collect(),
+                        );
+                        server.broadcast_time(sun_angle);
+                        server.broadcast_item_update(
+                            item_entities.iter().map(|e| net::messages::NetItem {
+                                x: e.position[0], y: e.position[1], z: e.position[2],
+                                item_id: e.item.tile_index() as u8,
+                            }).collect(),
+                        );
+                        for (kind, index, push_x, push_z) in server.drain_entity_attacks() {
+                            let push = [push_x, 0.0, push_z];
+                            match kind {
+                                0 => { if let Some(e) = chickens.get_mut(index as usize) { e.take_hit(push); } }
+                                1 => { if let Some(e) = pigs.get_mut(index as usize)     { e.take_hit(push); } }
+                                2 => { if let Some(e) = penguins.get_mut(index as usize) { e.take_hit(push); } }
+                                _ => {}
+                            }
+                        }
+                        for (client_id, pos) in server.drain_item_pickups() {
+                            // Find the nearest item entity within pickup range
+                            let nearest = item_entities.iter().enumerate().min_by(|(_, a), (_, b)| {
+                                let da = (a.position[0]-pos[0]).powi(2) + (a.position[1]-pos[1]).powi(2) + (a.position[2]-pos[2]).powi(2);
+                                let db = (b.position[0]-pos[0]).powi(2) + (b.position[1]-pos[1]).powi(2) + (b.position[2]-pos[2]).powi(2);
+                                da.partial_cmp(&db).unwrap()
+                            }).filter(|(_, e)| {
+                                let dx = e.position[0]-pos[0]; let dy = e.position[1]-pos[1]; let dz = e.position[2]-pos[2];
+                                (dx*dx + dy*dy + dz*dz).sqrt() < 2.5
+                            }).map(|(i, _)| i);
+                            if let Some(idx) = nearest {
+                                let item = item_entities[idx].item;
+                                item_entities.remove(idx);
+                                server.send_inventory_add(client_id, item.tile_index() as u8);
+                            }
+                        }
                     }
                     if let Some(ref mut client) = net_client {
                         for msg in client.update(delta_time) {
-                            if let ServerMessage::BlockChange { x, y, z, block_id } = msg {
-                                world.set_block(x, y, z, world::BlockType::from_net_id(block_id));
+                            match msg {
+                                ServerMessage::BlockChange { x, y, z, block_id } => {
+                                    world.set_block(x, y, z, world::BlockType::from_net_id(block_id));
+                                }
+                                ServerMessage::EntityUpdate { chickens: c_net, pigs: p_net, penguins: pen_net } => {
+                                    chickens.clear();
+                                    for ne in c_net {
+                                        if let Some(def) = entity_registry.get("chicken") {
+                                            let mut e = Chicken::new(ne.x, ne.y, ne.z, def);
+                                            e.yaw = ne.yaw; e.health = ne.health; e.anim_time = ne.anim_time;
+                                            chickens.push(e);
+                                        }
+                                    }
+                                    pigs.clear();
+                                    for ne in p_net {
+                                        if let Some(def) = entity_registry.get("pig") {
+                                            let mut e = Pig::new(ne.x, ne.y, ne.z, def);
+                                            e.yaw = ne.yaw; e.health = ne.health; e.anim_time = ne.anim_time;
+                                            pigs.push(e);
+                                        }
+                                    }
+                                    penguins.clear();
+                                    for ne in pen_net {
+                                        if let Some(def) = entity_registry.get("penguin") {
+                                            let mut e = Penguin::new(ne.x, ne.y, ne.z, def);
+                                            e.yaw = ne.yaw; e.health = ne.health; e.anim_time = ne.anim_time;
+                                            penguins.push(e);
+                                        }
+                                    }
+                                }
+                                ServerMessage::TimeUpdate { sun_angle: s } => {
+                                    sun_angle = s;
+                                }
+                                ServerMessage::ItemUpdate { items } => {
+                                    item_entities.clear();
+                                    for ni in items {
+                                        if let Some(item) = world::ItemType::from_tile_index(ni.item_id as usize) {
+                                            item_entities.push(ItemEntity::new(ni.x, ni.y, ni.z, item));
+                                        }
+                                    }
+                                }
+                                ServerMessage::InventoryAdd { item_id } => {
+                                    if let Some(item) = world::ItemType::from_tile_index(item_id as usize) {
+                                        player.pick_up(item);
+                                    }
+                                    item_pickup_cooldown = 0.0;
+                                }
+                                _ => {}
                             }
                         }
                         client.send_position(
                             player.position[0], player.position[1], player.position[2],
                             player.yaw, player.pitch,
+                            player.health.min(255) as u8,
                         );
                     }
                 }
@@ -1584,7 +1701,9 @@ fn main() {
 
             // ── Sun / sky (common to all states) ──────────────────────────────
             total_time += delta_time;
-            if !time_frozen {
+            // Clients receive sun_angle from the server; only advance it locally in
+            // singleplayer or when hosting.
+            if !time_frozen && net_client.is_none() {
                 sun_angle += delta_time * (std::f32::consts::TAU / DAY_LENGTH_SECS);
                 if sun_angle > std::f32::consts::TAU { sun_angle -= std::f32::consts::TAU; }
             }

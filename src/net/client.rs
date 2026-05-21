@@ -10,6 +10,7 @@ use super::messages::{ClientMessage, ServerMessage, PROTOCOL_ID};
 struct RemotePlayer {
     position: [f32; 3],
     yaw: f32,
+    health: u8,
 }
 
 pub struct GameClient {
@@ -67,6 +68,7 @@ impl GameClient {
                         self.remote_players.insert(*id, RemotePlayer {
                             position: [0.0, 0.0, 0.0],
                             yaw: 0.0,
+                            health: 100,
                         });
                     }
                     ServerMessage::PeerLeft { id } => {
@@ -81,13 +83,15 @@ impl GameClient {
         // Process unreliable messages
         while let Some(bytes) = self.client.receive_message(DefaultChannel::Unreliable) {
             if let Ok(msg) = bincode::deserialize::<ServerMessage>(&bytes) {
-                if let ServerMessage::PeerState { id, x, y, z, yaw, .. } = &msg {
+                if let ServerMessage::PeerState { id, x, y, z, yaw, health, .. } = &msg {
                     let player = self.remote_players.entry(*id).or_insert(RemotePlayer {
                         position: [0.0, 0.0, 0.0],
                         yaw: 0.0,
+                        health: 100,
                     });
                     player.position = [*x, *y, *z];
                     player.yaw = *yaw;
+                    player.health = *health;
                 }
                 received.push(msg);
             }
@@ -98,8 +102,8 @@ impl GameClient {
         received
     }
 
-    pub fn send_position(&mut self, x: f32, y: f32, z: f32, yaw: f32, pitch: f32) {
-        let msg = ClientMessage::PlayerState { x, y, z, yaw, pitch };
+    pub fn send_position(&mut self, x: f32, y: f32, z: f32, yaw: f32, pitch: f32, health: u8) {
+        let msg = ClientMessage::PlayerState { x, y, z, yaw, pitch, health };
         if let Ok(bytes) = bincode::serialize(&msg) {
             self.client.send_message(DefaultChannel::Unreliable, bytes);
         }
@@ -114,6 +118,20 @@ impl GameClient {
 
     pub fn send_block_place(&mut self, x: i32, y: i32, z: i32, block_id: u8) {
         let msg = ClientMessage::PlaceBlock { x, y, z, block_id };
+        if let Ok(bytes) = bincode::serialize(&msg) {
+            self.client.send_message(DefaultChannel::ReliableOrdered, bytes);
+        }
+    }
+
+    pub fn send_attack_entity(&mut self, kind: u8, index: u32, push_x: f32, push_z: f32) {
+        let msg = ClientMessage::AttackEntity { kind, index, push_x, push_z };
+        if let Ok(bytes) = bincode::serialize(&msg) {
+            self.client.send_message(DefaultChannel::ReliableOrdered, bytes);
+        }
+    }
+
+    pub fn send_pickup_item(&mut self, x: f32, y: f32, z: f32) {
+        let msg = ClientMessage::PickupItem { x, y, z };
         if let Ok(bytes) = bincode::serialize(&msg) {
             self.client.send_message(DefaultChannel::ReliableOrdered, bytes);
         }
