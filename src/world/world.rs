@@ -65,6 +65,7 @@ pub struct World {
     active_lava: HashSet<[i32; 3]>,               // lava blocks with air/water below
     active_lava_spread: HashSet<[i32; 3]>,        // lava blocks (level>1) with air/water neighbors at same Y
     lava_levels: HashMap<[i32; 3], Box<[[[u8; 16]; 16]; 16]>>,  // chunk-coord → [lx][ly][lz] lava level
+    active_wheat: HashMap<[i32; 3], f32>,         // wheat position → seconds until next growth stage
     // Player-authored block changes (breaks/placements); applied to newly generated
     // chunks so loaded saves always see the same terrain modifications.
     block_changes: HashMap<[i32; 3], BlockType>,
@@ -108,6 +109,7 @@ impl World {
             active_lava: HashSet::new(),
             active_lava_spread: HashSet::new(),
             lava_levels: HashMap::new(),
+            active_wheat: HashMap::new(),
             block_changes: HashMap::new(),
             unloaded_columns: Vec::new(),
             loaded_columns:   Vec::new(),
@@ -288,6 +290,23 @@ impl World {
                     for lx in 0..16usize {
                         if snapshot[lx][ly][lz] == BlockType::Water && chunk_wl[lx][ly][lz] == 0 {
                             chunk_wl[lx][ly][lz] = 8;
+                        }
+                    }
+                }
+            }
+
+            // Register any wheat in the chunk for growth ticking (covers both
+            // wild-spawned wheat and player-placed wheat restored from block_changes).
+            for ly in 0..16usize {
+                for lz in 0..16usize {
+                    for lx in 0..16usize {
+                        if let BlockType::Wheat(s) = snapshot[lx][ly][lz] {
+                            if s < 4 {
+                                let pos = [cx * 16 + lx as i32,
+                                           cy * 16 + ly as i32,
+                                           cz * 16 + lz as i32];
+                                self.active_wheat.entry(pos).or_insert(30.0);
+                            }
                         }
                     }
                 }
@@ -575,6 +594,28 @@ impl World {
         }
     }
 
+    /// Advance wheat growth and return every position that changed as (pos, new_stage).
+    /// Caller is responsible for broadcasting changes over the network.
+    pub fn tick_wheat(&mut self, dt: f32) -> Vec<([i32; 3], u8)> {
+        let mut to_grow: Vec<[i32; 3]> = Vec::new();
+        for (pos, timer) in self.active_wheat.iter_mut() {
+            *timer -= dt;
+            if *timer <= 0.0 { to_grow.push(*pos); }
+        }
+        let mut grown = Vec::new();
+        for [wx, wy, wz] in to_grow {
+            match self.get_block(wx, wy, wz) {
+                BlockType::Wheat(s) if s < 4 => {
+                    let new_stage = s + 1;
+                    self.set_block_recorded(wx, wy, wz, BlockType::Wheat(new_stage));
+                    grown.push(([wx, wy, wz], new_stage));
+                }
+                _ => { self.active_wheat.remove(&[wx, wy, wz]); }
+            }
+        }
+        grown
+    }
+
     pub fn tick_water(&mut self, dt: f32) {
         // 1. Downward flow: active_water tracks water blocks with air directly below.
         let down_candidates: Vec<([i32; 3], u8)> = self.active_water.iter().copied()
@@ -730,6 +771,11 @@ impl World {
         self.refresh_active_spread(wx, wy, wz);
         self.refresh_active_lava(wx, wy, wz);
         self.refresh_active_lava_spread(wx, wy, wz);
+        // Register growing wheat; remove if block is no longer wheat or is fully grown.
+        match block {
+            BlockType::Wheat(s) if s < 4 => { self.active_wheat.insert([wx, wy, wz], 30.0); }
+            _ => { self.active_wheat.remove(&[wx, wy, wz]); }
+        }
     }
 
     fn build_neighbor_edges(&self, cx: i32, cy: i32, cz: i32) -> NeighborEdges {
@@ -956,14 +1002,24 @@ impl World {
         let mut t_max_y = if dy >= 0.0 { (by as f32 + 1.0 - origin[1]) / dy.abs() } else { (origin[1] - by as f32) / dy.abs() };
         let mut t_max_z = if dz >= 0.0 { (bz as f32 + 1.0 - origin[2]) / dz.abs() } else { (origin[2] - bz as f32) / dz.abs() };
 
+        let mut t_prev = 0.0f32;
         loop {
             let t = t_max_x.min(t_max_y).min(t_max_z);
             if t > max_dist { return None; }
 
-            if self.get_block(bx, by, bz).is_targetable() {
-                return Some([bx, by, bz]);
+            let block = self.get_block(bx, by, bz);
+            if block.is_targetable() {
+                let sh = block.selection_height();
+                let hit = sh >= 1.0 || {
+                    let y0 = origin[1] + t_prev * dir[1] - by as f32;
+                    let y1 = origin[1] + t      * dir[1] - by as f32;
+                    let (y_lo, y_hi) = if y0 <= y1 { (y0, y1) } else { (y1, y0) };
+                    y_hi >= 0.0 && y_lo < sh
+                };
+                if hit { return Some([bx, by, bz]); }
             }
 
+            t_prev = t;
             if t_max_x <= t_max_y && t_max_x <= t_max_z {
                 bx += step_x; t_max_x += t_delta_x;
             } else if t_max_y <= t_max_z {
@@ -990,12 +1046,22 @@ impl World {
         let mut t_max_y = if dy >= 0.0 { (by as f32 + 1.0 - origin[1]) / dy.abs() } else { (origin[1] - by as f32) / dy.abs() };
         let mut t_max_z = if dz >= 0.0 { (bz as f32 + 1.0 - origin[2]) / dz.abs() } else { (origin[2] - bz as f32) / dz.abs() };
         let mut adj = [bx, by, bz];
+        let mut t_prev = 0.0f32;
         loop {
             let t = t_max_x.min(t_max_y).min(t_max_z);
             if t > max_dist { return None; }
-            if self.get_block(bx, by, bz).is_targetable() {
-                return Some(([bx, by, bz], adj));
+            let block = self.get_block(bx, by, bz);
+            if block.is_targetable() {
+                let sh = block.selection_height();
+                let hit = sh >= 1.0 || {
+                    let y0 = origin[1] + t_prev * dir[1] - by as f32;
+                    let y1 = origin[1] + t      * dir[1] - by as f32;
+                    let (y_lo, y_hi) = if y0 <= y1 { (y0, y1) } else { (y1, y0) };
+                    y_hi >= 0.0 && y_lo < sh
+                };
+                if hit { return Some(([bx, by, bz], adj)); }
             }
+            t_prev = t;
             adj = [bx, by, bz];
             if t_max_x <= t_max_y && t_max_x <= t_max_z {
                 bx += step_x; t_max_x += t_delta_x;

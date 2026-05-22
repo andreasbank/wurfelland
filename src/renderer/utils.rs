@@ -394,6 +394,59 @@ pub fn create_block_atlas() -> u32 {
         }
     }
 
+    // Wheat tiles 23–27, one per growth stage.
+    // Each tile has a transparent background with green stalks; stage 4 adds a golden grain head.
+    // The visible portion of each tile is the bottom `height * 16` rows (UV crop in cross_vertices).
+    {
+        let stage_heights = [0.15f32, 0.25, 0.40, 0.55, 0.75];
+        let stalk_cols = [4usize, 8, 12];
+        for stage in 0..5usize {
+            let tile_idx = 23 + stage;
+            let tile_col = tile_idx % TILES_PER_ROW;
+            let tile_row = tile_idx / TILES_PER_ROW;
+            let h = stage_heights[stage];
+            let vis_top = (TILE_SIZE as f32 * (1.0 - h)) as usize;
+            let plant_h = TILE_SIZE - vis_top; // visible pixel height
+
+            for py in vis_top..TILE_SIZE {
+                for px in 0..TILE_SIZE {
+                    let ax = tile_col * TILE_SIZE + px;
+                    let ay = tile_row * TILE_SIZE + py;
+                    let idx = (ay * ATLAS_SIZE + ax) * 4;
+
+                    let in_stalk = stalk_cols.iter().any(|&sx| px == sx);
+                    let in_leaf  = stalk_cols.iter().any(|&sx| px.abs_diff(sx) == 1);
+                    let local_y  = TILE_SIZE - 1 - py; // 0 = bottom of tile
+
+                    let (r, g, b): (i16, i16, i16) = if in_stalk {
+                        // Top pixels of stage 4 become golden grain head
+                        if stage == 4 && local_y >= plant_h.saturating_sub(3) {
+                            (205, 175, 40)
+                        } else {
+                            (100, 155, 40)
+                        }
+                    } else if in_leaf {
+                        // Single leaf node at mid-height of the plant
+                        let mid = vis_top + plant_h / 2;
+                        if py >= mid.saturating_sub(1) && py <= mid + 1 {
+                            (70, 130, 30)
+                        } else {
+                            continue; // transparent
+                        }
+                    } else {
+                        continue; // transparent
+                    };
+
+                    let vari = ((px ^ py) % 3) as i16 * 4 - 4;
+                    pixels[idx]     = (r + vari).clamp(0, 255) as u8;
+                    pixels[idx + 1] = (g + vari).clamp(0, 255) as u8;
+                    pixels[idx + 2] = (b + vari).clamp(0, 255) as u8;
+                    pixels[idx + 3] = 255;
+                }
+            }
+        }
+    }
+
     unsafe {
         let mut texture_id = 0;
         gl::GenTextures(1, &mut texture_id);

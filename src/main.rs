@@ -774,7 +774,8 @@ fn main() {
                             let ro = [camera.position.x, camera.position.y, camera.position.z];
                             let rd = [camera.front.x,    camera.front.y,    camera.front.z];
                             let holding_furnace = hotbar[selected_slot].map_or(false, |(item, _)| item == ItemType::Furnace);
-                            let holding_bed = hotbar[selected_slot].map_or(false, |(item, _)| item == ItemType::Bed);
+                            let holding_bed     = hotbar[selected_slot].map_or(false, |(item, _)| item == ItemType::Bed);
+                            let holding_seeds   = hotbar[selected_slot].map_or(false, |(item, _)| item == ItemType::Seeds);
                             if holding_furnace {
                                 if let Some((_hit, adj)) = world.raycast_face(ro, rd, 5.0) {
                                     if world.get_block(adj[0], adj[1], adj[2]) == BlockType::Air {
@@ -815,6 +816,26 @@ fn main() {
                                         if let Some(ref mut client) = net_client {
                                             client.send_block_place(adj[0], adj[1], adj[2], bid);
                                             client.send_block_place(adj2[0], adj2[1], adj2[2], bid);
+                                        }
+                                        if !god_mode {
+                                            if let Some((_, count)) = &mut hotbar[selected_slot] {
+                                                if *count > 1 { *count -= 1; } else { hotbar[selected_slot] = None; }
+                                            }
+                                        }
+                                    }
+                                }
+                            } else if holding_seeds {
+                                if let Some((_hit, adj)) = world.raycast_face(ro, rd, 5.0) {
+                                    let soil = world.get_block(adj[0], adj[1] - 1, adj[2]);
+                                    let plantable = matches!(soil, BlockType::Dirt | BlockType::Grass);
+                                    if plantable && world.get_block(adj[0], adj[1], adj[2]) == BlockType::Air {
+                                        world.set_block_recorded(adj[0], adj[1], adj[2], BlockType::Wheat(0));
+                                        let bid = BlockType::Wheat(0).to_net_id();
+                                        if let Some(ref mut server) = net_server {
+                                            server.broadcast_block_change(adj[0], adj[1], adj[2], bid);
+                                        }
+                                        if let Some(ref mut client) = net_client {
+                                            client.send_block_place(adj[0], adj[1], adj[2], bid);
                                         }
                                         if !god_mode {
                                             if let Some((_, count)) = &mut hotbar[selected_slot] {
@@ -1613,6 +1634,16 @@ fn main() {
 
                         world.tick_water(delta_time);
                         world.tick_lava(delta_time);
+
+                        if net_client.is_none() {
+                            let grown = world.tick_wheat(delta_time);
+                            if let Some(ref mut server) = net_server {
+                                for ([wx, wy, wz], stage) in &grown {
+                                    server.broadcast_block_change(*wx, *wy, *wz,
+                                        BlockType::Wheat(*stage).to_net_id());
+                                }
+                            }
+                        }
                     }
 
                     // ── Network tick ──────────────────────────────────────────

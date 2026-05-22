@@ -35,6 +35,7 @@ pub enum BlockType {
     Furnace,
     Lava,
     Cobblestone,
+    Wheat(u8), // growth stage 0–4
 }
 
 impl BlockType {
@@ -58,13 +59,15 @@ impl BlockType {
             BlockType::Furnace    => [0.50, 0.50, 0.50],
             BlockType::Lava        => [1.00, 0.45, 0.00],
             BlockType::Cobblestone => [0.44, 0.44, 0.44],
+            BlockType::Wheat(_)    => [1.00, 1.00, 1.00],
         }
     }
 
     pub fn is_opaque(&self) -> bool {
         match self {
             BlockType::Air | BlockType::Water | BlockType::Leaves
-            | BlockType::TallGrass | BlockType::GrassShort => false,
+            | BlockType::TallGrass | BlockType::GrassShort
+            | BlockType::Wheat(_) => false,
             _ => true,
         }
     }
@@ -72,7 +75,8 @@ impl BlockType {
     pub fn is_solid(&self) -> bool {
         match self {
             BlockType::Air | BlockType::Water | BlockType::Lava
-            | BlockType::TallGrass | BlockType::GrassShort => false,
+            | BlockType::TallGrass | BlockType::GrassShort
+            | BlockType::Wheat(_) => false,
             _ => true,
         }
     }
@@ -99,6 +103,7 @@ impl BlockType {
             BlockType::Cobblestone => Some(2.0),
             BlockType::TallGrass  => Some(0.05),
             BlockType::GrassShort => Some(0.05),
+            BlockType::Wheat(_)   => Some(0.05),
             BlockType::Snow       => Some(0.2),
             BlockType::CopperOre  => Some(3.0),
             BlockType::CoalOre    => Some(3.0),
@@ -131,6 +136,7 @@ impl BlockType {
             BlockType::TallGrass | BlockType::GrassShort => {
                 if hash % 20 == 0 { vec![ItemType::Seeds] } else { vec![] }
             }
+            BlockType::Wheat(_) => vec![ItemType::Seeds],
             BlockType::Stone     => vec![ItemType::StoneChunk],
             BlockType::Bed       => vec![ItemType::Bed],
             BlockType::CopperOre => vec![ItemType::RawCopper],
@@ -145,7 +151,8 @@ impl BlockType {
 
     pub fn material(&self) -> Option<BlockMaterial> {
         match self {
-            BlockType::Grass | BlockType::TallGrass | BlockType::GrassShort => Some(BlockMaterial::Grass),
+            BlockType::Grass | BlockType::TallGrass | BlockType::GrassShort
+            | BlockType::Wheat(_) => Some(BlockMaterial::Grass),
             BlockType::Dirt   => Some(BlockMaterial::Dirt),
             BlockType::Stone  => Some(BlockMaterial::Stone),
             BlockType::Log | BlockType::Bed  => Some(BlockMaterial::Wood),
@@ -191,6 +198,7 @@ impl BlockType {
             BlockType::Furnace    => 15,
             BlockType::Lava        => 16,
             BlockType::Cobblestone => 17,
+            BlockType::Wheat(s)    => 18 + s,
         }
     }
 
@@ -213,6 +221,11 @@ impl BlockType {
             15 => Self::Furnace,
             16 => Self::Lava,
             17 => Self::Cobblestone,
+            18 => Self::Wheat(0),
+            19 => Self::Wheat(1),
+            20 => Self::Wheat(2),
+            21 => Self::Wheat(3),
+            22 => Self::Wheat(4),
             _  => Self::Air,
         }
     }
@@ -247,8 +260,24 @@ impl BlockType {
             },
             BlockType::Lava        => 21,
             BlockType::Cobblestone => 22,
+            BlockType::Wheat(s)    => 23 + *s as u32,
         }
     }
 
-    
+    pub fn wheat_height(stage: u8) -> f32 {
+        match stage {
+            0 => 0.15,
+            1 => 0.25,
+            2 => 0.40,
+            3 => 0.55,
+            _ => 0.75,
+        }
+    }
+
+    pub fn selection_height(&self) -> f32 {
+        match self {
+            BlockType::Wheat(s) => Self::wheat_height(*s),
+            _ => 1.0,
+        }
+    }
 }

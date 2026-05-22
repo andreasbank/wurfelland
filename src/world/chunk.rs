@@ -326,6 +326,46 @@ impl Chunk {
             }
         }
 
+        // ── Wild wheat patches ───────────────────────────────────────────────
+        // Two candidate patch centres per chunk. Each has a ~1-in-80 chance of
+        // actually spawning. When it does, 4–8 stalks are scattered in a radius-2
+        // area around the centre, each landing only on exposed Grass surfaces.
+        for attempt in 0u32..2 {
+            let cx = position[0] as u32;
+            let cz = position[2] as u32;
+            let h0 = cx.wrapping_mul(1_234_567).wrapping_add(cz.wrapping_mul(7_654_321))
+                        .wrapping_add(attempt.wrapping_mul(999_983));
+            if h0 % 80 != 0 { continue; }
+
+            // Pick a centre within the chunk (avoid the very edge so the cluster fits)
+            let cx_local = ((h0 >> 8)  % 12 + 2) as usize;
+            let cz_local = ((h0 >> 16) % 12 + 2) as usize;
+
+            // Scatter 4–8 plants in a ±2 block radius
+            let plant_count = 4 + (h0 >> 24) % 5; // 4..=8
+            for i in 0..plant_count {
+                let ph = h0.wrapping_mul(31).wrapping_add(i.wrapping_mul(6_700_417));
+                let dx = ((ph        & 0xF) % 5) as i32 - 2; // -2..=2
+                let dz = ((ph >> 4)  & 0xF) as i32 % 5 - 2;
+
+                let lx = (cx_local as i32 + dx).clamp(0, 15) as usize;
+                let lz = (cz_local as i32 + dz).clamp(0, 15) as usize;
+
+                let surf_wy   = surface[lx][lz];
+                let local_surf = surf_wy - wy_base;
+                if local_surf < 0 || local_surf >= 15 { continue; }
+                let local_surf = local_surf as usize;
+                let above      = local_surf + 1;
+
+                if blocks[lx][local_surf][lz] != BlockType::Grass { continue; }
+                if blocks[lx][above][lz]      != BlockType::Air   { continue; }
+
+                // Random starting stage 0–2 so they're not all identical
+                let stage = ((ph >> 8) % 3) as u8;
+                blocks[lx][above][lz] = BlockType::Wheat(stage);
+            }
+        }
+
         // ── Cave carving ──────────────────────────────────────────────────────
         //
         // Three cave types matching Minecraft 1.18+:
@@ -867,6 +907,7 @@ impl Chunk {
         block.is_solid() && !block.is_fluid()
             && block != BlockType::TallGrass
             && block != BlockType::GrassShort
+            && !matches!(block, BlockType::Wheat(_))
     }
 
     /// Emit a merged quad (6 vertices × 14 floats) into `out`.
@@ -925,6 +966,10 @@ impl Chunk {
                         }
                         BlockType::GrassShort => {
                             vertices.extend(Self::cross_vertices(x as f32, y as f32, z as f32, block, 0.45, own_sl));
+                        }
+                        BlockType::Wheat(stage) => {
+                            let h = BlockType::wheat_height(stage);
+                            vertices.extend(Self::cross_vertices(x as f32, y as f32, z as f32, block, h, own_sl));
                         }
                         BlockType::Water => {
                             let (lxi, lyi, lzi) = (x as i32, y as i32, z as i32);
