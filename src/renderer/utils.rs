@@ -447,6 +447,99 @@ pub fn create_block_atlas() -> u32 {
         }
     }
 
+    // Pumpkin stem tiles 28–31 (cross sprites, transparent bg, green vine).
+    {
+        let stage_heights = [0.15f32, 0.30, 0.50, 0.70];
+        let stalk_cols = [5usize, 8, 11]; // slightly different spacing from wheat
+        for stage in 0..4usize {
+            let tile_idx = 28 + stage;
+            let tile_col = tile_idx % TILES_PER_ROW;
+            let tile_row = tile_idx / TILES_PER_ROW;
+            let h = stage_heights[stage];
+            let vis_top = (TILE_SIZE as f32 * (1.0 - h)) as usize;
+            let plant_h = TILE_SIZE - vis_top;
+
+            for py in vis_top..TILE_SIZE {
+                for px in 0..TILE_SIZE {
+                    let ax = tile_col * TILE_SIZE + px;
+                    let ay = tile_row * TILE_SIZE + py;
+                    let idx = (ay * ATLAS_SIZE + ax) * 4;
+
+                    let in_stalk = stalk_cols.iter().any(|&sx| px == sx);
+                    let in_tendril = stalk_cols.iter().any(|&sx| px.abs_diff(sx) == 1);
+                    let local_y = TILE_SIZE - 1 - py;
+
+                    let (r, g, b): (i16, i16, i16) = if in_stalk {
+                        // Curling tendril tip at top of later stages
+                        if stage >= 2 && local_y >= plant_h.saturating_sub(2) {
+                            (80, 160, 40)
+                        } else {
+                            (60, 130, 30)
+                        }
+                    } else if in_tendril {
+                        let mid = vis_top + plant_h / 2;
+                        if py >= mid.saturating_sub(1) && py <= mid + 1 {
+                            (50, 110, 25)
+                        } else {
+                            continue;
+                        }
+                    } else {
+                        continue;
+                    };
+
+                    let vari = ((px ^ py) % 3) as i16 * 4 - 4;
+                    pixels[idx]     = (r + vari).clamp(0, 255) as u8;
+                    pixels[idx + 1] = (g + vari).clamp(0, 255) as u8;
+                    pixels[idx + 2] = (b + vari).clamp(0, 255) as u8;
+                    pixels[idx + 3] = 255;
+                }
+            }
+        }
+    }
+
+    // Pumpkin block tiles: 32 = side face, 33 = top face.
+    {
+        for tile_idx in [32usize, 33usize] {
+            let is_top = tile_idx == 33;
+            let tile_col = tile_idx % TILES_PER_ROW;
+            let tile_row = tile_idx / TILES_PER_ROW;
+            for py in 0..TILE_SIZE {
+                for px in 0..TILE_SIZE {
+                    let ax = tile_col * TILE_SIZE + px;
+                    let ay = tile_row * TILE_SIZE + py;
+                    let idx = (ay * ATLAS_SIZE + ax) * 4;
+
+                    let (r, g, b): (i16, i16, i16) = if is_top {
+                        // Top: orange with a darker ribbed pattern
+                        let rib = (px as i16 % 4 == 0) || (py as i16 % 4 == 0);
+                        if rib { (170, 95, 10) } else { (220, 130, 20) }
+                    } else {
+                        // Side: orange body with vertical ribs and a simple face cutout
+                        let rib = px % 4 == 0;
+                        // Eye slots at rows 5–8, cols 3–4 and 11–12
+                        let eye = (py >= 5 && py <= 8)
+                            && ((px >= 3 && px <= 4) || (px >= 11 && px <= 12));
+                        // Mouth at rows 11–12, cols 4–11
+                        let mouth = (py == 11 || py == 12) && (px >= 4 && px <= 11);
+                        if eye || mouth {
+                            (30, 20, 5)    // dark cutout
+                        } else if rib {
+                            (170, 95, 10)  // dark rib
+                        } else {
+                            (220, 130, 20) // orange
+                        }
+                    };
+
+                    let vari = ((px ^ py) % 3) as i16 * 4 - 4;
+                    pixels[idx]     = (r + vari).clamp(0, 255) as u8;
+                    pixels[idx + 1] = (g + vari).clamp(0, 255) as u8;
+                    pixels[idx + 2] = (b + vari).clamp(0, 255) as u8;
+                    pixels[idx + 3] = 255;
+                }
+            }
+        }
+    }
+
     unsafe {
         let mut texture_id = 0;
         gl::GenTextures(1, &mut texture_id);

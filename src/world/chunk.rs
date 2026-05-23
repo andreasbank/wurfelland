@@ -326,43 +326,47 @@ impl Chunk {
             }
         }
 
-        // ── Wild wheat patches ───────────────────────────────────────────────
-        // Two candidate patch centres per chunk. Each has a ~1-in-80 chance of
-        // actually spawning. When it does, 4–8 stalks are scattered in a radius-2
-        // area around the centre, each landing only on exposed Grass surfaces.
-        for attempt in 0u32..2 {
-            let cx = position[0] as u32;
-            let cz = position[2] as u32;
-            let h0 = cx.wrapping_mul(1_234_567).wrapping_add(cz.wrapping_mul(7_654_321))
-                        .wrapping_add(attempt.wrapping_mul(999_983));
-            if h0 % 80 != 0 { continue; }
+        // ── Wild crop patches (data-driven from CROPS table) ─────────────────
+        for crop_def in crate::world::block::CROPS {
+            if crop_def.wild_chance == 0 { continue; }
+            let id_salt = (crop_def.id as u32).wrapping_mul(22_695_477);
+            for attempt in 0u32..2 {
+                let cx = position[0] as u32;
+                let cz = position[2] as u32;
+                let h0 = cx.wrapping_mul(1_664_525_u32.wrapping_add(id_salt))
+                            .wrapping_add(cz.wrapping_mul(1_013_904_223))
+                            .wrapping_add(attempt.wrapping_mul(999_983));
+                if h0 % crop_def.wild_chance != 0 { continue; }
 
-            // Pick a centre within the chunk (avoid the very edge so the cluster fits)
-            let cx_local = ((h0 >> 8)  % 12 + 2) as usize;
-            let cz_local = ((h0 >> 16) % 12 + 2) as usize;
+                let cx_local = ((h0 >> 8)  % 12 + 2) as usize;
+                let cz_local = ((h0 >> 16) % 12 + 2) as usize;
 
-            // Scatter 4–8 plants in a ±2 block radius
-            let plant_count = 4 + (h0 >> 24) % 5; // 4..=8
-            for i in 0..plant_count {
-                let ph = h0.wrapping_mul(31).wrapping_add(i.wrapping_mul(6_700_417));
-                let dx = ((ph        & 0xF) % 5) as i32 - 2; // -2..=2
-                let dz = ((ph >> 4)  & 0xF) as i32 % 5 - 2;
+                let plant_count = 2 + (h0 >> 24) % 5; // 2..=6
+                for i in 0..plant_count {
+                    let ph = h0.wrapping_mul(1_664_525).wrapping_add(i.wrapping_mul(1_013_904_223));
+                    let dx = ((ph & 0xF) % 5) as i32 - 2;
+                    let dz = ((ph >> 4) & 0xF) as i32 % 5 - 2;
 
-                let lx = (cx_local as i32 + dx).clamp(0, 15) as usize;
-                let lz = (cz_local as i32 + dz).clamp(0, 15) as usize;
+                    let lx = (cx_local as i32 + dx).clamp(0, 15) as usize;
+                    let lz = (cz_local as i32 + dz).clamp(0, 15) as usize;
 
-                let surf_wy   = surface[lx][lz];
-                let local_surf = surf_wy - wy_base;
-                if local_surf < 0 || local_surf >= 15 { continue; }
-                let local_surf = local_surf as usize;
-                let above      = local_surf + 1;
+                    let surf_wy    = surface[lx][lz];
+                    let local_surf = surf_wy - wy_base;
+                    if local_surf < 0 || local_surf >= 15 { continue; }
+                    let local_surf = local_surf as usize;
+                    let above      = local_surf + 1;
 
-                if blocks[lx][local_surf][lz] != BlockType::Grass { continue; }
-                if blocks[lx][above][lz]      != BlockType::Air   { continue; }
+                    if blocks[lx][local_surf][lz] != BlockType::Grass { continue; }
+                    if blocks[lx][above][lz]      != BlockType::Air   { continue; }
 
-                // Random starting stage 0–2 so they're not all identical
-                let stage = ((ph >> 8) % 3) as u8;
-                blocks[lx][above][lz] = BlockType::Wheat(stage);
+                    let stage = if crop_def.wild_final {
+                        crop_def.stages - 1
+                    } else {
+                        let max_wild = crop_def.stages.min(3) as u32;
+                        ((ph >> 8) % max_wild) as u8
+                    };
+                    blocks[lx][above][lz] = BlockType::Crop(crop_def.id, stage);
+                }
             }
         }
 
@@ -907,7 +911,6 @@ impl Chunk {
         block.is_solid() && !block.is_fluid()
             && block != BlockType::TallGrass
             && block != BlockType::GrassShort
-            && !matches!(block, BlockType::Wheat(_))
     }
 
     /// Emit a merged quad (6 vertices × 14 floats) into `out`.
@@ -967,9 +970,14 @@ impl Chunk {
                         BlockType::GrassShort => {
                             vertices.extend(Self::cross_vertices(x as f32, y as f32, z as f32, block, 0.45, own_sl));
                         }
-                        BlockType::Wheat(stage) => {
-                            let h = BlockType::wheat_height(stage);
-                            vertices.extend(Self::cross_vertices(x as f32, y as f32, z as f32, block, h, own_sl));
+                        BlockType::Crop(id, stage) => {
+                            let def = &crate::world::block::CROPS[id as usize];
+                            let is_solid_stage = def.final_solid && stage == def.stages - 1;
+                            if !is_solid_stage {
+                                let h = def.stage_heights[stage as usize];
+                                vertices.extend(Self::cross_vertices(x as f32, y as f32, z as f32, block, h, own_sl));
+                            }
+                            // solid stage handled by greedy meshing in Pass 2
                         }
                         BlockType::Water => {
                             let (lxi, lyi, lzi) = (x as i32, y as i32, z as i32);

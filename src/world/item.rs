@@ -18,6 +18,7 @@ pub enum ItemType {
     Coal,
     RawIron,
     Furnace,
+    PumpkinSeeds,
 }
 
 impl ItemType {
@@ -39,7 +40,8 @@ impl ItemType {
             ItemType::RawCopper    => 12,
             ItemType::Coal         => 13,
             ItemType::RawIron      => 14,
-            ItemType::Furnace      => 15,
+            ItemType::Furnace       => 15,
+            ItemType::PumpkinSeeds  => 16,
         }
     }
 
@@ -61,6 +63,7 @@ impl ItemType {
             13 => Some(Self::Coal),
             14 => Some(Self::RawIron),
             15 => Some(Self::Furnace),
+            16 => Some(Self::PumpkinSeeds),
             _  => None,
         }
     }
@@ -82,8 +85,9 @@ impl ItemType {
             "raw_copper"   => Some(Self::RawCopper),
             "coal"         => Some(Self::Coal),
             "raw_iron"     => Some(Self::RawIron),
-            "furnace"      => Some(Self::Furnace),
-            _              => None,
+            "furnace"        => Some(Self::Furnace),
+            "pumpkin_seeds"  => Some(Self::PumpkinSeeds),
+            _                => None,
         }
     }
 
@@ -104,7 +108,8 @@ impl ItemType {
             ItemType::RawCopper   => [0.72, 0.45, 0.20],
             ItemType::Coal        => [0.15, 0.15, 0.15],
             ItemType::RawIron     => [0.62, 0.42, 0.30],
-            ItemType::Furnace     => [0.50, 0.50, 0.50],
+            ItemType::Furnace      => [0.50, 0.50, 0.50],
+            ItemType::PumpkinSeeds => [0.85, 0.65, 0.15],
         }
     }
 }

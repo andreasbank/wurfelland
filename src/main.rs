@@ -775,7 +775,9 @@ fn main() {
                             let rd = [camera.front.x,    camera.front.y,    camera.front.z];
                             let holding_furnace = hotbar[selected_slot].map_or(false, |(item, _)| item == ItemType::Furnace);
                             let holding_bed     = hotbar[selected_slot].map_or(false, |(item, _)| item == ItemType::Bed);
-                            let holding_seeds   = hotbar[selected_slot].map_or(false, |(item, _)| item == ItemType::Seeds);
+                            let holding_crop_id: Option<u8> = hotbar[selected_slot].and_then(|(item, _)|
+                                world::block::CROPS.iter().find(|d| d.seed_item == item).map(|d| d.id)
+                            );
                             if holding_furnace {
                                 if let Some((_hit, adj)) = world.raycast_face(ro, rd, 5.0) {
                                     if world.get_block(adj[0], adj[1], adj[2]) == BlockType::Air {
@@ -824,13 +826,14 @@ fn main() {
                                         }
                                     }
                                 }
-                            } else if holding_seeds {
+                            } else if let Some(crop_id) = holding_crop_id {
                                 if let Some((_hit, adj)) = world.raycast_face(ro, rd, 5.0) {
                                     let soil = world.get_block(adj[0], adj[1] - 1, adj[2]);
                                     let plantable = matches!(soil, BlockType::Dirt | BlockType::Grass);
                                     if plantable && world.get_block(adj[0], adj[1], adj[2]) == BlockType::Air {
-                                        world.set_block_recorded(adj[0], adj[1], adj[2], BlockType::Wheat(0));
-                                        let bid = BlockType::Wheat(0).to_net_id();
+                                        let block = BlockType::Crop(crop_id, 0);
+                                        world.set_block_recorded(adj[0], adj[1], adj[2], block);
+                                        let bid = block.to_net_id();
                                         if let Some(ref mut server) = net_server {
                                             server.broadcast_block_change(adj[0], adj[1], adj[2], bid);
                                         }
@@ -1636,11 +1639,11 @@ fn main() {
                         world.tick_lava(delta_time);
 
                         if net_client.is_none() {
-                            let grown = world.tick_wheat(delta_time);
+                            let grown = world.tick_crops(delta_time);
                             if let Some(ref mut server) = net_server {
-                                for ([wx, wy, wz], stage) in &grown {
+                                for ([wx, wy, wz], block) in &grown {
                                     server.broadcast_block_change(*wx, *wy, *wz,
-                                        BlockType::Wheat(*stage).to_net_id());
+                                        block.to_net_id());
                                 }
                             }
                         }

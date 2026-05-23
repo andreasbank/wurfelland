@@ -330,6 +330,55 @@ def generate_block_atlas():
                 v = ((px_ ^ py) % 3) * 4 - 4
                 put(tile_idx, px_, py, clamp(r + v), clamp(g + v), clamp(b + v))
 
+    # ── Pumpkin stem tiles 28–31 ──────────────────────────────────────────────
+    stem_heights = [0.15, 0.30, 0.50, 0.70]
+    stem_cols = [5, 8, 11]
+    for stage, h in enumerate(stem_heights):
+        tile_idx = 28 + stage
+        vis_top = int(TILE * (1.0 - h))
+        plant_h = TILE - vis_top
+        for py in range(vis_top, TILE):
+            for px_ in range(TILE):
+                in_stalk   = any(px_ == sx for sx in stem_cols)
+                in_tendril = any(abs(px_ - sx) == 1 for sx in stem_cols)
+                local_y    = TILE - 1 - py
+                if in_stalk:
+                    if stage >= 2 and local_y >= max(0, plant_h - 2):
+                        r, g, b = 80, 160, 40
+                    else:
+                        r, g, b = 60, 130, 30
+                elif in_tendril:
+                    mid = vis_top + plant_h // 2
+                    if mid - 1 <= py <= mid + 1:
+                        r, g, b = 50, 110, 25
+                    else:
+                        continue
+                else:
+                    continue
+                v = ((px_ ^ py) % 3) * 4 - 4
+                put(tile_idx, px_, py, clamp(r + v), clamp(g + v), clamp(b + v))
+
+    # ── Pumpkin block tiles: 32 = side, 33 = top ─────────────────────────────
+    for tile_idx in [32, 33]:
+        is_top = tile_idx == 33
+        for py in range(TILE):
+            for px_ in range(TILE):
+                if is_top:
+                    rib = (px_ % 4 == 0) or (py % 4 == 0)
+                    r, g, b = (170, 95, 10) if rib else (220, 130, 20)
+                else:
+                    rib   = px_ % 4 == 0
+                    eye   = (5 <= py <= 8) and ((3 <= px_ <= 4) or (11 <= px_ <= 12))
+                    mouth = (py in (11, 12)) and (4 <= px_ <= 11)
+                    if eye or mouth:
+                        r, g, b = 30, 20, 5
+                    elif rib:
+                        r, g, b = 170, 95, 10
+                    else:
+                        r, g, b = 220, 130, 20
+                v = ((px_ ^ py) % 3) * 4 - 4
+                put(tile_idx, px_, py, clamp(r + v), clamp(g + v), clamp(b + v))
+
     os.makedirs("assets/textures", exist_ok=True)
     pixels.save("assets/textures/blocks_atlas.png")
     print(f"Saved assets/textures/blocks_atlas.png  ({ATLAS}x{ATLAS} px, {TILE}x{TILE} tiles)")

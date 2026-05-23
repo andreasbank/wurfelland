@@ -1,3 +1,39 @@
+use crate::world::item::ItemType;
+
+pub struct CropDef {
+    pub id:            u8,
+    pub stages:        u8,
+    pub stage_heights: &'static [f32],
+    pub final_solid:   bool,
+    pub grow_secs:     f32,
+    pub seed_item:     ItemType,
+    pub tile_stem:     u32,
+    pub tile_side:     u32,
+    pub tile_top:      u32,
+    pub wild_chance:   u32,
+    pub wild_final:    bool,
+}
+
+static WHEAT_HEIGHTS:   [f32; 5] = [0.15, 0.25, 0.40, 0.55, 0.75];
+static PUMPKIN_HEIGHTS: [f32; 4] = [0.15, 0.30, 0.50, 0.70];
+
+pub static CROPS: &[CropDef] = &[
+    CropDef {
+        id: 0, stages: 5, stage_heights: &WHEAT_HEIGHTS,
+        final_solid: false, grow_secs: 30.0,
+        seed_item: ItemType::Seeds,
+        tile_stem: 23, tile_side: 0, tile_top: 0,
+        wild_chance: 80, wild_final: false,
+    },
+    CropDef {
+        id: 1, stages: 4, stage_heights: &PUMPKIN_HEIGHTS,
+        final_solid: true, grow_secs: 30.0,
+        seed_item: ItemType::PumpkinSeeds,
+        tile_stem: 28, tile_side: 32, tile_top: 33,
+        wild_chance: 200, wild_final: true,
+    },
+];
+
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum BlockMaterial { Grass, Dirt, Stone, Wood, Leaves, Sand, Snow }
 
@@ -35,7 +71,7 @@ pub enum BlockType {
     Furnace,
     Lava,
     Cobblestone,
-    Wheat(u8), // growth stage 0–4
+    Crop(u8, u8),     // (crop_id, stage) — see CROPS table
 }
 
 impl BlockType {
@@ -59,15 +95,18 @@ impl BlockType {
             BlockType::Furnace    => [0.50, 0.50, 0.50],
             BlockType::Lava        => [1.00, 0.45, 0.00],
             BlockType::Cobblestone => [0.44, 0.44, 0.44],
-            BlockType::Wheat(_)    => [1.00, 1.00, 1.00],
+            BlockType::Crop(_, _)      => [1.00, 1.00, 1.00],
         }
     }
 
     pub fn is_opaque(&self) -> bool {
         match self {
             BlockType::Air | BlockType::Water | BlockType::Leaves
-            | BlockType::TallGrass | BlockType::GrassShort
-            | BlockType::Wheat(_) => false,
+            | BlockType::TallGrass | BlockType::GrassShort => false,
+            BlockType::Crop(id, stage) => {
+                let def = &CROPS[*id as usize];
+                def.final_solid && *stage == def.stages - 1
+            }
             _ => true,
         }
     }
@@ -75,8 +114,11 @@ impl BlockType {
     pub fn is_solid(&self) -> bool {
         match self {
             BlockType::Air | BlockType::Water | BlockType::Lava
-            | BlockType::TallGrass | BlockType::GrassShort
-            | BlockType::Wheat(_) => false,
+            | BlockType::TallGrass | BlockType::GrassShort => false,
+            BlockType::Crop(id, stage) => {
+                let def = &CROPS[*id as usize];
+                def.final_solid && *stage == def.stages - 1
+            }
             _ => true,
         }
     }
@@ -103,7 +145,10 @@ impl BlockType {
             BlockType::Cobblestone => Some(2.0),
             BlockType::TallGrass  => Some(0.05),
             BlockType::GrassShort => Some(0.05),
-            BlockType::Wheat(_)   => Some(0.05),
+            BlockType::Crop(id, stage)  => {
+                let def = &CROPS[*id as usize];
+                if def.final_solid && *stage == def.stages - 1 { Some(1.0) } else { Some(0.05) }
+            }
             BlockType::Snow       => Some(0.2),
             BlockType::CopperOre  => Some(3.0),
             BlockType::CoalOre    => Some(3.0),
@@ -121,8 +166,7 @@ impl BlockType {
 
     /// Items dropped when this block is broken.
     /// Uses a position hash for deterministic ~50% drop rate on leaves.
-    pub fn drops(&self, wx: i32, wy: i32, wz: i32) -> Vec<crate::world::item::ItemType> {
-        use crate::world::item::ItemType;
+    pub fn drops(&self, wx: i32, wy: i32, wz: i32) -> Vec<ItemType> {
         let hash = (wx.wrapping_mul(374761393)
             .wrapping_add(wy.wrapping_mul(668265263))
             .wrapping_add(wz.wrapping_mul(2147483647))) as u32;
@@ -136,7 +180,14 @@ impl BlockType {
             BlockType::TallGrass | BlockType::GrassShort => {
                 if hash % 20 == 0 { vec![ItemType::Seeds] } else { vec![] }
             }
-            BlockType::Wheat(_) => vec![ItemType::Seeds],
+            BlockType::Crop(id, stage) => {
+                let def = &CROPS[*id as usize];
+                if def.final_solid && *stage == def.stages - 1 {
+                    vec![def.seed_item, def.seed_item]
+                } else {
+                    vec![def.seed_item]
+                }
+            }
             BlockType::Stone     => vec![ItemType::StoneChunk],
             BlockType::Bed       => vec![ItemType::Bed],
             BlockType::CopperOre => vec![ItemType::RawCopper],
@@ -151,8 +202,15 @@ impl BlockType {
 
     pub fn material(&self) -> Option<BlockMaterial> {
         match self {
-            BlockType::Grass | BlockType::TallGrass | BlockType::GrassShort
-            | BlockType::Wheat(_) => Some(BlockMaterial::Grass),
+            BlockType::Grass | BlockType::TallGrass | BlockType::GrassShort => Some(BlockMaterial::Grass),
+            BlockType::Crop(id, stage) => {
+                let def = &CROPS[*id as usize];
+                if def.final_solid && *stage == def.stages - 1 {
+                    Some(BlockMaterial::Wood)
+                } else {
+                    Some(BlockMaterial::Grass)
+                }
+            }
             BlockType::Dirt   => Some(BlockMaterial::Dirt),
             BlockType::Stone  => Some(BlockMaterial::Stone),
             BlockType::Log | BlockType::Bed  => Some(BlockMaterial::Wood),
@@ -198,7 +256,9 @@ impl BlockType {
             BlockType::Furnace    => 15,
             BlockType::Lava        => 16,
             BlockType::Cobblestone => 17,
-            BlockType::Wheat(s)    => 18 + s,
+            BlockType::Crop(0, s) => 18 + s,
+            BlockType::Crop(1, s) => 23 + s,
+            BlockType::Crop(id, s) => 32 + id * 8 + s,
         }
     }
 
@@ -221,11 +281,9 @@ impl BlockType {
             15 => Self::Furnace,
             16 => Self::Lava,
             17 => Self::Cobblestone,
-            18 => Self::Wheat(0),
-            19 => Self::Wheat(1),
-            20 => Self::Wheat(2),
-            21 => Self::Wheat(3),
-            22 => Self::Wheat(4),
+            18..=22 => Self::Crop(0, id - 18),   // wheat stages 0–4
+            23..=26 => Self::Crop(1, id - 23),   // pumpkin stages 0–3 (26 = solid)
+            27      => Self::Crop(1, 3),          // backward compat: old Pumpkin → solid stage
             _  => Self::Air,
         }
     }
@@ -260,23 +318,30 @@ impl BlockType {
             },
             BlockType::Lava        => 21,
             BlockType::Cobblestone => 22,
-            BlockType::Wheat(s)    => 23 + *s as u32,
-        }
-    }
-
-    pub fn wheat_height(stage: u8) -> f32 {
-        match stage {
-            0 => 0.15,
-            1 => 0.25,
-            2 => 0.40,
-            3 => 0.55,
-            _ => 0.75,
+            BlockType::Crop(id, stage) => {
+                let def = &CROPS[*id as usize];
+                if def.final_solid && *stage == def.stages - 1 {
+                    match face {
+                        crate::world::Face::Up => def.tile_top,
+                        _                      => def.tile_side,
+                    }
+                } else {
+                    def.tile_stem + *stage as u32
+                }
+            }
         }
     }
 
     pub fn selection_height(&self) -> f32 {
         match self {
-            BlockType::Wheat(s) => Self::wheat_height(*s),
+            BlockType::Crop(id, stage) => {
+                let def = &CROPS[*id as usize];
+                if def.final_solid && *stage == def.stages - 1 {
+                    1.0
+                } else {
+                    def.stage_heights[(*stage as usize).min(def.stage_heights.len() - 1)]
+                }
+            }
             _ => 1.0,
         }
     }

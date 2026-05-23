@@ -308,6 +308,7 @@ impl ItemRenderer {
                     ItemType::RawIron     => continue, // handled by sprite pass above
                     ItemType::StoneAxe    => continue, // handled by geo pass below
                     ItemType::Torch       => continue, // handled by geo pass below
+                    ItemType::PumpkinSeeds => (self.vao_seeds, self.cube_vert_count),
                 };
 
                 let pos = glam::Vec3::new(

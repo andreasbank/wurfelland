@@ -4,7 +4,7 @@ use std::thread;
 use std::time::Instant;
 
 use crate::world::chunk::{Chunk, NeighborEdges, WaterLevels, SkyLight};
-use crate::world::block::BlockType;
+use crate::world::block::{BlockType, CROPS};
 use crate::world::{SEA_LEVEL, WORLD_HEIGHT_CHUNKS};
 use crate::renderer::ChunkRenderer;
 use crate::renderer::ShadowPass;
@@ -65,7 +65,7 @@ pub struct World {
     active_lava: HashSet<[i32; 3]>,               // lava blocks with air/water below
     active_lava_spread: HashSet<[i32; 3]>,        // lava blocks (level>1) with air/water neighbors at same Y
     lava_levels: HashMap<[i32; 3], Box<[[[u8; 16]; 16]; 16]>>,  // chunk-coord → [lx][ly][lz] lava level
-    active_wheat: HashMap<[i32; 3], f32>,         // wheat position → seconds until next growth stage
+    active_crops: HashMap<[i32; 3], (u8, f32)>,  // pos → (crop_id, seconds until next stage)
     // Player-authored block changes (breaks/placements); applied to newly generated
     // chunks so loaded saves always see the same terrain modifications.
     block_changes: HashMap<[i32; 3], BlockType>,
@@ -109,7 +109,7 @@ impl World {
             active_lava: HashSet::new(),
             active_lava_spread: HashSet::new(),
             lava_levels: HashMap::new(),
-            active_wheat: HashMap::new(),
+            active_crops: HashMap::new(),
             block_changes: HashMap::new(),
             unloaded_columns: Vec::new(),
             loaded_columns:   Vec::new(),
@@ -295,17 +295,18 @@ impl World {
                 }
             }
 
-            // Register any wheat in the chunk for growth ticking (covers both
-            // wild-spawned wheat and player-placed wheat restored from block_changes).
+            // Register growing crops for ticking (covers terrain-spawned and restored player blocks).
             for ly in 0..16usize {
                 for lz in 0..16usize {
                     for lx in 0..16usize {
-                        if let BlockType::Wheat(s) = snapshot[lx][ly][lz] {
-                            if s < 4 {
-                                let pos = [cx * 16 + lx as i32,
-                                           cy * 16 + ly as i32,
-                                           cz * 16 + lz as i32];
-                                self.active_wheat.entry(pos).or_insert(30.0);
+                        let pos = [cx * 16 + lx as i32,
+                                   cy * 16 + ly as i32,
+                                   cz * 16 + lz as i32];
+                        if let BlockType::Crop(id, stage) = snapshot[lx][ly][lz] {
+                            let def = &CROPS[id as usize];
+                            let is_final = def.final_solid && stage == def.stages - 1;
+                            if !is_final {
+                                self.active_crops.entry(pos).or_insert((id, def.grow_secs));
                             }
                         }
                     }
@@ -594,23 +595,29 @@ impl World {
         }
     }
 
-    /// Advance wheat growth and return every position that changed as (pos, new_stage).
+    /// Advance all growing crops and return every position that changed as (pos, new_block).
     /// Caller is responsible for broadcasting changes over the network.
-    pub fn tick_wheat(&mut self, dt: f32) -> Vec<([i32; 3], u8)> {
+    pub fn tick_crops(&mut self, dt: f32) -> Vec<([i32; 3], BlockType)> {
         let mut to_grow: Vec<[i32; 3]> = Vec::new();
-        for (pos, timer) in self.active_wheat.iter_mut() {
+        for (pos, (_, timer)) in self.active_crops.iter_mut() {
             *timer -= dt;
             if *timer <= 0.0 { to_grow.push(*pos); }
         }
         let mut grown = Vec::new();
         for [wx, wy, wz] in to_grow {
             match self.get_block(wx, wy, wz) {
-                BlockType::Wheat(s) if s < 4 => {
-                    let new_stage = s + 1;
-                    self.set_block_recorded(wx, wy, wz, BlockType::Wheat(new_stage));
-                    grown.push(([wx, wy, wz], new_stage));
+                BlockType::Crop(id, stage) => {
+                    let def = &CROPS[id as usize];
+                    let next_stage = stage + 1;
+                    if next_stage < def.stages {
+                        let next = BlockType::Crop(id, next_stage);
+                        self.set_block_recorded(wx, wy, wz, next);
+                        grown.push(([wx, wy, wz], next));
+                    } else {
+                        self.active_crops.remove(&[wx, wy, wz]);
+                    }
                 }
-                _ => { self.active_wheat.remove(&[wx, wy, wz]); }
+                _ => { self.active_crops.remove(&[wx, wy, wz]); }
             }
         }
         grown
@@ -771,10 +778,18 @@ impl World {
         self.refresh_active_spread(wx, wy, wz);
         self.refresh_active_lava(wx, wy, wz);
         self.refresh_active_lava_spread(wx, wy, wz);
-        // Register growing wheat; remove if block is no longer wheat or is fully grown.
+        // Register growing crops; remove when block is replaced or fully grown.
+        let pos = [wx, wy, wz];
         match block {
-            BlockType::Wheat(s) if s < 4 => { self.active_wheat.insert([wx, wy, wz], 30.0); }
-            _ => { self.active_wheat.remove(&[wx, wy, wz]); }
+            BlockType::Crop(id, stage) => {
+                let def = &CROPS[id as usize];
+                if def.final_solid && stage == def.stages - 1 {
+                    self.active_crops.remove(&pos);
+                } else {
+                    self.active_crops.insert(pos, (id, def.grow_secs));
+                }
+            }
+            _ => { self.active_crops.remove(&pos); }
         }
     }
 
