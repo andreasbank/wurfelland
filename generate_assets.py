@@ -368,8 +368,8 @@ def generate_block_atlas():
                     r, g, b = (170, 95, 10) if rib else (220, 130, 20)
                 else:
                     rib   = px_ % 4 == 0
-                    eye   = (5 <= py <= 8) and ((3 <= px_ <= 4) or (11 <= px_ <= 12))
-                    mouth = (py in (11, 12)) and (4 <= px_ <= 11)
+                    eye   = (7 <= py <= 10) and ((3 <= px_ <= 4) or (11 <= px_ <= 12))
+                    mouth = (py in (3, 4)) and (4 <= px_ <= 11)
                     if eye or mouth:
                         r, g, b = 30, 20, 5
                     elif rib:

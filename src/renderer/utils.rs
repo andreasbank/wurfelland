@@ -516,11 +516,11 @@ pub fn create_block_atlas() -> u32 {
                     } else {
                         // Side: orange body with vertical ribs and a simple face cutout
                         let rib = px % 4 == 0;
-                        // Eye slots at rows 5–8, cols 3–4 and 11–12
-                        let eye = (py >= 5 && py <= 8)
+                        // Eye slots at rows 7–10, cols 3–4 and 11–12
+                        let eye = (py >= 7 && py <= 10)
                             && ((px >= 3 && px <= 4) || (px >= 11 && px <= 12));
-                        // Mouth at rows 11–12, cols 4–11
-                        let mouth = (py == 11 || py == 12) && (px >= 4 && px <= 11);
+                        // Mouth at rows 3–4, cols 4–11
+                        let mouth = (py == 3 || py == 4) && (px >= 4 && px <= 11);
                         if eye || mouth {
                             (30, 20, 5)    // dark cutout
                         } else if rib {
