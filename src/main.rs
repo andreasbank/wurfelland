@@ -1656,6 +1656,20 @@ fn main() {
                         skeletons.retain(|s| !s.is_dead());
                         } // end net_client.is_none() guard
 
+                        // Sample sky light for rendering: 0..15 → 0..1
+                        for chicken in &mut chickens {
+                            let [x, y, z] = chicken.position;
+                            chicken.block_light = world.get_sky_light(x as i32, y as i32, z as i32) as f32 / 15.0;
+                        }
+                        for pig in &mut pigs {
+                            let [x, y, z] = pig.position;
+                            pig.block_light = world.get_sky_light(x as i32, y as i32, z as i32) as f32 / 15.0;
+                        }
+                        for skeleton in &mut skeletons {
+                            let [x, y, z] = skeleton.position;
+                            skeleton.block_light = world.get_sky_light(x as i32, y as i32, z as i32) as f32 / 15.0;
+                        }
+
                         item_pickup_cooldown = (item_pickup_cooldown - delta_time).max(0.0);
                         if net_client.is_none() {
                             item_entities.retain(|entity| {
@@ -2103,21 +2117,24 @@ fn main() {
                         ambient_light, directional_light, sun_dir,
                         shadow_pass.depth_texture_array(),
                         shadow_pass.light_space_matrices(),
-                        shadow_pass.texel_world_sizes());
+                        shadow_pass.texel_world_sizes(),
+                        torch_pos, torch_strength);
                     entity_renderer.draw_pigs(&pigs, &view, &projection,
                         fog_start, fog_end, fb_w as f32, fb_h as f32, sky_tex,
                         fog_override, fog_override_color,
                         ambient_light, directional_light, sun_dir,
                         shadow_pass.depth_texture_array(),
                         shadow_pass.light_space_matrices(),
-                        shadow_pass.texel_world_sizes());
+                        shadow_pass.texel_world_sizes(),
+                        torch_pos, torch_strength);
                     entity_renderer.draw_skeletons(&skeletons, &view, &projection,
                         fog_start, fog_end, fb_w as f32, fb_h as f32, sky_tex,
                         fog_override, fog_override_color,
                         ambient_light, directional_light, sun_dir,
                         shadow_pass.depth_texture_array(),
                         shadow_pass.light_space_matrices(),
-                        shadow_pass.texel_world_sizes());
+                        shadow_pass.texel_world_sizes(),
+                        torch_pos, torch_strength);
                     placed_object_renderer.draw_penguins(&penguins, &view, &projection,
                         fog_start, fog_end, fb_w as f32, fb_h as f32, sky_tex,
                         fog_override, fog_override_color,

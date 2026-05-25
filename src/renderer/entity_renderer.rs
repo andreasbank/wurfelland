@@ -164,6 +164,9 @@ pub struct EntityRenderer {
     light_space_loc: i32,
     cascade_ends_loc: i32,
     texel_sizes_loc: i32,
+    torch_pos_loc: i32,
+    torch_strength_loc: i32,
+    block_light_loc: i32,
 }
 
 impl EntityRenderer {
@@ -234,6 +237,9 @@ impl EntityRenderer {
                 uniform mat4  u_light_space[NUM_CASCADES];
                 uniform float u_cascade_ends[NUM_CASCADES];
                 uniform float u_texel_sizes[NUM_CASCADES];
+                uniform vec3  u_torch_pos;
+                uniform float u_torch_strength;
+                uniform float u_block_light;
 
                 float calcShadow(vec3 worldPos, float viewDist) {
                     int cascade = NUM_CASCADES - 1;
@@ -260,8 +266,14 @@ impl EntityRenderer {
                     vec3 fogColor  = mix(skyFog, u_fog_color_override, u_fog_override);
                     float fog_factor = clamp((fragDist - u_fog_start) / (u_fog_end - u_fog_start), 0.0, 1.0);
                     float shadow   = calcShadow(vWorldPos, fragDist);
-                    float light    = u_ambient_light + u_directional_light * (1.0 - shadow);
-                    FragColor = vec4(mix(vColor * light, fogColor, fog_factor), 1.0);
+                    float cave_amb = 0.03;
+                    float sun = u_ambient_light + u_directional_light * (1.0 - shadow);
+                    float effective = mix(cave_amb, sun, u_block_light);
+                    float torch_dist = length(vWorldPos - u_torch_pos);
+                    float torch_atten = max(0.0, 1.0 - torch_dist / 12.0);
+                    torch_atten = torch_atten * sqrt(torch_atten);
+                    vec3 torch_contrib = torch_atten * u_torch_strength * 1.8 * vec3(1.0, 0.82, 0.55);
+                    FragColor = vec4(mix(vColor * (vec3(effective) + torch_contrib), fogColor, fog_factor), 1.0);
                 }
             "#).unwrap();
 
@@ -281,6 +293,9 @@ impl EntityRenderer {
             let light_space_loc        = gl::GetUniformLocation(shader, c"u_light_space".as_ptr());
             let cascade_ends_loc       = gl::GetUniformLocation(shader, c"u_cascade_ends".as_ptr());
             let texel_sizes_loc        = gl::GetUniformLocation(shader, c"u_texel_sizes".as_ptr());
+            let torch_pos_loc          = gl::GetUniformLocation(shader, c"u_torch_pos".as_ptr());
+            let torch_strength_loc     = gl::GetUniformLocation(shader, c"u_torch_strength".as_ptr());
+            let block_light_loc        = gl::GetUniformLocation(shader, c"u_block_light".as_ptr());
 
             EntityRenderer {
                 vao, vbo, pig_vao, pig_vbo, skel_vao, skel_vbo, shader,
@@ -289,6 +304,7 @@ impl EntityRenderer {
                 screen_size_loc, sky_sampler_loc,
                 ambient_light_loc, directional_light_loc, light_dir_loc,
                 shadow_maps_loc, light_space_loc, cascade_ends_loc, texel_sizes_loc,
+                torch_pos_loc, torch_strength_loc, block_light_loc,
             }
         }
     }
@@ -300,6 +316,7 @@ impl EntityRenderer {
         ambient_light: f32, directional_light: f32, sun_dir: glam::Vec3,
         shadow_tex: u32, light_space: &[glam::Mat4; NUM_CASCADES],
         texel_sizes: &[f32; NUM_CASCADES],
+        torch_pos: glam::Vec3, torch_strength: f32,
     ) {
         unsafe {
             gl::UseProgram(self.shader);
@@ -315,6 +332,8 @@ impl EntityRenderer {
             gl::Uniform1fv(self.texel_sizes_loc,   NUM_CASCADES as i32, texel_sizes.as_ptr());
             gl::UniformMatrix4fv(self.light_space_loc, NUM_CASCADES as i32, gl::FALSE,
                 light_space[0].as_ref().as_ptr());
+            gl::Uniform3f(self.torch_pos_loc, torch_pos.x, torch_pos.y, torch_pos.z);
+            gl::Uniform1f(self.torch_strength_loc, torch_strength);
             // Texture unit 4: sky (fog colour)
             gl::Uniform1i(self.sky_sampler_loc, 4);
             gl::ActiveTexture(gl::TEXTURE4);
@@ -331,15 +350,17 @@ impl EntityRenderer {
                          fog_override: f32, fog_color_override: glam::Vec3,
                          ambient_light: f32, directional_light: f32, sun_dir: glam::Vec3,
                          shadow_tex: u32, light_space: &[glam::Mat4; NUM_CASCADES],
-                         texel_sizes: &[f32; NUM_CASCADES]) {
+                         texel_sizes: &[f32; NUM_CASCADES],
+                         torch_pos: glam::Vec3, torch_strength: f32) {
         unsafe {
             gl::Disable(gl::CULL_FACE);
             self.bind_frame_uniforms(fog_start, fog_end, screen_w, screen_h, sky_tex,
                 fog_override, fog_color_override, ambient_light, directional_light, sun_dir,
-                shadow_tex, light_space, texel_sizes);
+                shadow_tex, light_space, texel_sizes, torch_pos, torch_strength);
             gl::BindVertexArray(self.vao);
 
             for chicken in chickens {
+                gl::Uniform1f(self.block_light_loc, chicken.block_light);
                 // Base model: translate to world position, rotate to face yaw
                 let rot_y = -(chicken.yaw.to_radians() + FRAC_PI_2);
                 let model = glam::Mat4::from_translation(glam::Vec3::from(chicken.position))
@@ -385,15 +406,17 @@ impl EntityRenderer {
                      fog_override: f32, fog_color_override: glam::Vec3,
                      ambient_light: f32, directional_light: f32, sun_dir: glam::Vec3,
                      shadow_tex: u32, light_space: &[glam::Mat4; NUM_CASCADES],
-                     texel_sizes: &[f32; NUM_CASCADES]) {
+                     texel_sizes: &[f32; NUM_CASCADES],
+                     torch_pos: glam::Vec3, torch_strength: f32) {
         unsafe {
             gl::Disable(gl::CULL_FACE);
             self.bind_frame_uniforms(fog_start, fog_end, screen_w, screen_h, sky_tex,
                 fog_override, fog_color_override, ambient_light, directional_light, sun_dir,
-                shadow_tex, light_space, texel_sizes);
+                shadow_tex, light_space, texel_sizes, torch_pos, torch_strength);
             gl::BindVertexArray(self.pig_vao);
 
             for pig in pigs {
+                gl::Uniform1f(self.block_light_loc, pig.block_light);
                 let rot_y = -(pig.yaw.to_radians() + FRAC_PI_2);
                 let model = glam::Mat4::from_translation(glam::Vec3::from(pig.position))
                     * glam::Mat4::from_rotation_y(rot_y);
@@ -478,15 +501,17 @@ impl EntityRenderer {
         ambient_light: f32, directional_light: f32, sun_dir: glam::Vec3,
         shadow_tex: u32, light_space: &[glam::Mat4; NUM_CASCADES],
         texel_sizes: &[f32; NUM_CASCADES],
+        torch_pos: glam::Vec3, torch_strength: f32,
     ) {
         unsafe {
             gl::Disable(gl::CULL_FACE);
             self.bind_frame_uniforms(fog_start, fog_end, screen_w, screen_h, sky_tex,
                 fog_override, fog_color_override, ambient_light, directional_light, sun_dir,
-                shadow_tex, light_space, texel_sizes);
+                shadow_tex, light_space, texel_sizes, torch_pos, torch_strength);
             gl::BindVertexArray(self.skel_vao);
 
             for skel in skeletons {
+                gl::Uniform1f(self.block_light_loc, skel.block_light);
                 let rot_y = -(skel.yaw.to_radians() + FRAC_PI_2);
                 let model = glam::Mat4::from_translation(glam::Vec3::from(skel.position))
                     * glam::Mat4::from_rotation_y(rot_y);
