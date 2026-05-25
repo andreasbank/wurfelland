@@ -3,7 +3,7 @@ use std::os::raw::c_void;
 use std::f32::consts::FRAC_PI_2;
 use crate::renderer::utils::{compile_shader, link_program};
 use crate::renderer::shadow_pass::{ShadowPass, NUM_CASCADES, CASCADE_ENDS};
-use crate::world::entity::{Chicken, Pig};
+use crate::world::entity::{Chicken, Pig, Skeleton};
 
 // Vertex format: [x, y, z, r, g, b] — 6 floats
 const STRIDE: usize = 6;
@@ -56,6 +56,40 @@ const PIG_FL_LEG: i32 = VPB * 3;
 const PIG_FR_LEG: i32 = VPB * 4;
 const PIG_BL_LEG: i32 = VPB * 5;
 const PIG_BR_LEG: i32 = VPB * 6;
+
+// Skeleton mesh layout:
+//   [0]   Head  (skull)       — static
+//   [1]   Body  (ribcage)     — static
+//   [2]   Left arm            ← animated (swings on X around shoulder)
+//   [3]   Right arm           ← animated (opposite phase)
+//   [4]   Left leg            ← animated (swings on X around hip)
+//   [5]   Right leg           ← animated (opposite to left arm)
+const SKEL_STATIC_CNT: i32 = VPB * 2; // head + body
+const SKEL_LARM: i32 = VPB * 2;
+const SKEL_RARM: i32 = VPB * 3;
+const SKEL_LLEG: i32 = VPB * 4;
+const SKEL_RLEG: i32 = VPB * 5;
+
+fn build_skeleton_mesh() -> Vec<f32> {
+    let mut v = Vec::new();
+    let bn = [0.90f32, 0.88, 0.82]; // bone ivory
+    let sk = [0.92f32, 0.90, 0.86]; // skull slightly lighter
+
+    // Head (skull): y=1.50..1.80, centered ±0.15
+    add_box(&mut v, -0.15, 1.50, -0.15,  0.15, 1.80,  0.15, sk[0], sk[1], sk[2]);
+    // Body (ribcage): y=0.65..1.50, thin
+    add_box(&mut v, -0.12, 0.65, -0.08,  0.12, 1.50,  0.08, bn[0], bn[1], bn[2]);
+    // Left arm: y=0.65..1.45, outside left
+    add_box(&mut v, -0.27, 0.65, -0.06, -0.15, 1.45,  0.06, bn[0], bn[1], bn[2]);
+    // Right arm: y=0.65..1.45, outside right
+    add_box(&mut v,  0.15, 0.65, -0.06,  0.27, 1.45,  0.06, bn[0], bn[1], bn[2]);
+    // Left leg: y=0..0.65, left of centre
+    add_box(&mut v, -0.13, 0.00, -0.06, -0.03, 0.65,  0.06, bn[0], bn[1], bn[2]);
+    // Right leg: y=0..0.65, right of centre
+    add_box(&mut v,  0.03, 0.00, -0.06,  0.13, 0.65,  0.06, bn[0], bn[1], bn[2]);
+
+    v
+}
 
 fn build_pig_mesh() -> Vec<f32> {
     let mut v = Vec::new();
@@ -112,6 +146,8 @@ pub struct EntityRenderer {
     vbo: u32,
     pig_vao: u32,
     pig_vbo: u32,
+    skel_vao: u32,
+    skel_vbo: u32,
     shader: u32,
     mvp_loc: i32,
     model_loc: i32,
@@ -160,6 +196,7 @@ impl EntityRenderer {
     pub fn new() -> Self {
         let (vao, vbo) = Self::upload_mesh(&build_chicken_mesh());
         let (pig_vao, pig_vbo) = Self::upload_mesh(&build_pig_mesh());
+        let (skel_vao, skel_vbo) = Self::upload_mesh(&build_skeleton_mesh());
 
         unsafe {
 
@@ -246,7 +283,7 @@ impl EntityRenderer {
             let texel_sizes_loc        = gl::GetUniformLocation(shader, c"u_texel_sizes".as_ptr());
 
             EntityRenderer {
-                vao, vbo, pig_vao, pig_vbo, shader,
+                vao, vbo, pig_vao, pig_vbo, skel_vao, skel_vbo, shader,
                 mvp_loc, model_loc,
                 fog_start_loc, fog_end_loc, fog_override_loc, fog_color_override_loc,
                 screen_size_loc, sky_sampler_loc,
@@ -432,6 +469,89 @@ impl EntityRenderer {
             shadow_pass.draw_solid_mesh(self.pig_vao, 0, VPB * 7, &model);
         }
     }
+
+    pub fn draw_skeletons(
+        &self, skeletons: &[Skeleton],
+        view: &glam::Mat4, projection: &glam::Mat4,
+        fog_start: f32, fog_end: f32, screen_w: f32, screen_h: f32, sky_tex: u32,
+        fog_override: f32, fog_color_override: glam::Vec3,
+        ambient_light: f32, directional_light: f32, sun_dir: glam::Vec3,
+        shadow_tex: u32, light_space: &[glam::Mat4; NUM_CASCADES],
+        texel_sizes: &[f32; NUM_CASCADES],
+    ) {
+        unsafe {
+            gl::Disable(gl::CULL_FACE);
+            self.bind_frame_uniforms(fog_start, fog_end, screen_w, screen_h, sky_tex,
+                fog_override, fog_color_override, ambient_light, directional_light, sun_dir,
+                shadow_tex, light_space, texel_sizes);
+            gl::BindVertexArray(self.skel_vao);
+
+            for skel in skeletons {
+                let rot_y = -(skel.yaw.to_radians() + FRAC_PI_2);
+                let model = glam::Mat4::from_translation(glam::Vec3::from(skel.position))
+                    * glam::Mat4::from_rotation_y(rot_y);
+                let mvp = *projection * *view * model;
+
+                gl::UniformMatrix4fv(self.model_loc, 1, gl::FALSE, model.to_cols_array().as_ptr());
+                // Static: head + body
+                gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE, mvp.to_cols_array().as_ptr());
+                gl::DrawArrays(gl::TRIANGLES, 0, SKEL_STATIC_CNT);
+
+                // Limb animation
+                let swing = (skel.anim_time * 7.0 * skel.move_speed_norm()).sin() * 0.60;
+                let pivot_arm_y = 1.45_f32;
+                let pivot_leg_y = 0.65_f32;
+
+                // Left arm (swings forward with right leg)
+                let la_p = glam::Vec3::new(-0.21, pivot_arm_y, 0.0);
+                let la_m = glam::Mat4::from_translation(la_p)
+                    * glam::Mat4::from_rotation_x(swing)
+                    * glam::Mat4::from_translation(-la_p);
+                gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE,
+                    (*projection * *view * model * la_m).to_cols_array().as_ptr());
+                gl::DrawArrays(gl::TRIANGLES, SKEL_LARM, VPB);
+
+                // Right arm (opposite)
+                let ra_p = glam::Vec3::new(0.21, pivot_arm_y, 0.0);
+                let ra_m = glam::Mat4::from_translation(ra_p)
+                    * glam::Mat4::from_rotation_x(-swing)
+                    * glam::Mat4::from_translation(-ra_p);
+                gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE,
+                    (*projection * *view * model * ra_m).to_cols_array().as_ptr());
+                gl::DrawArrays(gl::TRIANGLES, SKEL_RARM, VPB);
+
+                // Left leg (opposite to left arm → same as right arm)
+                let ll_p = glam::Vec3::new(-0.08, pivot_leg_y, 0.0);
+                let ll_m = glam::Mat4::from_translation(ll_p)
+                    * glam::Mat4::from_rotation_x(-swing)
+                    * glam::Mat4::from_translation(-ll_p);
+                gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE,
+                    (*projection * *view * model * ll_m).to_cols_array().as_ptr());
+                gl::DrawArrays(gl::TRIANGLES, SKEL_LLEG, VPB);
+
+                // Right leg (opposite to right arm → same as left arm)
+                let rl_p = glam::Vec3::new(0.08, pivot_leg_y, 0.0);
+                let rl_m = glam::Mat4::from_translation(rl_p)
+                    * glam::Mat4::from_rotation_x(swing)
+                    * glam::Mat4::from_translation(-rl_p);
+                gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE,
+                    (*projection * *view * model * rl_m).to_cols_array().as_ptr());
+                gl::DrawArrays(gl::TRIANGLES, SKEL_RLEG, VPB);
+            }
+
+            gl::BindVertexArray(0);
+            gl::Enable(gl::CULL_FACE);
+        }
+    }
+
+    pub fn draw_skeleton_shadows(&self, skeletons: &[Skeleton], shadow_pass: &ShadowPass) {
+        for skel in skeletons {
+            let rot_y = -(skel.yaw.to_radians() + FRAC_PI_2);
+            let model = glam::Mat4::from_translation(glam::Vec3::from(skel.position))
+                * glam::Mat4::from_rotation_y(rot_y);
+            shadow_pass.draw_solid_mesh(self.skel_vao, 0, VPB * 6, &model);
+        }
+    }
 }
 
 impl Drop for EntityRenderer {
@@ -441,6 +561,8 @@ impl Drop for EntityRenderer {
             gl::DeleteBuffers(1, &self.vbo);
             gl::DeleteVertexArrays(1, &self.pig_vao);
             gl::DeleteBuffers(1, &self.pig_vbo);
+            gl::DeleteVertexArrays(1, &self.skel_vao);
+            gl::DeleteBuffers(1, &self.skel_vbo);
             gl::DeleteProgram(self.shader);
         }
     }

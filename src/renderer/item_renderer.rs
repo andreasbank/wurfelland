@@ -309,6 +309,7 @@ impl ItemRenderer {
                     ItemType::StoneAxe    => continue, // handled by geo pass below
                     ItemType::Torch       => continue, // handled by geo pass below
                     ItemType::PumpkinSeeds => (self.vao_seeds, self.cube_vert_count),
+                    ItemType::Bone         => (self.vao_stone, self.cube_vert_count),
                 };
 
                 let pos = glam::Vec3::new(

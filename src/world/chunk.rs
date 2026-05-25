@@ -705,6 +705,10 @@ impl Chunk {
     /// Called just before dispatching a sky thread.
     pub fn mark_sky_dispatched(&mut self) { self.sky_dirty = false; }
 
+    pub fn get_sky_light_at(&self, lx: usize, ly: usize, lz: usize) -> u8 {
+        self.sky_light[lx][ly][lz]
+    }
+
     /// Returns a copy of the stored sky-light for passing to a mesh thread.
     pub fn sky_snapshot(&self) -> Box<SkyLight> { Box::new(*self.sky_light) }
 

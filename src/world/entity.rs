@@ -546,6 +546,208 @@ impl HittableEntity for Penguin {
     fn is_dead(&self) -> bool { self.is_dead() }
 }
 
+// ─── Skeleton ─────────────────────────────────────────────────────────────────
+
+pub struct Skeleton {
+    pub position: [f32; 3],
+    pub yaw: f32,
+    pub anim_time: f32,
+    pub health: f32,
+    pub def: Arc<EntityDef>,
+    velocity: [f32; 3],
+    on_ground: bool,
+    wander_timer: f32,
+    target_yaw: f32,
+    move_speed: f32,
+    knockback: f32,
+    burn_timer: f32,
+    attack_cooldown: f32,
+}
+
+impl Skeleton {
+    pub fn new(x: f32, y: f32, z: f32, def: Arc<EntityDef>) -> Self {
+        let seed = x * 183.7 + z * 431.3;
+        let init_yaw = seed.rem_euclid(360.0);
+        let speed = def.speed;
+        Skeleton {
+            position: [x, y, z],
+            yaw: init_yaw,
+            anim_time: seed.rem_euclid(6.28),
+            health: def.max_health,
+            def,
+            velocity: [0.0; 3],
+            on_ground: false,
+            wander_timer: seed.rem_euclid(4.0),
+            target_yaw: init_yaw,
+            move_speed: speed,
+            knockback: 0.0,
+            burn_timer: 0.0,
+            attack_cooldown: 0.0,
+        }
+    }
+
+    pub fn is_dead(&self) -> bool { self.health <= 0.0 }
+
+    pub fn aabb_min(&self) -> [f32; 3] {
+        let h = self.def.hit_half_width;
+        [self.position[0] - h, self.position[1], self.position[2] - h]
+    }
+    pub fn aabb_max(&self) -> [f32; 3] {
+        let h = self.def.hit_half_width;
+        [self.position[0] + h, self.position[1] + self.def.height, self.position[2] + h]
+    }
+
+    pub fn take_hit(&mut self, push_dir: [f32; 3]) {
+        self.health -= 1.0;
+        self.velocity[0] = push_dir[0] * 6.0;
+        self.velocity[1] = 5.0;
+        self.velocity[2] = push_dir[2] * 6.0;
+        self.on_ground = false;
+        self.knockback = 0.4;
+        self.target_yaw = push_dir[0].atan2(push_dir[2]).to_degrees() + 180.0;
+        self.move_speed = self.def.speed;
+        self.wander_timer = 2.0;
+    }
+
+    pub fn drops(&self) -> Vec<ItemType> {
+        let s = self.anim_time;
+        self.def.loot.iter().enumerate().filter_map(|(i, entry)| {
+            let r = (s * (183.7 + i as f32 * 61.3)).rem_euclid(1.0);
+            if r < entry.chance { Some(entry.item) } else { None }
+        }).collect()
+    }
+
+    pub fn move_speed_norm(&self) -> f32 {
+        if self.move_speed > 0.0 { 1.0 } else { 0.0 }
+    }
+
+    /// Returns damage dealt to the player this frame (0.0 if none).
+    pub fn update(
+        &mut self,
+        dt: f32,
+        get_block: impl Fn(i32, i32, i32) -> BlockType,
+        get_sky_light: impl Fn(i32, i32, i32) -> u8,
+        player_pos: [f32; 3],
+        sun_angle: f32,
+    ) -> f32 {
+        self.anim_time += dt;
+
+        // Sunburn: direct sky light during daytime deals 1 HP/s.
+        let bx = self.position[0].floor() as i32;
+        let by = self.position[1].floor() as i32 + 1; // head block
+        let bz = self.position[2].floor() as i32;
+        let sky = get_sky_light(bx, by, bz);
+        let is_daytime = sun_angle.sin() > 0.15;
+        if is_daytime && sky >= 12 {
+            self.burn_timer -= dt;
+            if self.burn_timer <= 0.0 {
+                self.health -= 1.0;
+                self.burn_timer = 1.0;
+            }
+        } else {
+            self.burn_timer = self.burn_timer.min(0.0); // reset so it ticks immediately on next sunburn
+        }
+
+        // AI: chase player when in range, otherwise wander.
+        let dx = player_pos[0] - self.position[0];
+        let dz = player_pos[2] - self.position[2];
+        let dist2_xz = dx * dx + dz * dz;
+
+        let habitat = self.def.habitat;
+        if self.knockback > 0.0 {
+            self.knockback -= dt;
+        } else if dist2_xz < 16.0_f32 * 16.0 {
+            self.target_yaw = dx.atan2(dz).to_degrees();
+            self.move_speed = self.def.speed;
+        } else if in_wrong_habitat(self.position, habitat, &get_block) {
+            if let Some(ey) = find_escape_yaw(self.position, self.yaw, habitat, &get_block) {
+                self.target_yaw = ey;
+            }
+            self.move_speed = self.def.speed;
+        } else {
+            self.wander_timer -= dt;
+            if self.wander_timer <= 0.0 {
+                let seed = self.position[0] * 137.1 + self.position[2] * 83.7 + self.anim_time * 53.9;
+                let mut chosen = seed.rem_euclid(360.0);
+                for attempt in 0..4u32 {
+                    let candidate = (seed + attempt as f32 * 107.3).rem_euclid(360.0);
+                    if direction_suits_habitat(self.position, candidate.to_radians(), habitat, &get_block) {
+                        chosen = candidate;
+                        break;
+                    }
+                }
+                self.target_yaw = chosen;
+                let r = (seed * 9.1).rem_euclid(1.0);
+                let (ir, wr) = (self.def.idle_range, self.def.walk_range);
+                if r < self.def.idle_chance {
+                    self.move_speed = 0.0;
+                    self.wander_timer = ir.0 + (seed * 0.01).rem_euclid(ir.1 - ir.0);
+                } else {
+                    self.move_speed = self.def.speed;
+                    self.wander_timer = wr.0 + (seed * 0.01).rem_euclid(wr.1 - wr.0);
+                }
+            }
+        }
+
+        let diff = angle_diff(self.target_yaw, self.yaw);
+        let turn_step = 200.0_f32 * dt;
+        if diff.abs() <= turn_step { self.yaw = self.target_yaw; }
+        else { self.yaw += diff.signum() * turn_step; }
+
+        if self.knockback <= 0.0 {
+            let yr = self.yaw.to_radians();
+            self.velocity[0] = yr.cos() * self.move_speed;
+            self.velocity[2] = yr.sin() * self.move_speed;
+        }
+
+        if !self.on_ground {
+            self.velocity[1] += GRAVITY * dt;
+            self.velocity[1] = self.velocity[1].max(-50.0);
+        }
+
+        let is_solid = |x: i32, y: i32, z: i32| get_block(x, y, z).is_solid();
+        let (hw, ht, js) = (self.def.half_width, self.def.height, self.def.jump_speed);
+
+        self.position[0] += self.velocity[0] * dt;
+        if aabb_collides(self.position, hw, ht, &is_solid) {
+            self.position[0] -= self.velocity[0] * dt;
+            self.velocity[0] = 0.0;
+            if self.on_ground { self.velocity[1] = js; self.on_ground = false; }
+        }
+
+        self.position[1] += self.velocity[1] * dt;
+        if aabb_collides(self.position, hw, ht, &is_solid) {
+            if self.velocity[1] < 0.0 { self.position[1] = self.position[1].floor() + 1.0; self.on_ground = true; }
+            else { self.position[1] = (self.position[1] + ht).floor() - ht; }
+            self.velocity[1] = 0.0;
+        } else { self.on_ground = false; }
+
+        self.position[2] += self.velocity[2] * dt;
+        if aabb_collides(self.position, hw, ht, &is_solid) {
+            self.position[2] -= self.velocity[2] * dt;
+            self.velocity[2] = 0.0;
+            if self.on_ground { self.velocity[1] = js; self.on_ground = false; }
+        }
+
+        // Melee attack: deal 1 damage when close enough and cooldown expired.
+        self.attack_cooldown = (self.attack_cooldown - dt).max(0.0);
+        let dy = player_pos[1] - self.position[1];
+        let dist2_3d = dist2_xz + dy * dy;
+        if dist2_3d < 2.25 && self.attack_cooldown <= 0.0 {
+            self.attack_cooldown = 1.5;
+            1.0
+        } else {
+            0.0
+        }
+    }
+}
+
+impl HittableEntity for Skeleton {
+    fn aabb_min(&self) -> [f32; 3] { self.aabb_min() }
+    fn aabb_max(&self) -> [f32; 3] { self.aabb_max() }
+    fn is_dead(&self) -> bool { self.is_dead() }
+}
+
 /// Slab-method ray vs AABB intersection. Returns entry distance if hit within max_dist.
 pub fn ray_aabb_intersect(
     ro: [f32; 3], rd: [f32; 3],

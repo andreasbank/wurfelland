@@ -957,6 +957,21 @@ impl World {
         }
     }
 
+    pub fn get_sky_light(&self, wx: i32, wy: i32, wz: i32) -> u8 {
+        if wy < 0 || wy >= WORLD_HEIGHT_CHUNKS * 16 { return 0; }
+        let cx = wx.div_euclid(16);
+        let cy = wy.div_euclid(16);
+        let cz = wz.div_euclid(16);
+        let lx = wx.rem_euclid(16) as usize;
+        let ly = wy.rem_euclid(16) as usize;
+        let lz = wz.rem_euclid(16) as usize;
+        if let Some(chunk) = self.chunks.get(&[cx, cy, cz]) {
+            chunk.get_sky_light_at(lx, ly, lz)
+        } else {
+            0
+        }
+    }
+
     pub fn surface_height(&self, wx: i32, wz: i32) -> i32 {
         for y in (0..WORLD_HEIGHT_CHUNKS * 16).rev() {
             let b = self.get_block(wx, y, wz);

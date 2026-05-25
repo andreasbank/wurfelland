@@ -79,11 +79,15 @@ pub struct SaveData {
     #[serde(default)]
     pub hotbar: Vec<InventorySlotSave>,  // reuses same struct; index = hotbar slot 0–8
     #[serde(default)]
+    pub skeletons: Vec<EntitySave>,
+    #[serde(default)]
     pub dormant_chickens: Vec<DormantEntitySave>,
     #[serde(default)]
     pub dormant_pigs:     Vec<DormantEntitySave>,
     #[serde(default)]
     pub dormant_penguins: Vec<DormantEntitySave>,
+    #[serde(default)]
+    pub dormant_skeletons: Vec<DormantEntitySave>,
     /// XZ chunk columns that have already had their initial entity spawn, so we
     /// don't re-populate them on reload.
     #[serde(default)]
