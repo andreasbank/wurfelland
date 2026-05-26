@@ -285,12 +285,17 @@ impl BagRenderer {
     pub fn draw_cursor_item(&self, item: ItemType, count: u32, nx: f32, ny: f32) {
         unsafe {
             gl::Disable(gl::DEPTH_TEST);
+            gl::Disable(gl::CULL_FACE);
             gl::Enable(gl::BLEND);
             gl::BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);
         }
         let half = SLOT_SIZE * 0.5;
         self.draw_item_icon(item, count, nx - half, ny - half);
-        unsafe { gl::Disable(gl::BLEND); gl::Enable(gl::DEPTH_TEST); }
+        unsafe {
+            gl::Disable(gl::BLEND);
+            gl::Enable(gl::CULL_FACE);
+            gl::Enable(gl::DEPTH_TEST);
+        }
     }
 
     /// Draws the bag inventory panel. Layout is defined in [0,1] normalised

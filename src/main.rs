@@ -326,6 +326,8 @@ fn main() {
         let mut hotbar: [Option<(ItemType, u32)>; 9] = [None; 9];
         let mut selected_slot: usize = 0;
         let mut cursor_item: Option<(ItemType, u32)> = None;
+        let mut drag_inv_source: Option<usize> = None;
+        let mut drag_hotbar_source: Option<usize> = None;
         let mut bag_open     = false;
         let mut build_open   = false;
         let mut console_open = false;
@@ -455,6 +457,42 @@ fn main() {
                                 Some(("volume", v))     => { music_volume = v; audio.set_volume(v); }
                                 Some(("sfx_volume", v)) => { sfx_volume = v; audio.set_sfx_volume(v); }
                                 _ => {}
+                            }
+                        }
+                        if bag_open {
+                            let nx = last_mouse_x / win_w;
+                            let ny = last_mouse_y / win_h;
+                            if cursor_item.is_none() {
+                                // Pick up on press — item floats under cursor immediately.
+                                if let Some(inv_idx) = bag_renderer.slot_at_pos(nx, ny) {
+                                    if player.inventory[inv_idx].is_some() {
+                                        cursor_item = player.inventory[inv_idx].take();
+                                        drag_inv_source = Some(inv_idx);
+                                        drag_hotbar_source = None;
+                                    }
+                                } else if let Some(h) = hotbar_renderer.slot_at_pos(last_mouse_x, last_mouse_y, win_w, win_h) {
+                                    if hotbar[h].is_some() {
+                                        cursor_item = hotbar[h].take();
+                                        drag_hotbar_source = Some(h);
+                                        drag_inv_source = None;
+                                    }
+                                }
+                            } else {
+                                // Already holding an item — pressing a slot places it.
+                                if let Some(inv_idx) = bag_renderer.slot_at_pos(nx, ny) {
+                                    let slot = &mut player.inventory[inv_idx];
+                                    match (&mut cursor_item, slot) {
+                                        (Some((ci, cc)), Some((si, sc))) if *ci == *si => { *sc += *cc; cursor_item = None; }
+                                        (cursor, slot) => std::mem::swap(cursor, slot),
+                                    }
+                                    drag_inv_source = Some(inv_idx); drag_hotbar_source = None;
+                                } else if let Some(h) = hotbar_renderer.slot_at_pos(last_mouse_x, last_mouse_y, win_w, win_h) {
+                                    match (&mut cursor_item, &mut hotbar[h]) {
+                                        (Some((ci, cc)), Some((hi, hc))) if *ci == *hi => { *hc += *cc; cursor_item = None; }
+                                        (cursor, slot) => std::mem::swap(cursor, slot),
+                                    }
+                                    drag_inv_source = None; drag_hotbar_source = Some(h);
+                                }
                             }
                         }
                         // Gameplay only — capture cursor and start digging.
@@ -770,28 +808,30 @@ fn main() {
                                         _ => {}
                                     }
                                 } else if bag_open {
-                                    let nx = last_mouse_x / win_w;
-                                    let ny = last_mouse_y / win_h;
-                                    if let Some(inv_idx) = bag_renderer.slot_at_pos(nx, ny) {
-                                        // Swap cursor ↔ inventory slot (stack if same type)
-                                        let slot = &mut player.inventory[inv_idx];
-                                        match (&mut cursor_item, slot) {
-                                            (Some((ci, cc)), Some((si, sc))) if *ci == *si => {
-                                                *sc += *cc;
-                                                cursor_item = None;
+                                    // On release, only complete a drag if the mouse landed on
+                                    // a *different* slot than where the press started.
+                                    // Releasing on the source slot keeps the item floating
+                                    // (click-to-hold mode).
+                                    if cursor_item.is_some() {
+                                        let nx = last_mouse_x / win_w;
+                                        let ny = last_mouse_y / win_h;
+                                        if let Some(inv_idx) = bag_renderer.slot_at_pos(nx, ny) {
+                                            if drag_inv_source != Some(inv_idx) {
+                                                let slot = &mut player.inventory[inv_idx];
+                                                match (&mut cursor_item, slot) {
+                                                    (Some((ci, cc)), Some((si, sc))) if *ci == *si => { *sc += *cc; cursor_item = None; }
+                                                    (cursor, slot) => std::mem::swap(cursor, slot),
+                                                }
+                                                drag_inv_source = None; drag_hotbar_source = None;
                                             }
-                                            (cursor, slot) => std::mem::swap(cursor, slot),
-                                        }
-                                    } else if let Some(h) = hotbar_renderer.slot_at_pos(
-                                        last_mouse_x, last_mouse_y, win_w, win_h,
-                                    ) {
-                                        // Swap cursor ↔ hotbar slot (stack if same type)
-                                        match (&mut cursor_item, &mut hotbar[h]) {
-                                            (Some((ci, cc)), Some((hi, hc))) if *ci == *hi => {
-                                                *hc += *cc;
-                                                cursor_item = None;
+                                        } else if let Some(h) = hotbar_renderer.slot_at_pos(last_mouse_x, last_mouse_y, win_w, win_h) {
+                                            if drag_hotbar_source != Some(h) {
+                                                match (&mut cursor_item, &mut hotbar[h]) {
+                                                    (Some((ci, cc)), Some((hi, hc))) if *ci == *hi => { *hc += *cc; cursor_item = None; }
+                                                    (cursor, slot) => std::mem::swap(cursor, slot),
+                                                }
+                                                drag_inv_source = None; drag_hotbar_source = None;
                                             }
-                                            (cursor, slot) => std::mem::swap(cursor, slot),
                                         }
                                     }
                                 } else if build_open {
@@ -1042,6 +1082,7 @@ fn main() {
                                         first_mouse = true;
                                     } else {
                                         // Return any held cursor item to inventory on close
+                                        drag_inv_source = None; drag_hotbar_source = None;
                                         if let Some(item) = cursor_item.take() {
                                             if !player.pick_up_stack(item.0, item.1) {
                                                 item_entities.push(ItemEntity::new(
