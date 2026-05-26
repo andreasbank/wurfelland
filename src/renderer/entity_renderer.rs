@@ -251,16 +251,18 @@ impl EntityRenderer {
                     for (int i = 0; i < NUM_CASCADES - 1; i++) {
                         if (viewDist < u_cascade_ends[i]) { cascade = i; break; }
                     }
-                    vec3 offset = worldPos + vec3(0.0, u_texel_sizes[cascade], 0.0);
-                    vec4 fragPosLS  = u_light_space[cascade] * vec4(offset, 1.0);
+                    // Offset along the sun direction rather than straight up.
+                    // This changes only the shadow-map depth (not the XY sample),
+                    // so it works correctly at any sun angle including low dawn/dusk.
+                    vec3 biased = worldPos + u_light_dir * u_texel_sizes[cascade] * 2.0;
+                    vec4 fragPosLS  = u_light_space[cascade] * vec4(biased, 1.0);
                     vec3 projCoords = fragPosLS.xyz / fragPosLS.w * 0.5 + 0.5;
                     if (projCoords.z > 1.0) return 1.0;
-                    float currentDepth = projCoords.z - 0.001;
                     float shadow = 0.0;
                     const vec2 texelSize = vec2(1.0 / 2048.0);
                     for (int x = -1; x <= 1; ++x)
                         for (int y = -1; y <= 1; ++y)
-                            shadow += currentDepth > texture(u_shadow_maps,
+                            shadow += projCoords.z > texture(u_shadow_maps,
                                 vec3(projCoords.xy + vec2(x, y) * texelSize, cascade)).r ? 1.0 : 0.0;
                     return shadow / 9.0;
                 }
