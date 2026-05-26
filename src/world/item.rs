@@ -95,6 +95,16 @@ impl ItemType {
         }
     }
 
+    /// Returns the block this item places when right-clicked, if any.
+    pub fn to_placeable_block(self) -> Option<BlockType> {
+        match self {
+            ItemType::LogBlock   => Some(BlockType::Log),
+            ItemType::DirtClump  => Some(BlockType::Dirt),
+            ItemType::StoneChunk => Some(BlockType::Cobblestone),
+            _ => None,
+        }
+    }
+
     pub fn color(&self) -> [f32; 3] {
         match self {
             ItemType::Stick       => [0.55, 0.35, 0.17],

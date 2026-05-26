@@ -959,6 +959,24 @@ fn main() {
                                         }
                                     }
                                 }
+                            } else if let Some(block) = hotbar[selected_slot].and_then(|(item, _)| item.to_placeable_block()) {
+                                if let Some((_hit, adj)) = world.raycast_face(ro, rd, 5.0) {
+                                    if world.get_block(adj[0], adj[1], adj[2]) == BlockType::Air {
+                                        world.set_block_recorded(adj[0], adj[1], adj[2], block);
+                                        let bid = block.to_net_id();
+                                        if let Some(ref mut server) = net_server {
+                                            server.broadcast_block_change(adj[0], adj[1], adj[2], bid);
+                                        }
+                                        if let Some(ref mut client) = net_client {
+                                            client.send_block_place(adj[0], adj[1], adj[2], bid);
+                                        }
+                                        if !god_mode {
+                                            if let Some((_, count)) = &mut hotbar[selected_slot] {
+                                                if *count > 1 { *count -= 1; } else { hotbar[selected_slot] = None; }
+                                            }
+                                        }
+                                    }
+                                }
                             } else if let Some((idx, _)) = nearest_entity_hit(&chickens, ro, rd, 5.0) {
                                 chickens[idx].interact();
                             }
@@ -1701,15 +1719,15 @@ fn main() {
                         // Sample sky light for rendering: 0..15 → 0..1
                         for chicken in &mut chickens {
                             let [x, y, z] = chicken.position;
-                            chicken.block_light = world.get_sky_light(x as i32, y as i32, z as i32) as f32 / 15.0;
+                            chicken.block_light = world.get_sky_light(x as i32, y.ceil() as i32, z as i32) as f32 / 15.0;
                         }
                         for pig in &mut pigs {
                             let [x, y, z] = pig.position;
-                            pig.block_light = world.get_sky_light(x as i32, y as i32, z as i32) as f32 / 15.0;
+                            pig.block_light = world.get_sky_light(x as i32, y.ceil() as i32, z as i32) as f32 / 15.0;
                         }
                         for skeleton in &mut skeletons {
                             let [x, y, z] = skeleton.position;
-                            skeleton.block_light = world.get_sky_light(x as i32, y as i32, z as i32) as f32 / 15.0;
+                            skeleton.block_light = world.get_sky_light(x as i32, y.ceil() as i32, z as i32) as f32 / 15.0;
                         }
 
                         item_pickup_cooldown = (item_pickup_cooldown - delta_time).max(0.0);

@@ -64,12 +64,6 @@ impl MinimapRenderer {
                 float r = length(d);
                 if (r > 0.5) discard;
 
-                // Dark border ring
-                if (r > 0.46) {
-                    FragColor = vec4(0.05, 0.05, 0.05, 0.90);
-                    return;
-                }
-
                 // Heading-up rotation:
                 //   angle = atan2(-front_x, -front_z) is 0 when facing north (front_z=-1)
                 //   rot rotates a disc coord d into a "north-up" world direction rd
@@ -78,6 +72,30 @@ impl MinimapRenderer {
                 mat2 rot = mat2(cs.x, cs.y, -cs.y, cs.x); // col-major: (cosθ, sinθ, -sinθ, cosθ)
 
                 vec2 rd = rot * d;
+
+                // Border ring — north segment red, rest dark
+                if (r > 0.46) {
+                    float north_angle = atan(rd.x, rd.y); // 0 when pointing north
+                    if (abs(north_angle) < 0.20) {
+                        FragColor = vec4(0.95, 0.15, 0.15, 0.95);
+                    } else {
+                        FragColor = vec4(0.05, 0.05, 0.05, 0.90);
+                    }
+                    return;
+                }
+
+                // North arrow: red triangle with tip at rim, base inside disc.
+                // All coords in rd (north-up) space; |rot| preserves length so r == |rd|.
+                vec2 n_tip = vec2( 0.000,  0.455);
+                vec2 n_bl  = vec2(-0.022,  0.400);
+                vec2 n_br  = vec2( 0.022,  0.400);
+                float na0 = (n_bl.x - n_tip.x)*(rd.y - n_tip.y) - (n_bl.y - n_tip.y)*(rd.x - n_tip.x);
+                float na1 = (n_br.x - n_bl.x) *(rd.y - n_bl.y)  - (n_br.y - n_bl.y) *(rd.x - n_bl.x);
+                float na2 = (n_tip.x - n_br.x)*(rd.y - n_br.y)  - (n_tip.y - n_br.y)*(rd.x - n_br.x);
+                if (na0 >= 0.0 && na1 >= 0.0 && na2 >= 0.0) {
+                    FragColor = vec4(1.0, 0.15, 0.15, 1.0);
+                    return;
+                }
 
                 // Sample toroidal terrain (GL_REPEAT wrapping handles the wrap-around).
                 // Z-flip: texture V increases south (+Z), disc Y increases north.

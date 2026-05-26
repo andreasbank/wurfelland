@@ -251,13 +251,13 @@ impl EntityRenderer {
                     for (int i = 0; i < NUM_CASCADES - 1; i++) {
                         if (viewDist < u_cascade_ends[i]) { cascade = i; break; }
                     }
-                    // Offset along the sun direction rather than straight up.
-                    // This changes only the shadow-map depth (not the XY sample),
-                    // so it works correctly at any sun angle including low dawn/dusk.
-                    vec3 biased = worldPos + u_light_dir * u_texel_sizes[cascade] * 2.0;
+                    // Offset the sample point upward — same as the chunk renderer's
+                    // floor-normal offset. Avoids false shadowing from adjacent raised
+                    // blocks without drifting the XY sample into a different block's shadow.
+                    vec3 biased = worldPos + vec3(0.0, u_texel_sizes[cascade] * 2.0, 0.0);
                     vec4 fragPosLS  = u_light_space[cascade] * vec4(biased, 1.0);
                     vec3 projCoords = fragPosLS.xyz / fragPosLS.w * 0.5 + 0.5;
-                    if (projCoords.z > 1.0) return 1.0;
+                    if (projCoords.z > 1.0) return 0.0;
                     float shadow = 0.0;
                     const vec2 texelSize = vec2(1.0 / 2048.0);
                     for (int x = -1; x <= 1; ++x)
@@ -272,8 +272,8 @@ impl EntityRenderer {
                     vec3 skyFog    = texture(u_sky_sampler, screenUV).rgb;
                     vec3 fogColor  = mix(skyFog, u_fog_color_override, u_fog_override);
                     float fog_factor = clamp((fragDist - u_fog_start) / (u_fog_end - u_fog_start), 0.0, 1.0);
-                    float shadow   = calcShadow(vWorldPos, fragDist);
-                    float cave_amb = 0.03;
+                    float shadow    = calcShadow(vWorldPos, fragDist);
+                    float cave_amb  = 0.03;
                     float sun = u_ambient_light + u_directional_light * (1.0 - shadow);
                     float effective = mix(cave_amb, sun, u_block_light);
                     float torch_dist = length(vWorldPos - u_torch_pos);
