@@ -402,6 +402,7 @@ pub struct Penguin {
     pub yaw: f32,
     pub anim_time: f32,
     pub health: f32,
+    #[allow(dead_code)]
     pub block_light: f32,
     pub def: Arc<EntityDef>,
     velocity: [f32; 3],

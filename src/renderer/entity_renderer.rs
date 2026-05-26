@@ -167,6 +167,11 @@ pub struct EntityRenderer {
     torch_pos_loc: i32,
     torch_strength_loc: i32,
     block_light_loc: i32,
+    bar_vao: u32,
+    bar_vbo: u32,
+    bar_shader: u32,
+    bar_mvp_loc: i32,
+    bar_color_loc: i32,
 }
 
 impl EntityRenderer {
@@ -297,6 +302,37 @@ impl EntityRenderer {
             let torch_strength_loc     = gl::GetUniformLocation(shader, c"u_torch_strength".as_ptr());
             let block_light_loc        = gl::GetUniformLocation(shader, c"u_block_light".as_ptr());
 
+            // Billboard health bar — unit quad reused for background + fill
+            let bar_verts: [f32; 18] = [
+                0.0, 0.0, 0.0,  1.0, 0.0, 0.0,  1.0, 1.0, 0.0,
+                0.0, 0.0, 0.0,  1.0, 1.0, 0.0,  0.0, 1.0, 0.0,
+            ];
+            let (mut bar_vao, mut bar_vbo) = (0u32, 0u32);
+            gl::GenVertexArrays(1, &mut bar_vao);
+            gl::GenBuffers(1, &mut bar_vbo);
+            gl::BindVertexArray(bar_vao);
+            gl::BindBuffer(gl::ARRAY_BUFFER, bar_vbo);
+            gl::BufferData(gl::ARRAY_BUFFER,
+                (bar_verts.len() * mem::size_of::<f32>()) as isize,
+                bar_verts.as_ptr() as *const c_void, gl::STATIC_DRAW);
+            gl::VertexAttribPointer(0, 3, gl::FLOAT, gl::FALSE,
+                (3 * mem::size_of::<f32>()) as i32, std::ptr::null());
+            gl::EnableVertexAttribArray(0);
+            gl::BindBuffer(gl::ARRAY_BUFFER, 0);
+            gl::BindVertexArray(0);
+
+            let bar_vert_src = compile_shader(gl::VERTEX_SHADER, r#"#version 330 core
+                layout(location = 0) in vec3 aPos;
+                uniform mat4 mvp;
+                void main() { gl_Position = mvp * vec4(aPos, 1.0); }"#).unwrap();
+            let bar_frag_src = compile_shader(gl::FRAGMENT_SHADER, r#"#version 330 core
+                uniform vec4 u_color;
+                out vec4 FragColor;
+                void main() { FragColor = u_color; }"#).unwrap();
+            let bar_shader    = link_program(bar_vert_src, bar_frag_src).unwrap();
+            let bar_mvp_loc   = gl::GetUniformLocation(bar_shader, c"mvp".as_ptr());
+            let bar_color_loc = gl::GetUniformLocation(bar_shader, c"u_color".as_ptr());
+
             EntityRenderer {
                 vao, vbo, pig_vao, pig_vbo, skel_vao, skel_vbo, shader,
                 mvp_loc, model_loc,
@@ -305,6 +341,7 @@ impl EntityRenderer {
                 ambient_light_loc, directional_light_loc, light_dir_loc,
                 shadow_maps_loc, light_space_loc, cascade_ends_loc, texel_sizes_loc,
                 torch_pos_loc, torch_strength_loc, block_light_loc,
+                bar_vao, bar_vbo, bar_shader, bar_mvp_loc, bar_color_loc,
             }
         }
     }
@@ -342,6 +379,65 @@ impl EntityRenderer {
             gl::Uniform1i(self.shadow_maps_loc, 5);
             gl::ActiveTexture(gl::TEXTURE5);
             gl::BindTexture(gl::TEXTURE_2D_ARRAY, shadow_tex);
+        }
+    }
+
+    /// Draw a billboard health bar above an entity. `bar_y` is the Y offset above the entity's
+    /// feet position where the bar should appear. Only call when health_frac < 1.0.
+    pub fn draw_health_bar(
+        &self,
+        position: [f32; 3],
+        health_frac: f32,
+        bar_y: f32,
+        view: &glam::Mat4,
+        projection: &glam::Mat4,
+    ) {
+        const BAR_W: f32 = 0.5;
+        const BAR_H: f32 = 0.05;
+
+        let cam_right = glam::Vec3::new(view.x_axis.x, view.y_axis.x, view.z_axis.x);
+        let cam_up    = glam::Vec3::new(view.x_axis.y, view.y_axis.y, view.z_axis.y);
+        let cam_fwd   = cam_right.cross(cam_up);
+
+        let origin = glam::Vec3::new(position[0], position[1] + bar_y, position[2])
+            - cam_right * (BAR_W * 0.5)
+            - cam_up    * (BAR_H * 0.5);
+
+        unsafe {
+            gl::Disable(gl::CULL_FACE);
+            gl::UseProgram(self.bar_shader);
+            gl::BindVertexArray(self.bar_vao);
+
+            let bg = glam::Mat4::from_cols(
+                (cam_right * BAR_W).extend(0.0),
+                (cam_up    * BAR_H).extend(0.0),
+                cam_fwd.extend(0.0),
+                origin.extend(1.0),
+            );
+            gl::UniformMatrix4fv(self.bar_mvp_loc, 1, gl::FALSE,
+                (*projection * *view * bg).to_cols_array().as_ptr());
+            gl::Uniform4f(self.bar_color_loc, 0.0, 0.0, 0.0, 1.0);
+            gl::DrawArrays(gl::TRIANGLES, 0, 6);
+
+            let fw = (BAR_W * health_frac.clamp(0.0, 1.0)).max(0.0);
+            if fw > 0.0 {
+                gl::Enable(gl::POLYGON_OFFSET_FILL);
+                gl::PolygonOffset(-1.0, -1.0);
+                let fg = glam::Mat4::from_cols(
+                    (cam_right * fw).extend(0.0),
+                    (cam_up    * BAR_H).extend(0.0),
+                    cam_fwd.extend(0.0),
+                    origin.extend(1.0),
+                );
+                gl::UniformMatrix4fv(self.bar_mvp_loc, 1, gl::FALSE,
+                    (*projection * *view * fg).to_cols_array().as_ptr());
+                gl::Uniform4f(self.bar_color_loc, 0.18, 0.72, 0.18, 1.0);
+                gl::DrawArrays(gl::TRIANGLES, 0, 6);
+                gl::Disable(gl::POLYGON_OFFSET_FILL);
+            }
+
+            gl::BindVertexArray(0);
+            gl::Enable(gl::CULL_FACE);
         }
     }
 
@@ -398,6 +494,13 @@ impl EntityRenderer {
 
             gl::BindVertexArray(0);
             gl::Enable(gl::CULL_FACE);
+        }
+
+        for chicken in chickens {
+            let frac = chicken.health / chicken.def.max_health;
+            if frac < 1.0 {
+                self.draw_health_bar(chicken.position, frac, 1.05, view, projection);
+            }
         }
     }
 
@@ -471,6 +574,13 @@ impl EntityRenderer {
 
             gl::BindVertexArray(0);
             gl::Enable(gl::CULL_FACE);
+        }
+
+        for pig in pigs {
+            let frac = pig.health / pig.def.max_health;
+            if frac < 1.0 {
+                self.draw_health_bar(pig.position, frac, 1.05, view, projection);
+            }
         }
     }
 
@@ -567,6 +677,13 @@ impl EntityRenderer {
             gl::BindVertexArray(0);
             gl::Enable(gl::CULL_FACE);
         }
+
+        for skel in skeletons {
+            let frac = skel.health / skel.def.max_health;
+            if frac < 1.0 {
+                self.draw_health_bar(skel.position, frac, 1.95, view, projection);
+            }
+        }
     }
 
     pub fn draw_skeleton_shadows(&self, skeletons: &[Skeleton], shadow_pass: &ShadowPass) {
@@ -589,6 +706,9 @@ impl Drop for EntityRenderer {
             gl::DeleteVertexArrays(1, &self.skel_vao);
             gl::DeleteBuffers(1, &self.skel_vbo);
             gl::DeleteProgram(self.shader);
+            gl::DeleteVertexArrays(1, &self.bar_vao);
+            gl::DeleteBuffers(1, &self.bar_vbo);
+            gl::DeleteProgram(self.bar_shader);
         }
     }
 }

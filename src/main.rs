@@ -2151,7 +2151,9 @@ fn main() {
                         player_renderer.draw(pos, yaw, &view, &projection, PlayerDrawMode::Full, 0.0,
                             fog_start, fog_end, fb_w as f32, fb_h as f32, sky_tex,
                             fog_override, fog_override_color);
-                        player_renderer.draw_health_bar(pos, health as f32 / 100.0, &view, &projection);
+                        if health < 100 {
+                            player_renderer.draw_health_bar(pos, health as f32 / 100.0, &view, &projection);
+                        }
                     }
                 }
 
