@@ -14,8 +14,8 @@ const SWIM_UP_SPEED: f32 = 3.5;
 const MAX_WATER_FALL: f32 = -2.0;
 const HALF_WIDTH: f32 = 0.3; // Player is 0.6 wide
 const PLAYER_HEIGHT: f32 = 1.8;
-const FLY_SPEED: f32 = 10.0;
-const FLY_MOVE_SPEED: f32 = MOVE_SPEED * 3.0;
+const FLY_SPEED: f32 = 30.0;
+const FLY_MOVE_SPEED: f32 = MOVE_SPEED * 9.0;
 
 pub struct Player {
     pub health: u32,

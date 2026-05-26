@@ -1492,7 +1492,7 @@ fn main() {
                                     dig_sound_timer = 0.0;
                                 }
                                 if let Some(hardness) = block.hardness() {
-                                    let hardness = if god_mode { hardness.min(0.4) } else { hardness };
+                                    let hardness = if god_mode { hardness.min(0.4 / 3.0) } else { hardness };
                                     dig_progress    += delta_time;
                                     dig_sound_timer -= delta_time;
                                     if dig_sound_timer <= 0.0 {
