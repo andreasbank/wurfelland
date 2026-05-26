@@ -19,6 +19,7 @@ pub struct PlacedObjectRenderer {
     ambient_light_loc:   i32,
     directional_light_loc: i32,
     light_dir_loc:       i32,
+    block_light_loc:     i32,
     // shadows
     shadow_maps_loc:     i32,
     light_space_loc:     i32,
@@ -65,6 +66,7 @@ uniform sampler2D        u_sky;
 uniform float            u_ambient_light;
 uniform float            u_directional_light;
 uniform vec3             u_light_dir;
+uniform float            u_block_light;
 uniform sampler2DArray   u_shadow_maps;
 uniform mat4             u_light_space[NUM_CASCADES];
 uniform float            u_cascade_ends[NUM_CASCADES];
@@ -97,7 +99,9 @@ void main() {
     if (col.a < 0.1) discard;
 
     float shadow = calcShadow(vWorldPos, vNormal, fragDist);
-    float light  = u_ambient_light + u_directional_light * (1.0 - shadow);
+    float cave_amb = 0.03;
+    float sun    = u_ambient_light + u_directional_light * (1.0 - shadow);
+    float light  = mix(cave_amb, sun, u_block_light);
     vec3  lit    = col.rgb * light;
 
     // fog
@@ -134,6 +138,7 @@ impl PlacedObjectRenderer {
         let ambient_light_loc     = unsafe { gl::GetUniformLocation(shader, c"u_ambient_light".as_ptr()) };
         let directional_light_loc = unsafe { gl::GetUniformLocation(shader, c"u_directional_light".as_ptr()) };
         let light_dir_loc         = unsafe { gl::GetUniformLocation(shader, c"u_light_dir".as_ptr()) };
+        let block_light_loc       = unsafe { gl::GetUniformLocation(shader, c"u_block_light".as_ptr()) };
 
         let shadow_maps_loc  = unsafe { gl::GetUniformLocation(shader, c"u_shadow_maps".as_ptr()) };
         let light_space_loc  = unsafe { gl::GetUniformLocation(shader, c"u_light_space".as_ptr()) };
@@ -149,7 +154,7 @@ impl PlacedObjectRenderer {
             shader, mvp_loc, model_loc, tex_loc,
             fog_start_loc, fog_end_loc, fog_override_loc, fog_color_ovr_loc,
             screen_size_loc, sky_sampler_loc,
-            ambient_light_loc, directional_light_loc, light_dir_loc,
+            ambient_light_loc, directional_light_loc, light_dir_loc, block_light_loc,
             shadow_maps_loc, light_space_loc, cascade_ends_loc, texel_sizes_loc,
             penguin,
         }
@@ -194,6 +199,7 @@ impl PlacedObjectRenderer {
             gl::Uniform1f(self.ambient_light_loc,     ambient_light);
             gl::Uniform1f(self.directional_light_loc, directional_light);
             gl::Uniform3f(self.light_dir_loc, sun_dir.x, sun_dir.y, sun_dir.z);
+            // block_light is uploaded per-entity in the draw loop below
 
             // shadow cascade
             gl::Uniform1fv(self.cascade_ends_loc, NUM_CASCADES as i32, CASCADE_ENDS.as_ptr());
@@ -219,6 +225,7 @@ impl PlacedObjectRenderer {
             gl::BindVertexArray(model.vao);
 
             for p in penguins {
+                gl::Uniform1f(self.block_light_loc, p.block_light);
                 let roll = p.move_speed_norm() * (p.anim_time * 5.0).sin() * 0.12;
                 let model_mat =
                     glam::Mat4::from_translation(glam::Vec3::from(p.position))

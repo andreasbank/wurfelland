@@ -311,6 +311,7 @@ fn main() {
         let mut penguins: Vec<Penguin> = Vec::new();
         let mut skeletons: Vec<Skeleton> = Vec::new();
         let mut item_entities: Vec<ItemEntity> = Vec::new();
+        let mut entity_broadcast_timer = 0.0f32;
 
         #[derive(Default)]
         struct DormantColumn {
@@ -1828,15 +1829,19 @@ fn main() {
                             player.yaw, player.pitch,
                             player.health.min(255) as u8,
                         );
-                        let to_net = |pos: [f32;3], yaw: f32, health: f32, anim_time: f32| {
-                            net::messages::NetEntity { x: pos[0], y: pos[1], z: pos[2], yaw, health, anim_time }
-                        };
-                        server.broadcast_entity_update(
-                            chickens .iter().map(|e| to_net(e.position, e.yaw, e.health, e.anim_time)).collect(),
-                            pigs     .iter().map(|e| to_net(e.position, e.yaw, e.health, e.anim_time)).collect(),
-                            penguins .iter().map(|e| to_net(e.position, e.yaw, e.health, e.anim_time)).collect(),
-                            skeletons.iter().map(|e| to_net(e.position, e.yaw, e.health, e.anim_time)).collect(),
-                        );
+                        entity_broadcast_timer += delta_time;
+                        if entity_broadcast_timer >= 0.05 {
+                            entity_broadcast_timer = 0.0;
+                            let to_net = |pos: [f32;3], yaw: f32, health: f32| {
+                                net::messages::NetEntity { x: pos[0], y: pos[1], z: pos[2], yaw, health }
+                            };
+                            server.broadcast_entity_update(
+                                chickens .iter().map(|e| to_net(e.position, e.yaw, e.health)).collect(),
+                                pigs     .iter().map(|e| to_net(e.position, e.yaw, e.health)).collect(),
+                                penguins .iter().map(|e| to_net(e.position, e.yaw, e.health)).collect(),
+                                skeletons.iter().map(|e| to_net(e.position, e.yaw, e.health)).collect(),
+                            );
+                        }
                         server.broadcast_time(sun_angle);
                         server.broadcast_item_update(
                             item_entities.iter().map(|e| net::messages::NetItem {
@@ -1877,36 +1882,62 @@ fn main() {
                                     world.set_block(x, y, z, world::BlockType::from_net_id(block_id));
                                 }
                                 ServerMessage::EntityUpdate { chickens: c_net, pigs: p_net, penguins: pen_net, skeletons: skel_net } => {
-                                    chickens.clear();
-                                    for ne in c_net {
-                                        if let Some(def) = entity_registry.get("chicken") {
-                                            let mut e = Chicken::new(ne.x, ne.y, ne.z, def);
-                                            e.yaw = ne.yaw; e.health = ne.health; e.anim_time = ne.anim_time;
-                                            chickens.push(e);
+                                    // If count matches, update interpolation targets in-place.
+                                    // On count change (spawn/death), snap immediately.
+                                    if c_net.len() == chickens.len() {
+                                        for (e, ne) in chickens.iter_mut().zip(&c_net) {
+                                            e.net_target_pos = [ne.x, ne.y, ne.z];
+                                            e.net_target_yaw = ne.yaw;
+                                            e.health = ne.health;
+                                        }
+                                    } else {
+                                        chickens.clear();
+                                        for ne in c_net {
+                                            if let Some(def) = entity_registry.get("chicken") {
+                                                chickens.push(Chicken::new(ne.x, ne.y, ne.z, def));
+                                            }
                                         }
                                     }
-                                    pigs.clear();
-                                    for ne in p_net {
-                                        if let Some(def) = entity_registry.get("pig") {
-                                            let mut e = Pig::new(ne.x, ne.y, ne.z, def);
-                                            e.yaw = ne.yaw; e.health = ne.health; e.anim_time = ne.anim_time;
-                                            pigs.push(e);
+                                    if p_net.len() == pigs.len() {
+                                        for (e, ne) in pigs.iter_mut().zip(&p_net) {
+                                            e.net_target_pos = [ne.x, ne.y, ne.z];
+                                            e.net_target_yaw = ne.yaw;
+                                            e.health = ne.health;
+                                        }
+                                    } else {
+                                        pigs.clear();
+                                        for ne in p_net {
+                                            if let Some(def) = entity_registry.get("pig") {
+                                                pigs.push(Pig::new(ne.x, ne.y, ne.z, def));
+                                            }
                                         }
                                     }
-                                    penguins.clear();
-                                    for ne in pen_net {
-                                        if let Some(def) = entity_registry.get("penguin") {
-                                            let mut e = Penguin::new(ne.x, ne.y, ne.z, def);
-                                            e.yaw = ne.yaw; e.health = ne.health; e.anim_time = ne.anim_time;
-                                            penguins.push(e);
+                                    if pen_net.len() == penguins.len() {
+                                        for (e, ne) in penguins.iter_mut().zip(&pen_net) {
+                                            e.net_target_pos = [ne.x, ne.y, ne.z];
+                                            e.net_target_yaw = ne.yaw;
+                                            e.health = ne.health;
+                                        }
+                                    } else {
+                                        penguins.clear();
+                                        for ne in pen_net {
+                                            if let Some(def) = entity_registry.get("penguin") {
+                                                penguins.push(Penguin::new(ne.x, ne.y, ne.z, def));
+                                            }
                                         }
                                     }
-                                    skeletons.clear();
-                                    for ne in skel_net {
-                                        if let Some(def) = entity_registry.get("skeleton") {
-                                            let mut e = Skeleton::new(ne.x, ne.y, ne.z, def);
-                                            e.yaw = ne.yaw; e.health = ne.health; e.anim_time = ne.anim_time;
-                                            skeletons.push(e);
+                                    if skel_net.len() == skeletons.len() {
+                                        for (e, ne) in skeletons.iter_mut().zip(&skel_net) {
+                                            e.net_target_pos = [ne.x, ne.y, ne.z];
+                                            e.net_target_yaw = ne.yaw;
+                                            e.health = ne.health;
+                                        }
+                                    } else {
+                                        skeletons.clear();
+                                        for ne in skel_net {
+                                            if let Some(def) = entity_registry.get("skeleton") {
+                                                skeletons.push(Skeleton::new(ne.x, ne.y, ne.z, def));
+                                            }
                                         }
                                     }
                                 }
@@ -1935,6 +1966,31 @@ fn main() {
                             player.yaw, player.pitch,
                             player.health.min(255) as u8,
                         );
+
+                        // Lerp rendered entity positions toward the latest server targets.
+                        // Factor of 8 means an entity closes ~98% of its gap in ~0.5s,
+                        // smoothing over the 50ms gap between 20Hz server updates.
+                        let t = (delta_time * 8.0).min(1.0);
+                        for e in &mut chickens {
+                            e.anim_time += delta_time;
+                            for i in 0..3 { e.position[i] += (e.net_target_pos[i] - e.position[i]) * t; }
+                            e.yaw += world::entity::angle_diff(e.net_target_yaw, e.yaw) * t;
+                        }
+                        for e in &mut pigs {
+                            e.anim_time += delta_time;
+                            for i in 0..3 { e.position[i] += (e.net_target_pos[i] - e.position[i]) * t; }
+                            e.yaw += world::entity::angle_diff(e.net_target_yaw, e.yaw) * t;
+                        }
+                        for e in &mut penguins {
+                            e.anim_time += delta_time;
+                            for i in 0..3 { e.position[i] += (e.net_target_pos[i] - e.position[i]) * t; }
+                            e.yaw += world::entity::angle_diff(e.net_target_yaw, e.yaw) * t;
+                        }
+                        for e in &mut skeletons {
+                            e.anim_time += delta_time;
+                            for i in 0..3 { e.position[i] += (e.net_target_pos[i] - e.position[i]) * t; }
+                            e.yaw += world::entity::angle_diff(e.net_target_yaw, e.yaw) * t;
+                        }
                     }
                 }
             }

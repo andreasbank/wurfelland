@@ -91,6 +91,8 @@ pub struct Chicken {
     pub anim_time: f32,
     pub health: f32,
     pub block_light: f32,
+    pub net_target_pos: [f32; 3],
+    pub net_target_yaw: f32,
     pub def: Arc<EntityDef>,
     velocity: [f32; 3],
     on_ground: bool,
@@ -111,6 +113,8 @@ impl Chicken {
             anim_time: seed.rem_euclid(6.28),
             health: def.max_health,
             block_light: 1.0,
+            net_target_pos: [x, y, z],
+            net_target_yaw: init_yaw,
             def,
             velocity: [0.0; 3],
             on_ground: false,
@@ -246,6 +250,8 @@ pub struct Pig {
     pub anim_time: f32,
     pub health: f32,
     pub block_light: f32,
+    pub net_target_pos: [f32; 3],
+    pub net_target_yaw: f32,
     pub def: Arc<EntityDef>,
     velocity: [f32; 3],
     on_ground: bool,
@@ -266,6 +272,8 @@ impl Pig {
             anim_time: seed.rem_euclid(6.28),
             health: def.max_health,
             block_light: 1.0,
+            net_target_pos: [x, y, z],
+            net_target_yaw: init_yaw,
             def,
             velocity: [0.0; 3],
             on_ground: false,
@@ -402,8 +410,9 @@ pub struct Penguin {
     pub yaw: f32,
     pub anim_time: f32,
     pub health: f32,
-    #[allow(dead_code)]
     pub block_light: f32,
+    pub net_target_pos: [f32; 3],
+    pub net_target_yaw: f32,
     pub def: Arc<EntityDef>,
     velocity: [f32; 3],
     on_ground: bool,
@@ -424,6 +433,8 @@ impl Penguin {
             anim_time: seed.rem_euclid(6.28),
             health: def.max_health,
             block_light: 1.0,
+            net_target_pos: [x, y, z],
+            net_target_yaw: init_yaw,
             def,
             velocity: [0.0; 3],
             on_ground: false,
@@ -561,6 +572,8 @@ pub struct Skeleton {
     pub anim_time: f32,
     pub health: f32,
     pub block_light: f32,
+    pub net_target_pos: [f32; 3],
+    pub net_target_yaw: f32,
     pub def: Arc<EntityDef>,
     velocity: [f32; 3],
     on_ground: bool,
@@ -583,6 +596,8 @@ impl Skeleton {
             anim_time: seed.rem_euclid(6.28),
             health: def.max_health,
             block_light: 1.0,
+            net_target_pos: [x, y, z],
+            net_target_yaw: init_yaw,
             def,
             velocity: [0.0; 3],
             on_ground: false,
@@ -799,7 +814,7 @@ pub fn nearest_entity_hit<E: HittableEntity>(
     best
 }
 
-fn angle_diff(target: f32, current: f32) -> f32 {
+pub fn angle_diff(target: f32, current: f32) -> f32 {
     let mut d = target - current;
     while d > 180.0 { d -= 360.0; }
     while d < -180.0 { d += 360.0; }

@@ -17,7 +17,6 @@ pub struct NetEntity {
     pub x: f32, pub y: f32, pub z: f32,
     pub yaw: f32,
     pub health: f32,
-    pub anim_time: f32,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
