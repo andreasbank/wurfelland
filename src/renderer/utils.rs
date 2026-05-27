@@ -540,6 +540,47 @@ pub fn create_block_atlas() -> u32 {
         }
     }
 
+    // Tile 34: WoodBlock — horizontal planks with staggered vertical seams
+    {
+        const TILE_IDX: usize = 34;
+        let tile_col = TILE_IDX % TILES_PER_ROW;
+        let tile_row = TILE_IDX / TILES_PER_ROW;
+        for py in 0..TILE_SIZE {
+            // Each plank row is 4px tall; alternate between two warm tan shades
+            let plank_row = py / 4;
+            let (base_r, base_g, base_b): (i16, i16, i16) = if plank_row % 2 == 0 {
+                (194, 153, 89)   // lighter plank
+            } else {
+                (174, 133, 73)   // darker plank
+            };
+            // Seam line between planks (top pixel of each 4px band)
+            let is_seam_h = py % 4 == 0;
+            for px in 0..TILE_SIZE {
+                let ax = tile_col * TILE_SIZE + px;
+                let ay = tile_row * TILE_SIZE + py;
+                let idx = (ay * ATLAS_SIZE + ax) * 4;
+
+                // Vertical seams staggered: even plank rows seam at col 8, odd at col 0/16
+                let seam_x = if plank_row % 2 == 0 { 8usize } else { 0usize };
+                let is_seam_v = px == seam_x;
+                let is_seam = is_seam_h || is_seam_v;
+
+                let (r, g, b) = if is_seam {
+                    ((base_r - 30).max(0), (base_g - 25).max(0), (base_b - 18).max(0))
+                } else {
+                    // Subtle grain: alternate columns slightly lighter/darker
+                    let grain = if px % 3 == 0 { 6i16 } else if px % 3 == 2 { -4 } else { 0 };
+                    (base_r + grain, base_g + grain, base_b + grain)
+                };
+
+                pixels[idx]     = r.clamp(0, 255) as u8;
+                pixels[idx + 1] = g.clamp(0, 255) as u8;
+                pixels[idx + 2] = b.clamp(0, 255) as u8;
+                pixels[idx + 3] = 255;
+            }
+        }
+    }
+
     unsafe {
         let mut texture_id = 0;
         gl::GenTextures(1, &mut texture_id);

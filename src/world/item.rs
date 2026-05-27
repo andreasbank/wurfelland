@@ -21,6 +21,7 @@ pub enum ItemType {
     PumpkinSeeds,
     Bone,
     CatItem,
+    WoodBlock,
 }
 
 impl ItemType {
@@ -46,6 +47,7 @@ impl ItemType {
             ItemType::PumpkinSeeds  => 16,
             ItemType::Bone          => 17,
             ItemType::CatItem       => 18,
+            ItemType::WoodBlock     => 19,
         }
     }
 
@@ -70,6 +72,7 @@ impl ItemType {
             16 => Some(Self::PumpkinSeeds),
             17 => Some(Self::Bone),
             18 => Some(Self::CatItem),
+            19 => Some(Self::WoodBlock),
             _  => None,
         }
     }
@@ -95,6 +98,7 @@ impl ItemType {
             "pumpkin_seeds"  => Some(Self::PumpkinSeeds),
             "bone"           => Some(Self::Bone),
             "cat_item"       => Some(Self::CatItem),
+            "wood_block"     => Some(Self::WoodBlock),
             _                => None,
         }
     }
@@ -105,6 +109,7 @@ impl ItemType {
             ItemType::LogBlock   => Some(BlockType::Log),
             ItemType::DirtClump  => Some(BlockType::Dirt),
             ItemType::StoneChunk => Some(BlockType::Cobblestone),
+            ItemType::WoodBlock  => Some(BlockType::WoodBlock),
             _ => None,
         }
     }
@@ -130,6 +135,7 @@ impl ItemType {
             ItemType::PumpkinSeeds => [0.85, 0.65, 0.15],
             ItemType::Bone         => [0.91, 0.89, 0.83],
             ItemType::CatItem      => [0.80, 0.50, 0.18],
+            ItemType::WoodBlock    => [0.76, 0.60, 0.35],
         }
     }
 }

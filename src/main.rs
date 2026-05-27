@@ -245,7 +245,7 @@ fn main() {
     });
 
     unsafe {
-        let chunk_renderer  = ChunkRenderer::new().unwrap();
+        let mut chunk_renderer  = ChunkRenderer::new().unwrap();
         let mut shadow_pass = ShadowPass::new().unwrap();
         let sun_renderer    = SunRenderer::new().unwrap();
         let sky_renderer    = SkyRenderer::new("sky.hdr").unwrap();
@@ -376,6 +376,8 @@ fn main() {
         let mut sun_angle: f32 = std::f32::consts::FRAC_PI_4;
         let mut total_time: f32 = 0.0;
         let mut time_frozen: bool = false;
+        let mut entities_frozen: bool = false;
+        let mut time_speed: f32 = 1.0;
 
         // Digging / hit state
         let mut lmb_held = false;
@@ -1093,13 +1095,39 @@ fn main() {
                                             sun_angle = 3.0 * std::f32::consts::FRAC_PI_2;
                                             console.push_line("TIME SET TO NIGHT");
                                         }
-                                        ConsoleAction::FreezeTime => {
-                                            time_frozen = !time_frozen;
-                                            if time_frozen {
-                                                console.push_line("TIME FROZEN");
-                                            } else {
-                                                console.push_line("TIME UNFROZEN");
-                                            }
+                                        ConsoleAction::StopTime => {
+                                            time_frozen = true;
+                                            console.push_line("TIME STOPPED");
+                                        }
+                                        ConsoleAction::StartTime => {
+                                            time_frozen = false;
+                                            console.push_line("TIME RESUMED");
+                                        }
+                                        ConsoleAction::StopEntities => {
+                                            entities_frozen = true;
+                                            console.push_line("ENTITIES FROZEN");
+                                        }
+                                        ConsoleAction::StartEntities => {
+                                            entities_frozen = false;
+                                            console.push_line("ENTITIES RESUMED");
+                                        }
+                                        ConsoleAction::FreezeWorld => {
+                                            time_frozen = true;
+                                            entities_frozen = true;
+                                            console.push_line("WORLD FROZEN");
+                                        }
+                                        ConsoleAction::UnfreezeWorld => {
+                                            time_frozen = false;
+                                            entities_frozen = false;
+                                            console.push_line("WORLD UNFROZEN");
+                                        }
+                                        ConsoleAction::TimeSpeed(v) => {
+                                            time_speed = v;
+                                            console.push_line(&format!("TIME SPEED: {}", v));
+                                        }
+                                        ConsoleAction::ColoredChunks(v) => {
+                                            chunk_renderer.set_colored_chunks(v);
+                                            console.push_line(if v { "COLORED CHUNKS ON" } else { "COLORED CHUNKS OFF" });
                                         }
                                         ConsoleAction::None => {}
                                     }
@@ -1638,11 +1666,13 @@ fn main() {
 
                         swing_time = if lmb_held { swing_time + delta_time } else { 0.0 };
 
+                        if !entities_frozen {
                         for entity in &mut item_entities {
                             entity.update(delta_time, |x, y, z| world.get_block(x, y, z));
                         }
+                        }
                         // Clients receive entity state from the server; skip local simulation.
-                        if net_client.is_none() {
+                        if net_client.is_none() && !entities_frozen {
                         // Compute simulation radius² for this frame.
                         let sim_r = SIM_RADII[entity_sim_radius_idx];
                         let sim_r2 = if sim_r == 0 { i32::MAX } else { sim_r * sim_r };
@@ -1756,19 +1786,19 @@ fn main() {
                         // Sample sky light for rendering: 0..15 → 0..1
                         for chicken in &mut chickens {
                             let [x, y, z] = chicken.position;
-                            chicken.block_light = world.get_sky_light(x as i32, y.ceil() as i32, z as i32) as f32 / 15.0;
+                            chicken.block_light = world.get_sky_light(x.floor() as i32, y.ceil() as i32, z.floor() as i32) as f32 / 15.0;
                         }
                         for pig in &mut pigs {
                             let [x, y, z] = pig.position;
-                            pig.block_light = world.get_sky_light(x as i32, y.ceil() as i32, z as i32) as f32 / 15.0;
+                            pig.block_light = world.get_sky_light(x.floor() as i32, y.ceil() as i32, z.floor() as i32) as f32 / 15.0;
                         }
                         for skeleton in &mut skeletons {
                             let [x, y, z] = skeleton.position;
-                            skeleton.block_light = world.get_sky_light(x as i32, y.ceil() as i32, z as i32) as f32 / 15.0;
+                            skeleton.block_light = world.get_sky_light(x.floor() as i32, y.ceil() as i32, z.floor() as i32) as f32 / 15.0;
                         }
                         for cat in &mut cats {
                             let [x, y, z] = cat.position;
-                            cat.block_light = world.get_sky_light(x as i32, y.ceil() as i32, z as i32) as f32 / 15.0;
+                            cat.block_light = world.get_sky_light(x.floor() as i32, y.ceil() as i32, z.floor() as i32) as f32 / 15.0;
                         }
 
                         item_pickup_cooldown = (item_pickup_cooldown - delta_time).max(0.0);
@@ -2126,7 +2156,7 @@ fn main() {
             // Clients receive sun_angle from the server; only advance it locally in
             // singleplayer or when hosting.
             if !time_frozen && net_client.is_none() {
-                sun_angle += delta_time * (std::f32::consts::TAU / DAY_LENGTH_SECS);
+                sun_angle += delta_time * time_speed * (std::f32::consts::TAU / DAY_LENGTH_SECS);
                 if sun_angle > std::f32::consts::TAU { sun_angle -= std::f32::consts::TAU; }
             }
 

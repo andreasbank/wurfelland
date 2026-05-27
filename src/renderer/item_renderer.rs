@@ -311,6 +311,7 @@ impl ItemRenderer {
                     ItemType::PumpkinSeeds => (self.vao_seeds, self.cube_vert_count),
                     ItemType::Bone         => (self.vao_stone, self.cube_vert_count),
                     ItemType::CatItem      => (self.vao_stone, self.cube_vert_count),
+                    ItemType::WoodBlock    => (self.vao_stone, self.cube_vert_count),
                 };
 
                 let pos = glam::Vec3::new(

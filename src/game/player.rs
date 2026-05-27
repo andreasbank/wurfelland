@@ -14,8 +14,8 @@ const SWIM_UP_SPEED: f32 = 3.5;
 const MAX_WATER_FALL: f32 = -2.0;
 const HALF_WIDTH: f32 = 0.3; // Player is 0.6 wide
 const PLAYER_HEIGHT: f32 = 1.8;
-const FLY_SPEED: f32 = 30.0;
-const FLY_MOVE_SPEED: f32 = MOVE_SPEED * 9.0;
+const FLY_SPEED: f32 = 21.0;
+const FLY_MOVE_SPEED: f32 = MOVE_SPEED * 6.3;
 
 pub struct Player {
     pub health: u32,
@@ -37,6 +37,7 @@ impl Player {
         inventory[0] = Some((ItemType::StoneAxe, 1));
         inventory[1] = Some((ItemType::Torch, 10));
         inventory[2] = Some((ItemType::CatItem, 50));
+        inventory[3] = Some((ItemType::WoodBlock, 64));
         Player {
             health: 100,
             position: [0.0, 64.0, 0.0],

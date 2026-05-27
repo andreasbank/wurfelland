@@ -4,6 +4,19 @@ use gl::types::GLchar;
 use std::ptr;
 use crate::world::chunk::Chunk;
 
+fn chunk_tint(cx: i32, cz: i32) -> [f32; 3] {
+    const TINTS: [[f32; 3]; 6] = [
+        [1.30, 0.75, 0.75], // red
+        [1.20, 1.10, 0.60], // yellow
+        [0.75, 1.30, 0.75], // green
+        [0.60, 1.15, 1.20], // cyan
+        [0.75, 0.75, 1.35], // blue
+        [1.20, 0.70, 1.20], // purple
+    ];
+    let idx = (cx.rem_euclid(3) + cz.rem_euclid(3) * 3) as usize % 6;
+    TINTS[idx]
+}
+
 struct UniformLocations {
     model: i32,
     view: i32,
@@ -34,6 +47,8 @@ struct UniformLocations {
     refraction_sampler: i32,
     water_level: i32,
     sky_sampler: i32,
+    colored_chunks: i32,
+    chunk_color: i32,
 }
 
 
@@ -44,6 +59,7 @@ pub struct ChunkRenderer {
     depth_tex: u32,
     refraction_tex: u32,
     sky_tex: u32,
+    colored_chunks: bool,
 }
 
 impl ChunkRenderer {
@@ -146,6 +162,8 @@ impl ChunkRenderer {
                 uniform float u_water_level;
                 uniform vec3  u_torch_pos;
                 uniform float u_torch_strength;
+                uniform bool  u_colored_chunks;
+                uniform vec3  u_chunk_color;
 
                 vec2 waveGrad(vec2 pos, vec2 dir, float k, float amp, float speed) {
                     return dir * (k * amp * cos(dot(dir, pos) * k + u_time * speed));
@@ -211,6 +229,7 @@ impl ChunkRenderer {
                     torch_atten = torch_atten * sqrt(torch_atten);
                     vec3 torch_contrib = torch_atten * u_torch_strength * 1.8 * vec3(1.0, 0.82, 0.55);
                     vec3  color  = texSample.rgb * ourColor * (vec3(sun_light) + torch_contrib);
+                    color = mix(color, color * u_chunk_color, float(u_colored_chunks) * 0.5);
 
                     // ── Water surface ────────────────────────────────────────────
                     if (transparent_pass && vNormal.y > 0.5) {
@@ -344,6 +363,8 @@ impl ChunkRenderer {
             let refraction_sampler_loc  = gl::GetUniformLocation(shader, c"u_refraction_sampler".as_ptr());
             let water_level_loc         = gl::GetUniformLocation(shader, c"u_water_level".as_ptr());
             let sky_sampler_loc         = gl::GetUniformLocation(shader, c"u_sky_sampler".as_ptr());
+            let colored_chunks_loc      = gl::GetUniformLocation(shader, c"u_colored_chunks".as_ptr());
+            let chunk_color_loc         = gl::GetUniformLocation(shader, c"u_chunk_color".as_ptr());
 
             let texture_atlas = create_block_atlas();
 
@@ -386,6 +407,7 @@ impl ChunkRenderer {
                 depth_tex,
                 refraction_tex,
                 sky_tex,
+                colored_chunks: false,
                 uniforms: UniformLocations {
                     model: model_loc,
                     view: view_loc,
@@ -414,6 +436,8 @@ impl ChunkRenderer {
                     refraction_sampler: refraction_sampler_loc,
                     water_level: water_level_loc,
                     sky_sampler: sky_sampler_loc,
+                    colored_chunks: colored_chunks_loc,
+                    chunk_color: chunk_color_loc,
                 },
             })
         }
@@ -484,6 +508,7 @@ impl ChunkRenderer {
             gl::Uniform1i(self.uniforms.refraction_sampler, 3);
             gl::Uniform1f(self.uniforms.water_level, water_level);
             gl::Uniform1i(self.uniforms.sky_sampler, 4);
+            gl::Uniform1i(self.uniforms.colored_chunks, self.colored_chunks as i32);
             gl::ActiveTexture(gl::TEXTURE2);
             gl::BindTexture(gl::TEXTURE_2D, self.depth_tex);
             gl::ActiveTexture(gl::TEXTURE3);
@@ -560,6 +585,10 @@ impl ChunkRenderer {
         }
     }
 
+    pub fn set_colored_chunks(&mut self, enabled: bool) {
+        self.colored_chunks = enabled;
+    }
+
     pub fn draw_chunk(&self, chunk: &Chunk) {
         let mesh = match &chunk.mesh {
             Some(m) => m,
@@ -567,6 +596,8 @@ impl ChunkRenderer {
         };
 
         unsafe {
+            let tint = chunk_tint(chunk.position[0], chunk.position[2]);
+            gl::Uniform3f(self.uniforms.chunk_color, tint[0], tint[1], tint[2]);
             let model = chunk.model_matrix();
             gl::UniformMatrix4fv(self.uniforms.model, 1, gl::FALSE, model.as_ref().as_ptr());
             gl::BindVertexArray(mesh.vao);

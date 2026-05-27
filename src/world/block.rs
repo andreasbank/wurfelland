@@ -71,6 +71,7 @@ pub enum BlockType {
     Furnace,
     Lava,
     Cobblestone,
+    WoodBlock,
     Crop(u8, u8),     // (crop_id, stage) — see CROPS table
 }
 
@@ -95,7 +96,8 @@ impl BlockType {
             BlockType::Furnace    => [0.50, 0.50, 0.50],
             BlockType::Lava        => [1.00, 0.45, 0.00],
             BlockType::Cobblestone => [0.44, 0.44, 0.44],
-            BlockType::Crop(_, _)      => [1.00, 1.00, 1.00],
+            BlockType::WoodBlock   => [0.76, 0.60, 0.35],
+            BlockType::Crop(_, _)  => [1.00, 1.00, 1.00],
         }
     }
 
@@ -159,6 +161,7 @@ impl BlockType {
             BlockType::Dirt       => Some(0.5),
             BlockType::Sand       => Some(0.5),
             BlockType::Log        => Some(1.5),
+            BlockType::WoodBlock  => Some(1.5),
             BlockType::Stone      => Some(3.0),
             BlockType::Bed        => Some(0.5),
         }
@@ -196,6 +199,7 @@ impl BlockType {
             BlockType::Furnace   => vec![ItemType::Furnace],
             BlockType::Lava        => vec![],
             BlockType::Cobblestone => vec![ItemType::StoneChunk],
+            BlockType::WoodBlock   => vec![ItemType::WoodBlock],
             _ => vec![],
         }
     }
@@ -213,7 +217,7 @@ impl BlockType {
             }
             BlockType::Dirt   => Some(BlockMaterial::Dirt),
             BlockType::Stone  => Some(BlockMaterial::Stone),
-            BlockType::Log | BlockType::Bed  => Some(BlockMaterial::Wood),
+            BlockType::Log | BlockType::Bed | BlockType::WoodBlock => Some(BlockMaterial::Wood),
             BlockType::CopperOre             => Some(BlockMaterial::Stone),
             BlockType::CoalOre               => Some(BlockMaterial::Stone),
             BlockType::IronOre               => Some(BlockMaterial::Stone),
@@ -256,6 +260,7 @@ impl BlockType {
             BlockType::Furnace    => 15,
             BlockType::Lava        => 16,
             BlockType::Cobblestone => 17,
+            BlockType::WoodBlock   => 28,
             BlockType::Crop(0, s) => 18 + s,
             BlockType::Crop(1, s) => 23 + s,
             BlockType::Crop(id, s) => 32 + id * 8 + s,
@@ -284,6 +289,7 @@ impl BlockType {
             18..=22 => Self::Crop(0, id - 18),   // wheat stages 0–4
             23..=26 => Self::Crop(1, id - 23),   // pumpkin stages 0–3 (26 = solid)
             27      => Self::Crop(1, 3),          // backward compat: old Pumpkin → solid stage
+            28 => Self::WoodBlock,
             _  => Self::Air,
         }
     }
@@ -318,6 +324,7 @@ impl BlockType {
             },
             BlockType::Lava        => 21,
             BlockType::Cobblestone => 22,
+            BlockType::WoodBlock   => 34,
             BlockType::Crop(id, stage) => {
                 let def = &CROPS[*id as usize];
                 if def.final_solid && *stage == def.stages - 1 {

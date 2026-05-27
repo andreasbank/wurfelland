@@ -18,7 +18,14 @@ pub enum ConsoleAction {
     GodMode,
     Day,
     Night,
-    FreezeTime,
+    StopTime,
+    StartTime,
+    StopEntities,
+    StartEntities,
+    FreezeWorld,
+    UnfreezeWorld,
+    TimeSpeed(f32),
+    ColoredChunks(bool),
 }
 
 pub struct ConsoleRenderer {
@@ -61,7 +68,11 @@ impl ConsoleRenderer {
         self.input.clear();
         self.input_dirty = true;
 
-        match cmd.as_str() {
+        let mut parts = cmd.splitn(2, ' ');
+        let verb = parts.next().unwrap_or("");
+        let arg  = parts.next().unwrap_or("").trim();
+
+        match verb {
             "help" => {
                 self.push_line(&format!("{} V{}", GAME_NAME, GAME_VERSION));
                 self.push_line("COMMANDS:");
@@ -69,14 +80,39 @@ impl ConsoleRenderer {
                 self.push_line("  GODMODE    -  TOGGLE GOD MODE");
                 self.push_line("  DAY        -  SET TIME TO DAY");
                 self.push_line("  NIGHT      -  SET TIME TO NIGHT");
-                self.push_line("  FREEZE     -  TOGGLE TIME FREEZE");
-                self.push_line("  EXIT       -  QUIT THE GAME");
+                self.push_line("  STOPTIME     -  FREEZE TIME");
+                self.push_line("  STARTTIME    -  RESUME TIME");
+                self.push_line("  STOPENTITIES -  FREEZE ALL ENTITIES");
+                self.push_line("  STARTENTITIES - RESUME ALL ENTITIES");
+                self.push_line("  FREEZEWORLD  -  FREEZE ENTITIES + TIME");
+                self.push_line("  UNFREEZEWORLD - RESUME EVERYTHING");
+                self.push_line("  TIMESPEED <F>       -  SET TIME SPEED (1.0=NORMAL)");
+                self.push_line("  COLOREDCHUNKS ON/OFF - TINT CHUNKS BY POSITION");
+                self.push_line("  EXIT         -  QUIT THE GAME");
             }
             "exit" => return ConsoleAction::Exit,
             "godmode" => return ConsoleAction::GodMode,
             "day" => return ConsoleAction::Day,
             "night" => return ConsoleAction::Night,
-            "freeze" | "stoptime" => return ConsoleAction::FreezeTime,
+            "stoptime" => return ConsoleAction::StopTime,
+            "starttime" => return ConsoleAction::StartTime,
+            "stopentities" => return ConsoleAction::StopEntities,
+            "startentities" => return ConsoleAction::StartEntities,
+            "freezeworld" => return ConsoleAction::FreezeWorld,
+            "unfreezeworld" => return ConsoleAction::UnfreezeWorld,
+            "timespeed" => {
+                match arg.parse::<f32>() {
+                    Ok(v) if v >= 0.0 => return ConsoleAction::TimeSpeed(v),
+                    _ => self.push_line("USAGE: TIMESPEED <POSITIVE NUMBER>"),
+                }
+            }
+            "coloredchunks" => {
+                match arg {
+                    "on"  => return ConsoleAction::ColoredChunks(true),
+                    "off" => return ConsoleAction::ColoredChunks(false),
+                    _ => self.push_line("USAGE: COLOREDCHUNKS ON/OFF"),
+                }
+            }
             "" => {}
             _ => {
                 self.push_line(&format!("UNKNOWN COMMAND: {}", cmd.to_uppercase()));

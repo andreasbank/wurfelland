@@ -890,7 +890,6 @@ impl Cat {
         }
     }
 
-    pub fn drops(&self) -> Vec<ItemType> { vec![] }
 
     pub fn move_speed_norm(&self) -> f32 {
         if self.move_speed > 0.0 { 1.0 } else { 0.0 }

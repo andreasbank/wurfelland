@@ -143,6 +143,7 @@ impl ChunkOutlineRenderer {
     pub fn draw_chunks(&self, positions: &[[i32; 3]], view: &glam::Mat4, projection: &glam::Mat4) {
         self.begin_overlay();
         unsafe {
+            gl::LineWidth(3.0);
             gl::Uniform4f(self.color_loc, 1.0, 0.0, 1.0, 0.6); // magenta
             gl::BindVertexArray(self.vao);
             for &[cx, cy, cz] in positions {
@@ -153,6 +154,7 @@ impl ChunkOutlineRenderer {
                 gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE, mvp.to_cols_array().as_ptr());
                 gl::DrawArrays(gl::LINES, 0, 24);
             }
+            gl::LineWidth(1.0);
         }
         self.end_overlay();
     }
