@@ -1469,6 +1469,10 @@ fn main() {
                             if space_held { player.fly_up(); }
                             else if shift_held { player.fly_down(); }
                         }
+                        // Variable jump height: extra deceleration while ascending with space released
+                        if !player.flying && !in_water && !player.on_ground && player.velocity[1] > 0.0 && !space_held {
+                            player.velocity[1] = (player.velocity[1] - 40.0 * delta_time).max(0.0);
+                        }
                         player.apply_physics(delta_time, in_water, |x, y, z| world.get_block(x, y, z).is_solid());
                         // Landing stops flight only outside godmode; in godmode the player
                         // walks on the ground when not holding space.
