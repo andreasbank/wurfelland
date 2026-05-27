@@ -19,8 +19,9 @@ pub struct GameServer {
     remote_players: HashMap<u64, RemotePlayer>,
     pending_block_breaks:   Vec<[i32; 3]>,
     pending_block_places:   Vec<[i32; 4]>,
-    pending_entity_attacks: Vec<(u8, u32, f32, f32)>, // (kind, index, push_x, push_z)
-    pending_item_pickups:   Vec<(u64, [f32; 3])>,     // (client_id, position)
+    pending_entity_attacks:   Vec<(u8, u32, f32, f32)>, // (kind, index, push_x, push_z)
+    pending_entity_interacts: Vec<(u8, u32)>,           // (kind, index)
+    pending_item_pickups:     Vec<(u64, [f32; 3])>,     // (client_id, position)
     seed: u32,
 }
 
@@ -51,8 +52,9 @@ impl GameServer {
             remote_players: HashMap::new(),
             pending_block_breaks: Vec::new(),
             pending_block_places: Vec::new(),
-            pending_entity_attacks: Vec::new(),
-            pending_item_pickups: Vec::new(),
+            pending_entity_attacks:   Vec::new(),
+            pending_entity_interacts: Vec::new(),
+            pending_item_pickups:     Vec::new(),
             seed,
         })
     }
@@ -130,6 +132,9 @@ impl GameServer {
                         ClientMessage::AttackEntity { kind, index, push_x, push_z } => {
                             self.pending_entity_attacks.push((kind, index, push_x, push_z));
                         }
+                        ClientMessage::InteractEntity { kind, index } => {
+                            self.pending_entity_interacts.push((kind, index));
+                        }
                         ClientMessage::PickupItem { x, y, z } => {
                             self.pending_item_pickups.push((client_id, [x, y, z]));
                         }
@@ -174,6 +179,10 @@ impl GameServer {
         std::mem::take(&mut self.pending_entity_attacks)
     }
 
+    pub fn drain_entity_interacts(&mut self) -> Vec<(u8, u32)> {
+        std::mem::take(&mut self.pending_entity_interacts)
+    }
+
     pub fn drain_item_pickups(&mut self) -> Vec<(u64, [f32; 3])> {
         std::mem::take(&mut self.pending_item_pickups)
     }
@@ -198,8 +207,9 @@ impl GameServer {
         pigs: Vec<NetEntity>,
         penguins: Vec<NetEntity>,
         skeletons: Vec<NetEntity>,
+        cats: Vec<NetEntity>,
     ) {
-        let msg = ServerMessage::EntityUpdate { chickens, pigs, penguins, skeletons };
+        let msg = ServerMessage::EntityUpdate { chickens, pigs, penguins, skeletons, cats };
         if let Ok(bytes) = bincode::serialize(&msg) {
             self.server.broadcast_message(DefaultChannel::Unreliable, bytes);
         }

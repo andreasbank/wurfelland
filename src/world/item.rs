@@ -20,6 +20,7 @@ pub enum ItemType {
     Furnace,
     PumpkinSeeds,
     Bone,
+    CatItem,
 }
 
 impl ItemType {
@@ -44,6 +45,7 @@ impl ItemType {
             ItemType::Furnace       => 15,
             ItemType::PumpkinSeeds  => 16,
             ItemType::Bone          => 17,
+            ItemType::CatItem       => 18,
         }
     }
 
@@ -67,6 +69,7 @@ impl ItemType {
             15 => Some(Self::Furnace),
             16 => Some(Self::PumpkinSeeds),
             17 => Some(Self::Bone),
+            18 => Some(Self::CatItem),
             _  => None,
         }
     }
@@ -91,6 +94,7 @@ impl ItemType {
             "furnace"        => Some(Self::Furnace),
             "pumpkin_seeds"  => Some(Self::PumpkinSeeds),
             "bone"           => Some(Self::Bone),
+            "cat_item"       => Some(Self::CatItem),
             _                => None,
         }
     }
@@ -125,6 +129,7 @@ impl ItemType {
             ItemType::Furnace      => [0.50, 0.50, 0.50],
             ItemType::PumpkinSeeds => [0.85, 0.65, 0.15],
             ItemType::Bone         => [0.91, 0.89, 0.83],
+            ItemType::CatItem      => [0.80, 0.50, 0.18],
         }
     }
 }

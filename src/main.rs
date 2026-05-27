@@ -15,7 +15,7 @@ mod camera;
 use camera::Camera;
 
 mod world;
-use world::{World, ItemEntity, ItemType, Chicken, Pig, Penguin, Skeleton, nearest_entity_hit, EntityRegistry};
+use world::{World, ItemEntity, ItemType, Chicken, Pig, Penguin, Skeleton, Cat, nearest_entity_hit, EntityRegistry};
 use world::block::BlockType;
 
 mod renderer;
@@ -310,6 +310,7 @@ fn main() {
         let mut pigs: Vec<Pig> = Vec::new();
         let mut penguins: Vec<Penguin> = Vec::new();
         let mut skeletons: Vec<Skeleton> = Vec::new();
+        let mut cats: Vec<Cat> = Vec::new();
         let mut item_entities: Vec<ItemEntity> = Vec::new();
         let mut entity_broadcast_timer = 0.0f32;
 
@@ -959,6 +960,17 @@ fn main() {
                                         }
                                     }
                                 }
+                            } else if hotbar[selected_slot].map_or(false, |(item, _)| item == ItemType::CatItem) && net_client.is_none() {
+                                if let Some((_hit, adj)) = world.raycast_face(ro, rd, 5.0) {
+                                    if let Some(def) = entity_registry.get("cat") {
+                                        cats.push(Cat::new(adj[0] as f32 + 0.5, adj[1] as f32, adj[2] as f32 + 0.5, def));
+                                        if !god_mode {
+                                            if let Some((_, count)) = &mut hotbar[selected_slot] {
+                                                if *count > 1 { *count -= 1; } else { hotbar[selected_slot] = None; }
+                                            }
+                                        }
+                                    }
+                                }
                             } else if let Some(block) = hotbar[selected_slot].and_then(|(item, _)| item.to_placeable_block()) {
                                 if let Some((_hit, adj)) = world.raycast_face(ro, rd, 5.0) {
                                     if world.get_block(adj[0], adj[1], adj[2]) == BlockType::Air {
@@ -976,6 +988,12 @@ fn main() {
                                             }
                                         }
                                     }
+                                }
+                            } else if let Some((idx, _)) = nearest_entity_hit(&cats, ro, rd, 5.0) {
+                                if net_client.is_none() {
+                                    cats[idx].interact();
+                                } else if let Some(ref mut client) = net_client {
+                                    client.send_interact_entity(4, idx as u32);
                                 }
                             } else if let Some((idx, _)) = nearest_entity_hit(&chickens, ro, rd, 5.0) {
                                 chickens[idx].interact();
@@ -1494,25 +1512,28 @@ fn main() {
                             let pig_hit  = nearest_entity_hit(&pigs,      cam_pos, cam_dir, 5.0);
                             let pen_hit  = nearest_entity_hit(&penguins,  cam_pos, cam_dir, 5.0);
                             let skel_hit = nearest_entity_hit(&skeletons, cam_pos, cam_dir, 5.0);
+                            let cat_hit  = nearest_entity_hit(&cats,      cam_pos, cam_dir, 5.0);
                             // Pick the closest entity across all types
                             let candidates = [
                                 chk_hit .map(|(i, t)| (0u8, i, t)),
                                 pig_hit .map(|(i, t)| (1u8, i, t)),
                                 pen_hit .map(|(i, t)| (2u8, i, t)),
                                 skel_hit.map(|(i, t)| (3u8, i, t)),
+                                cat_hit .map(|(i, t)| (4u8, i, t)),
                             ];
                             let best = candidates.iter().flatten()
                                 .min_by(|a, b| a.2.partial_cmp(&b.2).unwrap());
-                            let (ent_hit_t, hit_chicken, hit_pig_idx, hit_penguin_idx, hit_skeleton_idx) = match best {
-                                Some(&(0, i, t)) => (t, Some(i), None,    None,    None),
-                                Some(&(1, i, t)) => (t, None,    Some(i), None,    None),
-                                Some(&(2, i, t)) => (t, None,    None,    Some(i), None),
-                                Some(&(3, i, t)) => (t, None,    None,    None,    Some(i)),
-                                _                => (f32::MAX, None, None, None, None),
+                            let (ent_hit_t, hit_chicken, hit_pig_idx, hit_penguin_idx, hit_skeleton_idx, hit_cat_idx) = match best {
+                                Some(&(0, i, t)) => (t, Some(i), None,    None,    None,    None),
+                                Some(&(1, i, t)) => (t, None,    Some(i), None,    None,    None),
+                                Some(&(2, i, t)) => (t, None,    None,    Some(i), None,    None),
+                                Some(&(3, i, t)) => (t, None,    None,    None,    Some(i), None),
+                                Some(&(4, i, t)) => (t, None,    None,    None,    None,    Some(i)),
+                                _                => (f32::MAX, None, None, None, None, None),
                             };
                             let blk_hit = world.raycast(cam_pos, cam_dir, 5.0);
 
-                            let hit_entity = if hit_chicken.is_some() || hit_pig_idx.is_some() || hit_penguin_idx.is_some() || hit_skeleton_idx.is_some() {
+                            let hit_entity = if hit_chicken.is_some() || hit_pig_idx.is_some() || hit_penguin_idx.is_some() || hit_skeleton_idx.is_some() || hit_cat_idx.is_some() {
                                 match blk_hit {
                                     Some(b) => {
                                         let dx = b[0] as f32 + 0.5 - cam_pos[0];
@@ -1534,10 +1555,13 @@ fn main() {
                                         if let Some(pi) = hit_pig_idx      { pigs[pi].take_hit(push); }
                                         if let Some(pi) = hit_penguin_idx  { penguins[pi].take_hit(push); }
                                         if let Some(si) = hit_skeleton_idx { skeletons[si].take_hit(push); }
+                                        if let Some(ki) = hit_cat_idx      { cats[ki].take_hit(push); }
                                     } else if let Some(ref mut client) = net_client {
                                         if let Some(ci) = hit_chicken     { client.send_attack_entity(0, ci as u32, push[0], push[2]); }
                                         if let Some(pi) = hit_pig_idx     { client.send_attack_entity(1, pi as u32, push[0], push[2]); }
                                         if let Some(pi) = hit_penguin_idx { client.send_attack_entity(2, pi as u32, push[0], push[2]); }
+                                        if let Some(si) = hit_skeleton_idx { client.send_attack_entity(3, si as u32, push[0], push[2]); }
+                                        if let Some(ki) = hit_cat_idx      { client.send_attack_entity(4, ki as u32, push[0], push[2]); }
                                     }
                                     entity_hit_cooldown = 0.4;
                                 }
@@ -1678,6 +1702,14 @@ fn main() {
                                 }
                             }
                         }
+                        for cat in &mut cats {
+                            let ecx = (cat.position[0] / 16.0).floor() as i32;
+                            let ecz = (cat.position[2] / 16.0).floor() as i32;
+                            let dx = ecx - pc_x; let dz = ecz - pc_z;
+                            if dx*dx + dz*dz <= sim_r2 {
+                                cat.update(delta_time, |x, y, z| world.get_block(x, y, z));
+                            }
+                        }
                         for chicken in chickens.iter().filter(|c| c.is_dead()) {
                             for item_type in chicken.drops() {
                                 item_entities.push(ItemEntity::new(
@@ -1714,6 +1746,7 @@ fn main() {
                             }
                         }
                         skeletons.retain(|s| !s.is_dead());
+                        cats.retain(|c| !c.is_dead());
                         } // end net_client.is_none() guard
 
                         // Sample sky light for rendering: 0..15 → 0..1
@@ -1728,6 +1761,10 @@ fn main() {
                         for skeleton in &mut skeletons {
                             let [x, y, z] = skeleton.position;
                             skeleton.block_light = world.get_sky_light(x as i32, y.ceil() as i32, z as i32) as f32 / 15.0;
+                        }
+                        for cat in &mut cats {
+                            let [x, y, z] = cat.position;
+                            cat.block_light = world.get_sky_light(x as i32, y.ceil() as i32, z as i32) as f32 / 15.0;
                         }
 
                         item_pickup_cooldown = (item_pickup_cooldown - delta_time).max(0.0);
@@ -1891,14 +1928,15 @@ fn main() {
                         entity_broadcast_timer += delta_time;
                         if entity_broadcast_timer >= 0.05 {
                             entity_broadcast_timer = 0.0;
-                            let to_net = |pos: [f32;3], yaw: f32, health: f32| {
-                                net::messages::NetEntity { x: pos[0], y: pos[1], z: pos[2], yaw, health }
+                            let to_net = |pos: [f32;3], yaw: f32, health: f32, sitting: bool| {
+                                net::messages::NetEntity { x: pos[0], y: pos[1], z: pos[2], yaw, health, sitting }
                             };
                             server.broadcast_entity_update(
-                                chickens .iter().map(|e| to_net(e.position, e.yaw, e.health)).collect(),
-                                pigs     .iter().map(|e| to_net(e.position, e.yaw, e.health)).collect(),
-                                penguins .iter().map(|e| to_net(e.position, e.yaw, e.health)).collect(),
-                                skeletons.iter().map(|e| to_net(e.position, e.yaw, e.health)).collect(),
+                                chickens .iter().map(|e| to_net(e.position, e.yaw, e.health, false)).collect(),
+                                pigs     .iter().map(|e| to_net(e.position, e.yaw, e.health, false)).collect(),
+                                penguins .iter().map(|e| to_net(e.position, e.yaw, e.health, false)).collect(),
+                                skeletons.iter().map(|e| to_net(e.position, e.yaw, e.health, false)).collect(),
+                                cats     .iter().map(|e| to_net(e.position, e.yaw, e.health, e.sitting)).collect(),
                             );
                         }
                         server.broadcast_time(sun_angle);
@@ -1911,9 +1949,17 @@ fn main() {
                         for (kind, index, push_x, push_z) in server.drain_entity_attacks() {
                             let push = [push_x, 0.0, push_z];
                             match kind {
-                                0 => { if let Some(e) = chickens.get_mut(index as usize) { e.take_hit(push); } }
-                                1 => { if let Some(e) = pigs.get_mut(index as usize)     { e.take_hit(push); } }
-                                2 => { if let Some(e) = penguins.get_mut(index as usize) { e.take_hit(push); } }
+                                0 => { if let Some(e) = chickens .get_mut(index as usize) { e.take_hit(push); } }
+                                1 => { if let Some(e) = pigs     .get_mut(index as usize) { e.take_hit(push); } }
+                                2 => { if let Some(e) = penguins .get_mut(index as usize) { e.take_hit(push); } }
+                                3 => { if let Some(e) = skeletons.get_mut(index as usize) { e.take_hit(push); } }
+                                4 => { if let Some(e) = cats     .get_mut(index as usize) { e.take_hit(push); } }
+                                _ => {}
+                            }
+                        }
+                        for (kind, index) in server.drain_entity_interacts() {
+                            match kind {
+                                4 => { if let Some(e) = cats.get_mut(index as usize) { e.interact(); } }
                                 _ => {}
                             }
                         }
@@ -1940,7 +1986,7 @@ fn main() {
                                 ServerMessage::BlockChange { x, y, z, block_id } => {
                                     world.set_block(x, y, z, world::BlockType::from_net_id(block_id));
                                 }
-                                ServerMessage::EntityUpdate { chickens: c_net, pigs: p_net, penguins: pen_net, skeletons: skel_net } => {
+                                ServerMessage::EntityUpdate { chickens: c_net, pigs: p_net, penguins: pen_net, skeletons: skel_net, cats: cat_net } => {
                                     // If count matches, update interpolation targets in-place.
                                     // On count change (spawn/death), snap immediately.
                                     if c_net.len() == chickens.len() {
@@ -1996,6 +2042,23 @@ fn main() {
                                         for ne in skel_net {
                                             if let Some(def) = entity_registry.get("skeleton") {
                                                 skeletons.push(Skeleton::new(ne.x, ne.y, ne.z, def));
+                                            }
+                                        }
+                                    }
+                                    if cat_net.len() == cats.len() {
+                                        for (e, ne) in cats.iter_mut().zip(&cat_net) {
+                                            e.net_target_pos = [ne.x, ne.y, ne.z];
+                                            e.net_target_yaw = ne.yaw;
+                                            e.health = ne.health;
+                                            e.sitting = ne.sitting;
+                                        }
+                                    } else {
+                                        cats.clear();
+                                        for ne in cat_net {
+                                            if let Some(def) = entity_registry.get("cat") {
+                                                let mut cat = Cat::new(ne.x, ne.y, ne.z, def);
+                                                cat.sitting = ne.sitting;
+                                                cats.push(cat);
                                             }
                                         }
                                     }
@@ -2184,6 +2247,7 @@ fn main() {
                         entity_renderer.draw_shadows(&chickens, &shadow_pass);
                         entity_renderer.draw_pig_shadows(&pigs, &shadow_pass);
                         entity_renderer.draw_skeleton_shadows(&skeletons, &shadow_pass);
+                        entity_renderer.draw_cat_shadows(&cats, &shadow_pass);
                         placed_object_renderer.draw_penguin_shadows(&penguins, &shadow_pass);
                     }
                 }
@@ -2243,6 +2307,14 @@ fn main() {
                         shadow_pass.texel_world_sizes(),
                         torch_pos, torch_strength);
                     entity_renderer.draw_skeletons(&skeletons, &view, &projection,
+                        fog_start, fog_end, fb_w as f32, fb_h as f32, sky_tex,
+                        fog_override, fog_override_color,
+                        ambient_light, directional_light, sun_dir,
+                        shadow_pass.depth_texture_array(),
+                        shadow_pass.light_space_matrices(),
+                        shadow_pass.texel_world_sizes(),
+                        torch_pos, torch_strength);
+                    entity_renderer.draw_cats(&cats, &view, &projection,
                         fog_start, fog_end, fb_w as f32, fb_h as f32, sky_tex,
                         fog_override, fog_override_color,
                         ambient_light, directional_light, sun_dir,

@@ -36,6 +36,7 @@ impl Player {
         let mut inventory = [None; INVENTORY_SIZE];
         inventory[0] = Some((ItemType::StoneAxe, 1));
         inventory[1] = Some((ItemType::Torch, 10));
+        inventory[2] = Some((ItemType::CatItem, 50));
         Player {
             health: 100,
             position: [0.0, 64.0, 0.0],

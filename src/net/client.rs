@@ -134,6 +134,13 @@ impl GameClient {
         }
     }
 
+    pub fn send_interact_entity(&mut self, kind: u8, index: u32) {
+        let msg = ClientMessage::InteractEntity { kind, index };
+        if let Ok(bytes) = bincode::serialize(&msg) {
+            self.client.send_message(DefaultChannel::ReliableOrdered, bytes);
+        }
+    }
+
     pub fn send_pickup_item(&mut self, x: f32, y: f32, z: f32) {
         let msg = ClientMessage::PickupItem { x, y, z };
         if let Ok(bytes) = bincode::serialize(&msg) {

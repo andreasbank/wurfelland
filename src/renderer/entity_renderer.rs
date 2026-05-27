@@ -3,7 +3,7 @@ use std::os::raw::c_void;
 use std::f32::consts::FRAC_PI_2;
 use crate::renderer::utils::{compile_shader, link_program};
 use crate::renderer::shadow_pass::{ShadowPass, NUM_CASCADES, CASCADE_ENDS};
-use crate::world::entity::{Chicken, Pig, Skeleton};
+use crate::world::entity::{Chicken, Pig, Skeleton, Cat};
 
 // Vertex format: [x, y, z, r, g, b] — 6 floats
 const STRIDE: usize = 6;
@@ -57,6 +57,22 @@ const PIG_FR_LEG: i32 = VPB * 4;
 const PIG_BL_LEG: i32 = VPB * 5;
 const PIG_BR_LEG: i32 = VPB * 6;
 
+// Cat mesh layout:
+//   [0]   Body
+//   [1]   Head
+//   [2]   Left ear
+//   [3]   Right ear
+//   [4]   Tail
+//   [5]   Front-left leg   ← animated
+//   [6]   Front-right leg  ← animated (opposite phase)
+//   [7]   Back-left leg    ← animated (opposite to front-left)
+//   [8]   Back-right leg   ← animated (opposite to front-right)
+const CAT_STATIC_CNT: i32 = VPB * 5; // body + head + 2 ears + tail
+const CAT_FL_LEG: i32 = VPB * 5;
+const CAT_FR_LEG: i32 = VPB * 6;
+const CAT_BL_LEG: i32 = VPB * 7;
+const CAT_BR_LEG: i32 = VPB * 8;
+
 // Skeleton mesh layout:
 //   [0]   Head  (skull)       — static
 //   [1]   Body  (ribcage)     — static
@@ -69,6 +85,35 @@ const SKEL_LARM: i32 = VPB * 2;
 const SKEL_RARM: i32 = VPB * 3;
 const SKEL_LLEG: i32 = VPB * 4;
 const SKEL_RLEG: i32 = VPB * 5;
+
+fn build_cat_mesh() -> Vec<f32> {
+    let mut v = Vec::new();
+    let fur  = [0.80f32, 0.50, 0.18]; // orange tabby body
+    let head = [0.83f32, 0.54, 0.22]; // slightly lighter head
+    let ear  = [0.90f32, 0.64, 0.50]; // pale inner ear
+    let leg  = [0.77f32, 0.47, 0.16]; // slightly darker legs
+
+    // Body
+    add_box(&mut v, -0.17, 0.22, -0.22,  0.17, 0.52,  0.22, fur[0], fur[1], fur[2]);
+    // Head (jutting forward -Z)
+    add_box(&mut v, -0.13, 0.45, -0.36,  0.13, 0.72, -0.18, head[0], head[1], head[2]);
+    // Left ear
+    add_box(&mut v, -0.13, 0.68, -0.34, -0.05, 0.82, -0.24, ear[0], ear[1], ear[2]);
+    // Right ear
+    add_box(&mut v,  0.05, 0.68, -0.34,  0.13, 0.82, -0.24, ear[0], ear[1], ear[2]);
+    // Tail (behind body)
+    add_box(&mut v, -0.04, 0.22,  0.22,  0.04, 0.58,  0.30, fur[0], fur[1], fur[2]);
+    // Front-left leg
+    add_box(&mut v, -0.14, 0.00, -0.16, -0.06, 0.22, -0.07, leg[0], leg[1], leg[2]);
+    // Front-right leg
+    add_box(&mut v,  0.06, 0.00, -0.16,  0.14, 0.22, -0.07, leg[0], leg[1], leg[2]);
+    // Back-left leg
+    add_box(&mut v, -0.14, 0.00,  0.07, -0.06, 0.22,  0.16, leg[0], leg[1], leg[2]);
+    // Back-right leg
+    add_box(&mut v,  0.06, 0.00,  0.07,  0.14, 0.22,  0.16, leg[0], leg[1], leg[2]);
+
+    v
+}
 
 fn build_skeleton_mesh() -> Vec<f32> {
     let mut v = Vec::new();
@@ -148,6 +193,8 @@ pub struct EntityRenderer {
     pig_vbo: u32,
     skel_vao: u32,
     skel_vbo: u32,
+    cat_vao: u32,
+    cat_vbo: u32,
     shader: u32,
     mvp_loc: i32,
     model_loc: i32,
@@ -205,6 +252,7 @@ impl EntityRenderer {
         let (vao, vbo) = Self::upload_mesh(&build_chicken_mesh());
         let (pig_vao, pig_vbo) = Self::upload_mesh(&build_pig_mesh());
         let (skel_vao, skel_vbo) = Self::upload_mesh(&build_skeleton_mesh());
+        let (cat_vao, cat_vbo) = Self::upload_mesh(&build_cat_mesh());
 
         unsafe {
 
@@ -336,7 +384,7 @@ impl EntityRenderer {
             let bar_color_loc = gl::GetUniformLocation(bar_shader, c"u_color".as_ptr());
 
             EntityRenderer {
-                vao, vbo, pig_vao, pig_vbo, skel_vao, skel_vbo, shader,
+                vao, vbo, pig_vao, pig_vbo, skel_vao, skel_vbo, cat_vao, cat_vbo, shader,
                 mvp_loc, model_loc,
                 fog_start_loc, fog_end_loc, fog_override_loc, fog_color_override_loc,
                 screen_size_loc, sky_sampler_loc,
@@ -696,6 +744,99 @@ impl EntityRenderer {
             shadow_pass.draw_solid_mesh(self.skel_vao, 0, VPB * 6, &model);
         }
     }
+
+    pub fn draw_cats(&self, cats: &[Cat], view: &glam::Mat4, projection: &glam::Mat4,
+                     fog_start: f32, fog_end: f32, screen_w: f32, screen_h: f32, sky_tex: u32,
+                     fog_override: f32, fog_color_override: glam::Vec3,
+                     ambient_light: f32, directional_light: f32, sun_dir: glam::Vec3,
+                     shadow_tex: u32, light_space: &[glam::Mat4; NUM_CASCADES],
+                     texel_sizes: &[f32; NUM_CASCADES],
+                     torch_pos: glam::Vec3, torch_strength: f32) {
+        unsafe {
+            gl::Disable(gl::CULL_FACE);
+            self.bind_frame_uniforms(fog_start, fog_end, screen_w, screen_h, sky_tex,
+                fog_override, fog_color_override, ambient_light, directional_light, sun_dir,
+                shadow_tex, light_space, texel_sizes, torch_pos, torch_strength);
+            gl::BindVertexArray(self.cat_vao);
+
+            for cat in cats {
+                gl::Uniform1f(self.block_light_loc, cat.block_light);
+                let rot_y = -(cat.yaw.to_radians() + FRAC_PI_2);
+                // When sitting, lower the model slightly so the cat crouches
+                let sit_offset = if cat.sitting { -0.12 } else { 0.0 };
+                let pos = glam::Vec3::new(cat.position[0], cat.position[1] + sit_offset, cat.position[2]);
+                let model = glam::Mat4::from_translation(pos)
+                    * glam::Mat4::from_rotation_y(rot_y);
+                let mvp = *projection * *view * model;
+
+                gl::UniformMatrix4fv(self.model_loc, 1, gl::FALSE, model.to_cols_array().as_ptr());
+                // Static parts: body + head + ears + tail
+                gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE, mvp.to_cols_array().as_ptr());
+                gl::DrawArrays(gl::TRIANGLES, 0, CAT_STATIC_CNT);
+
+                if cat.sitting {
+                    // Draw legs as static when sitting
+                    gl::DrawArrays(gl::TRIANGLES, CAT_FL_LEG, VPB * 4);
+                } else {
+                    let swing = (cat.anim_time * 7.0 * cat.move_speed_norm()).sin() * 0.50;
+                    let pivot_y = 0.22_f32;
+
+                    let fl_p = glam::Vec3::new(-0.10, pivot_y, -0.115);
+                    let fl_m = glam::Mat4::from_translation(fl_p)
+                        * glam::Mat4::from_rotation_x(swing)
+                        * glam::Mat4::from_translation(-fl_p);
+                    gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE,
+                        (*projection * *view * model * fl_m).to_cols_array().as_ptr());
+                    gl::DrawArrays(gl::TRIANGLES, CAT_FL_LEG, VPB);
+
+                    let fr_p = glam::Vec3::new(0.10, pivot_y, -0.115);
+                    let fr_m = glam::Mat4::from_translation(fr_p)
+                        * glam::Mat4::from_rotation_x(-swing)
+                        * glam::Mat4::from_translation(-fr_p);
+                    gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE,
+                        (*projection * *view * model * fr_m).to_cols_array().as_ptr());
+                    gl::DrawArrays(gl::TRIANGLES, CAT_FR_LEG, VPB);
+
+                    let bl_p = glam::Vec3::new(-0.10, pivot_y,  0.115);
+                    let bl_m = glam::Mat4::from_translation(bl_p)
+                        * glam::Mat4::from_rotation_x(-swing)
+                        * glam::Mat4::from_translation(-bl_p);
+                    gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE,
+                        (*projection * *view * model * bl_m).to_cols_array().as_ptr());
+                    gl::DrawArrays(gl::TRIANGLES, CAT_BL_LEG, VPB);
+
+                    let br_p = glam::Vec3::new(0.10, pivot_y,  0.115);
+                    let br_m = glam::Mat4::from_translation(br_p)
+                        * glam::Mat4::from_rotation_x(swing)
+                        * glam::Mat4::from_translation(-br_p);
+                    gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE,
+                        (*projection * *view * model * br_m).to_cols_array().as_ptr());
+                    gl::DrawArrays(gl::TRIANGLES, CAT_BR_LEG, VPB);
+                }
+            }
+
+            gl::BindVertexArray(0);
+            gl::Enable(gl::CULL_FACE);
+        }
+
+        for cat in cats {
+            let frac = cat.health / cat.def.max_health;
+            if frac < 1.0 {
+                self.draw_health_bar(cat.position, frac, 0.90, view, projection);
+            }
+        }
+    }
+
+    pub fn draw_cat_shadows(&self, cats: &[Cat], shadow_pass: &ShadowPass) {
+        for cat in cats {
+            let rot_y = -(cat.yaw.to_radians() + FRAC_PI_2);
+            let sit_offset = if cat.sitting { -0.12 } else { 0.0 };
+            let pos = glam::Vec3::new(cat.position[0], cat.position[1] + sit_offset, cat.position[2]);
+            let model = glam::Mat4::from_translation(pos)
+                * glam::Mat4::from_rotation_y(rot_y);
+            shadow_pass.draw_solid_mesh(self.cat_vao, 0, VPB * 9, &model);
+        }
+    }
 }
 
 impl Drop for EntityRenderer {
@@ -707,6 +848,8 @@ impl Drop for EntityRenderer {
             gl::DeleteBuffers(1, &self.pig_vbo);
             gl::DeleteVertexArrays(1, &self.skel_vao);
             gl::DeleteBuffers(1, &self.skel_vbo);
+            gl::DeleteVertexArrays(1, &self.cat_vao);
+            gl::DeleteBuffers(1, &self.cat_vbo);
             gl::DeleteProgram(self.shader);
             gl::DeleteVertexArrays(1, &self.bar_vao);
             gl::DeleteBuffers(1, &self.bar_vbo);
