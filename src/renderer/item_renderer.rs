@@ -1,6 +1,6 @@
 use std::mem;
 use std::os::raw::c_void;
-use crate::renderer::utils::{compile_shader, link_program, create_item_atlas, load_png_texture};
+use crate::renderer::utils::{compile_shader, link_program, create_item_atlas, create_block_atlas, load_png_texture};
 use crate::renderer::geo_model::GeoModel;
 use crate::world::item::ItemType;
 use crate::world::ItemEntity;
@@ -143,6 +143,13 @@ pub struct ItemRenderer {
     stick_vert_count:  i32,
     cube_vert_count:   i32,
     bed_vert_count:    i32,
+    // Block-atlas cube items (LogBlock, DirtClump, StoneChunk, WoodBlock, Furnace)
+    block_atlas:       u32,
+    vao_blk_log:       u32,
+    vao_blk_dirt:      u32,
+    vao_blk_cobble:    u32,
+    vao_blk_furnace:   u32,
+    vao_blk_wood:      u32,
     // Flat PNG-sprite items (RawCopper, Coal, …)
     vao_sprite:        u32,
     sprite_vert_count: i32,
@@ -153,6 +160,7 @@ pub struct ItemRenderer {
     colored_mvp_loc:   i32,
     axe_model:         Option<GeoModel>,
     torch_model:       Option<GeoModel>,
+    cat_model:         Option<GeoModel>,
 }
 
 impl ItemRenderer {
@@ -213,6 +221,12 @@ impl ItemRenderer {
         let stone_mesh = build_cube_mesh(ItemType::StoneChunk.tile_index());
         let seeds_mesh = build_cube_mesh(ItemType::Seeds.tile_index());
         let bed_mesh   = build_bed_mesh();
+        // ── Block-atlas cube meshes (tile IDs from BlockType::texture_id side face) ──
+        let blk_log_mesh     = build_cube_mesh(5);   // log side
+        let blk_dirt_mesh    = build_cube_mesh(1);   // dirt
+        let blk_cobble_mesh  = build_cube_mesh(22);  // cobblestone
+        let blk_furnace_mesh = build_cube_mesh(19);  // furnace side
+        let blk_wood_mesh    = build_cube_mesh(34);  // wood planks
 
         let sprite_mesh = build_sprite_mesh();
 
@@ -228,19 +242,29 @@ impl ItemRenderer {
         let vao_seeds  = upload_vao(&seeds_mesh);
         let vao_bed    = upload_vao(&bed_mesh);
         let vao_sprite = upload_vao(&sprite_mesh);
+        let vao_blk_log     = upload_vao(&blk_log_mesh);
+        let vao_blk_dirt    = upload_vao(&blk_dirt_mesh);
+        let vao_blk_cobble  = upload_vao(&blk_cobble_mesh);
+        let vao_blk_furnace = upload_vao(&blk_furnace_mesh);
+        let vao_blk_wood    = upload_vao(&blk_wood_mesh);
 
         let atlas          = create_item_atlas();
+        let block_atlas    = create_block_atlas();
         let raw_copper_tex = load_png_texture("assets/ui/raw_copper.png");
         let coal_tex       = load_png_texture("assets/ui/coal.png");
 
         // ── Geo models ────────────────────────────────────────────────────────
-        let axe_model = match GeoModel::load("assets/models/stone_axe.geo.json") {
+        let axe_model = match GeoModel::load("assets/models/stone_axe/stone_axe.geo.json") {
             Ok(m)  => Some(m),
             Err(e) => { eprintln!("[item_renderer] stone_axe.geo.json: {e}"); None }
         };
-        let torch_model = match GeoModel::load("assets/models/torch.geo.json") {
+        let torch_model = match GeoModel::load("assets/models/torch/torch.geo.json") {
             Ok(m)  => Some(m),
             Err(e) => { eprintln!("[item_renderer] torch.geo.json: {e}"); None }
+        };
+        let cat_model = match GeoModel::load("assets/models/cat/cat.geo.json") {
+            Ok(m)  => Some(m),
+            Err(e) => { eprintln!("[item_renderer] cat.geo.json: {e}"); None }
         };
 
         ItemRenderer {
@@ -249,8 +273,10 @@ impl ItemRenderer {
             stick_vert_count, cube_vert_count, bed_vert_count,
             vao_sprite, sprite_vert_count, raw_copper_tex, coal_tex,
             colored_shader, colored_mvp_loc,
-            axe_model,
-            torch_model,
+            axe_model, torch_model,
+            block_atlas,
+            vao_blk_log, vao_blk_dirt, vao_blk_cobble, vao_blk_furnace, vao_blk_wood,
+            cat_model,
         }
     }
 
@@ -290,19 +316,44 @@ impl ItemRenderer {
             gl::BindVertexArray(0);
             gl::BindTexture(gl::TEXTURE_2D, self.atlas);
 
+            // ── Block-atlas cube items ─────────────────────────────────────────
+            gl::BindTexture(gl::TEXTURE_2D, self.block_atlas);
+            for item in items {
+                let vao = match item.item {
+                    ItemType::LogBlock   => self.vao_blk_log,
+                    ItemType::DirtClump  => self.vao_blk_dirt,
+                    ItemType::StoneChunk => self.vao_blk_cobble,
+                    ItemType::Furnace    => self.vao_blk_furnace,
+                    ItemType::WoodBlock  => self.vao_blk_wood,
+                    _                    => continue,
+                };
+                let pos = glam::Vec3::new(
+                    item.position[0] + 0.5,
+                    item.visual_y(),
+                    item.position[2] + 0.5,
+                );
+                let model = glam::Mat4::from_translation(pos)
+                    * glam::Mat4::from_rotation_y(item.age * 1.5);
+                let mvp = *projection * *view * model;
+                gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE, mvp.to_cols_array().as_ptr());
+                gl::BindVertexArray(vao);
+                gl::DrawArrays(gl::TRIANGLES, 0, self.cube_vert_count);
+            }
+
+            gl::BindTexture(gl::TEXTURE_2D, self.atlas);
             for item in items {
                 let (vao, vert_count) = match item.item {
                     ItemType::Stick       => (self.vao_stick, self.stick_vert_count),
-                    ItemType::LogBlock    => (self.vao_log,   self.cube_vert_count),
-                    ItemType::DirtClump   => (self.vao_dirt,  self.cube_vert_count),
-                    ItemType::StoneChunk  => (self.vao_stone, self.cube_vert_count),
+                    ItemType::LogBlock    => continue, // handled by block-atlas pass above
+                    ItemType::DirtClump   => continue,
+                    ItemType::StoneChunk  => continue,
                     ItemType::Seeds       => (self.vao_seeds, self.cube_vert_count),
                     ItemType::Bed         => (self.vao_bed,   self.bed_vert_count),
                     ItemType::Feather     => (self.vao_stone, self.cube_vert_count),
                     ItemType::Egg         => (self.vao_stone, self.cube_vert_count),
                     ItemType::ChickenMeat => (self.vao_stone, self.cube_vert_count),
                     ItemType::PorkChop    => (self.vao_stone, self.cube_vert_count),
-                    ItemType::Furnace     => (self.vao_stone, self.cube_vert_count),
+                    ItemType::Furnace     => continue,
                     ItemType::RawCopper   => continue, // handled by sprite pass above
                     ItemType::Coal        => continue, // handled by sprite pass above
                     ItemType::RawIron     => continue, // handled by sprite pass above
@@ -310,8 +361,8 @@ impl ItemRenderer {
                     ItemType::Torch       => continue, // handled by geo pass below
                     ItemType::PumpkinSeeds => (self.vao_seeds, self.cube_vert_count),
                     ItemType::Bone         => (self.vao_stone, self.cube_vert_count),
-                    ItemType::CatItem      => (self.vao_stone, self.cube_vert_count),
-                    ItemType::WoodBlock    => (self.vao_stone, self.cube_vert_count),
+                    ItemType::CatItem      => continue, // handled by geo pass below
+                    ItemType::WoodBlock    => continue,
                 };
 
                 let pos = glam::Vec3::new(
@@ -336,6 +387,7 @@ impl ItemRenderer {
             let geo_pairs: &[(&Option<GeoModel>, ItemType)] = &[
                 (&self.axe_model,   ItemType::StoneAxe),
                 (&self.torch_model, ItemType::Torch),
+                (&self.cat_model,   ItemType::CatItem),
             ];
             for (model_opt, kind) in geo_pairs {
                 if let Some(geo) = model_opt {
@@ -374,6 +426,7 @@ impl ItemRenderer {
             let geo: Option<&GeoModel> = match item {
                 ItemType::StoneAxe => self.axe_model.as_ref(),
                 ItemType::Torch    => self.torch_model.as_ref(),
+                ItemType::CatItem  => self.cat_model.as_ref(),
                 _                  => None,
             };
 
@@ -383,18 +436,33 @@ impl ItemRenderer {
                 gl::BindVertexArray(geo.vao);
                 gl::DrawArrays(gl::TRIANGLES, 0, geo.vert_count);
             } else {
-                // Atlas items — render using the appropriate VAO
-                let (vao, count) = match item {
-                    ItemType::Stick => (self.vao_stick, self.stick_vert_count),
-                    ItemType::Bed   => (self.vao_bed,   self.bed_vert_count),
-                    _               => (self.vao_stone,  self.cube_vert_count),
+                // Block-atlas items — show the actual block face texture
+                let block_vao = match item {
+                    ItemType::LogBlock   => Some(self.vao_blk_log),
+                    ItemType::DirtClump  => Some(self.vao_blk_dirt),
+                    ItemType::StoneChunk => Some(self.vao_blk_cobble),
+                    ItemType::Furnace    => Some(self.vao_blk_furnace),
+                    ItemType::WoodBlock  => Some(self.vao_blk_wood),
+                    _                    => None,
                 };
                 gl::UseProgram(self.shader);
                 gl::ActiveTexture(gl::TEXTURE0);
-                gl::BindTexture(gl::TEXTURE_2D, self.atlas);
                 gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE, mvp.to_cols_array().as_ptr());
-                gl::BindVertexArray(vao);
-                gl::DrawArrays(gl::TRIANGLES, 0, count);
+                if let Some(vao) = block_vao {
+                    gl::BindTexture(gl::TEXTURE_2D, self.block_atlas);
+                    gl::BindVertexArray(vao);
+                    gl::DrawArrays(gl::TRIANGLES, 0, self.cube_vert_count);
+                } else {
+                    // Item-atlas fallback (Stick, Bed, etc.)
+                    let (vao, count) = match item {
+                        ItemType::Stick => (self.vao_stick, self.stick_vert_count),
+                        ItemType::Bed   => (self.vao_bed,   self.bed_vert_count),
+                        _               => (self.vao_stone,  self.cube_vert_count),
+                    };
+                    gl::BindTexture(gl::TEXTURE_2D, self.atlas);
+                    gl::BindVertexArray(vao);
+                    gl::DrawArrays(gl::TRIANGLES, 0, count);
+                }
                 gl::BindTexture(gl::TEXTURE_2D, 0);
             }
 
@@ -415,7 +483,13 @@ impl Drop for ItemRenderer {
             gl::DeleteVertexArrays(1, &self.vao_seeds);
             gl::DeleteVertexArrays(1, &self.vao_bed);
             gl::DeleteVertexArrays(1, &self.vao_sprite);
+            gl::DeleteVertexArrays(1, &self.vao_blk_log);
+            gl::DeleteVertexArrays(1, &self.vao_blk_dirt);
+            gl::DeleteVertexArrays(1, &self.vao_blk_cobble);
+            gl::DeleteVertexArrays(1, &self.vao_blk_furnace);
+            gl::DeleteVertexArrays(1, &self.vao_blk_wood);
             gl::DeleteTextures(1, &self.atlas);
+            gl::DeleteTextures(1, &self.block_atlas);
             gl::DeleteTextures(1, &self.raw_copper_tex);
             gl::DeleteTextures(1, &self.coal_tex);
             gl::DeleteProgram(self.shader);

@@ -1,6 +1,6 @@
 use crate::world::block::BlockType;
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum ItemType {
     Stick,
     LogBlock,

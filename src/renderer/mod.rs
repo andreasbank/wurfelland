@@ -2,6 +2,8 @@ pub mod utils;
 pub mod ui;
 pub mod geo_model;
 
+pub mod geo_atlas;
+
 pub mod crosshair_renderer;
 
 pub mod healthbar_renderer;

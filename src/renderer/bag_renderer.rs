@@ -1,7 +1,8 @@
 use std::mem;
 use std::os::raw::c_void;
-use crate::renderer::utils::{compile_shader, link_program};
+use crate::renderer::utils::{compile_shader, link_program, create_block_atlas};
 use crate::renderer::ui::Window;
+use crate::renderer::geo_atlas::GeoAtlas;
 use crate::world::item::ItemType;
 use crate::game::player::INVENTORY_SIZE;
 
@@ -78,6 +79,14 @@ pub struct BagRenderer {
     glyph_rect_loc: i32,
     glyph_idx_loc:  i32,
     digit_tex:      u32,
+    // Textured icon shader (block atlas + geo atlas).
+    tex_shader:     u32,
+    tex_pos_loc:    i32,
+    tex_size_loc:   i32,
+    tex_uv0_loc:    i32,
+    tex_uv1_loc:    i32,
+    block_atlas:    u32,
+    geo_atlas:      GeoAtlas,
 }
 
 impl BagRenderer {
@@ -137,6 +146,30 @@ impl BagRenderer {
         let glyph_rect_loc = unsafe { gl::GetUniformLocation(glyph_shader, c"u_rect".as_ptr())  };
         let glyph_idx_loc  = unsafe { gl::GetUniformLocation(glyph_shader, c"u_glyph".as_ptr()) };
 
+        // ── textured icon shader (normalized [0,1] Y-down space) ───────────
+        let tex_vert = compile_shader(gl::VERTEX_SHADER, r#"#version 330 core
+            layout(location = 0) in vec2 aPos;
+            uniform vec2 u_pos;
+            uniform vec2 u_size;
+            uniform vec2 u_uv0;
+            uniform vec2 u_uv1;
+            out vec2 vUV;
+            void main() {
+                vec2 p = u_pos + aPos * u_size;
+                gl_Position = vec4(p.x * 2.0 - 1.0, -(p.y * 2.0 - 1.0), 0.0, 1.0);
+                vUV = u_uv0 + aPos * (u_uv1 - u_uv0);
+            }"#).unwrap();
+        let tex_frag = compile_shader(gl::FRAGMENT_SHADER, r#"#version 330 core
+            in vec2 vUV;
+            uniform sampler2D u_tex;
+            out vec4 FragColor;
+            void main() { FragColor = texture(u_tex, vUV); }"#).unwrap();
+        let tex_shader   = link_program(tex_vert, tex_frag).unwrap();
+        let tex_pos_loc  = unsafe { gl::GetUniformLocation(tex_shader, c"u_pos".as_ptr())  };
+        let tex_size_loc = unsafe { gl::GetUniformLocation(tex_shader, c"u_size".as_ptr()) };
+        let tex_uv0_loc  = unsafe { gl::GetUniformLocation(tex_shader, c"u_uv0".as_ptr())  };
+        let tex_uv1_loc  = unsafe { gl::GetUniformLocation(tex_shader, c"u_uv1".as_ptr())  };
+
         let (vao, vbo, digit_tex) = unsafe {
             let mut vao = 0u32;
             let mut vbo = 0u32;
@@ -158,12 +191,17 @@ impl BagRenderer {
             (vao, vbo, create_digit_texture())
         };
 
+        let block_atlas = create_block_atlas();
+        let geo_atlas   = GeoAtlas::build("assets/models");
+
         BagRenderer {
             window: Window::new(),
             vao, vbo,
             rot_shader, rot_center_loc, rot_half_loc, rot_angle_loc, rot_color_loc,
             glyph_shader, glyph_rect_loc, glyph_idx_loc,
             digit_tex,
+            tex_shader, tex_pos_loc, tex_size_loc, tex_uv0_loc, tex_uv1_loc,
+            block_atlas, geo_atlas,
         }
     }
 
@@ -203,50 +241,65 @@ impl BagRenderer {
         }
     }
 
+    /// Draw textured quad in [0,1] Y-down normalised space.
+    /// u_uv0 = top-left UV, u_uv1 = bottom-right UV.
+    fn draw_tex_norm(&self, x: f32, y: f32, size: f32,
+                     tex: u32, u0: f32, v_top: f32, u1: f32, v_bot: f32) {
+        unsafe {
+            gl::UseProgram(self.tex_shader);
+            gl::BindVertexArray(self.vao);
+            gl::ActiveTexture(gl::TEXTURE0);
+            gl::BindTexture(gl::TEXTURE_2D, tex);
+            gl::Uniform2f(self.tex_pos_loc,  x, y);
+            gl::Uniform2f(self.tex_size_loc, size, size);
+            gl::Uniform2f(self.tex_uv0_loc,  u0, v_top);
+            gl::Uniform2f(self.tex_uv1_loc,  u1, v_bot);
+            gl::DrawArrays(gl::TRIANGLES, 0, 6);
+            gl::BindTexture(gl::TEXTURE_2D, 0);
+        }
+    }
+
     fn draw_item_icon(&self, item: ItemType, count: u32, sx: f32, sy: f32) {
-        match item {
-            ItemType::Stick => {
-                let cx = sx + SLOT_SIZE * 0.5;
-                let cy = sy + SLOT_SIZE * 0.5;
-                self.draw_rect_rotated(cx, cy, SLOT_SIZE * 0.06, SLOT_SIZE * 0.38,
-                    std::f32::consts::FRAC_PI_4, [0.55, 0.35, 0.17, 1.0]);
-            }
-            ItemType::StoneAxe => {
-                let pad = SLOT_SIZE * 0.09;
-                // Stone head (left portion, upper half)
-                self.window.draw_rect(
-                    sx + pad,             sy + pad,
-                    sx + SLOT_SIZE * 0.60, sy + SLOT_SIZE * 0.56,
-                    0.58, 0.58, 0.63, 1.0,
-                );
-                // Wooden handle (right of centre, full height)
-                self.window.draw_rect(
-                    sx + SLOT_SIZE * 0.46, sy + pad,
-                    sx + SLOT_SIZE * 0.58, sy + SLOT_SIZE - pad,
-                    0.55, 0.35, 0.17, 1.0,
-                );
-            }
-            ItemType::Torch => {
-                let pad = SLOT_SIZE * 0.09;
-                // Flame / coal head (top, orange)
-                self.window.draw_rect(
-                    sx + SLOT_SIZE * 0.35, sy + pad,
-                    sx + SLOT_SIZE * 0.65, sy + SLOT_SIZE * 0.42,
-                    1.00, 0.47, 0.00, 1.0,
-                );
-                // Wooden stick (centre, brown, lower three-quarters)
-                self.window.draw_rect(
-                    sx + SLOT_SIZE * 0.44, sy + SLOT_SIZE * 0.36,
-                    sx + SLOT_SIZE * 0.56, sy + SLOT_SIZE - pad,
-                    0.55, 0.35, 0.17, 1.0,
-                );
-            }
-            _ => {
-                let [r, g, b] = item.color();
-                let pad = SLOT_SIZE * 0.12;
-                self.window.draw_rect(sx + pad, sy + pad,
-                    sx + SLOT_SIZE - pad, sy + SLOT_SIZE - pad,
-                    r, g, b, 1.0);
+        let pad = SLOT_SIZE * 0.09;
+
+        // Block items: sample side face from the block atlas (256×256, 16 tiles/row).
+        let block_tile: Option<u32> = match item {
+            ItemType::LogBlock   => Some(5),
+            ItemType::DirtClump  => Some(1),
+            ItemType::StoneChunk => Some(22),
+            ItemType::WoodBlock  => Some(34),
+            ItemType::Furnace    => Some(19),
+            _                    => None,
+        };
+        if let Some(tile_idx) = block_tile {
+            let col   = (tile_idx % 16) as f32;
+            let row   = (tile_idx / 16) as f32;
+            let u0    = col / 16.0;
+            let u1    = (col + 1.0) / 16.0;
+            let v_top = row / 16.0;
+            let v_bot = (row + 1.0) / 16.0;
+            self.draw_tex_norm(sx + pad, sy + pad, SLOT_SIZE - pad * 2.0,
+                self.block_atlas, u0, v_top, u1, v_bot);
+        }
+        // Geo-model items: icon from the geo atlas.
+        else if let Some([u0, v_bot, u1, v_top]) = self.geo_atlas.uv_for_item(item) {
+            self.draw_tex_norm(sx + pad, sy + pad, SLOT_SIZE - pad * 2.0,
+                self.geo_atlas.texture_id, u0, v_top, u1, v_bot);
+        }
+        else {
+            match item {
+                ItemType::Stick => {
+                    let cx = sx + SLOT_SIZE * 0.5;
+                    let cy = sy + SLOT_SIZE * 0.5;
+                    self.draw_rect_rotated(cx, cy, SLOT_SIZE * 0.06, SLOT_SIZE * 0.38,
+                        std::f32::consts::FRAC_PI_4, [0.55, 0.35, 0.17, 1.0]);
+                }
+                _ => {
+                    let [r, g, b] = item.color();
+                    self.window.draw_rect(sx + pad, sy + pad,
+                        sx + SLOT_SIZE - pad, sy + SLOT_SIZE - pad,
+                        r, g, b, 1.0);
+                }
             }
         }
 
@@ -366,6 +419,9 @@ impl Drop for BagRenderer {
             gl::DeleteTextures(1, &self.digit_tex);
             gl::DeleteProgram(self.rot_shader);
             gl::DeleteProgram(self.glyph_shader);
+            gl::DeleteProgram(self.tex_shader);
+            gl::DeleteTextures(1, &self.block_atlas);
+            // geo_atlas has its own Drop
         }
     }
 }

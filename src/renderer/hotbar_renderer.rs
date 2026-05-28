@@ -1,6 +1,7 @@
 use std::mem;
 use std::os::raw::c_void;
-use crate::renderer::utils::{compile_shader, link_program};
+use crate::renderer::utils::{compile_shader, link_program, create_block_atlas};
+use crate::renderer::geo_atlas::GeoAtlas;
 use crate::world::item::ItemType;
 
 const SLOT_SIZE:   f32 = 40.0;
@@ -17,6 +18,15 @@ pub struct HotbarRenderer {
     size_loc: i32,
     screen_loc: i32,
     color_loc: i32,
+    // Textured shader for block/geo item icons
+    tex_shader:     u32,
+    tex_pos_loc:    i32,
+    tex_size_loc:   i32,
+    tex_screen_loc: i32,
+    tex_uv0_loc:    i32,
+    tex_uv1_loc:    i32,
+    block_atlas:    u32,
+    geo_atlas:      GeoAtlas,
 }
 
 impl HotbarRenderer {
@@ -48,11 +58,40 @@ impl HotbarRenderer {
 
         let shader = link_program(vert, frag).unwrap();
 
+        let tv = compile_shader(gl::VERTEX_SHADER, r#"#version 330 core
+            layout(location = 0) in vec2 aPos;
+            uniform vec2 u_pos;
+            uniform vec2 u_size;
+            uniform vec2 u_screen;
+            uniform vec2 u_uv0;
+            uniform vec2 u_uv1;
+            out vec2 vUV;
+            void main() {
+                vec2 px  = u_pos + aPos * u_size;
+                vec2 ndc = (px / u_screen) * 2.0 - 1.0;
+                gl_Position = vec4(ndc, 0.0, 1.0);
+                vUV = u_uv0 + aPos * (u_uv1 - u_uv0);
+            }
+        "#).unwrap();
+        let tf = compile_shader(gl::FRAGMENT_SHADER, r#"#version 330 core
+            in vec2 vUV;
+            uniform sampler2D u_tex;
+            out vec4 FragColor;
+            void main() { FragColor = texture(u_tex, vUV); }
+        "#).unwrap();
+        let tex_shader = link_program(tv, tf).unwrap();
+
         unsafe {
             let pos_loc    = gl::GetUniformLocation(shader, c"u_pos".as_ptr());
             let size_loc   = gl::GetUniformLocation(shader, c"u_size".as_ptr());
             let screen_loc = gl::GetUniformLocation(shader, c"u_screen".as_ptr());
             let color_loc  = gl::GetUniformLocation(shader, c"u_color".as_ptr());
+
+            let tex_pos_loc    = gl::GetUniformLocation(tex_shader, c"u_pos".as_ptr());
+            let tex_size_loc   = gl::GetUniformLocation(tex_shader, c"u_size".as_ptr());
+            let tex_screen_loc = gl::GetUniformLocation(tex_shader, c"u_screen".as_ptr());
+            let tex_uv0_loc    = gl::GetUniformLocation(tex_shader, c"u_uv0".as_ptr());
+            let tex_uv1_loc    = gl::GetUniformLocation(tex_shader, c"u_uv1".as_ptr());
 
             let mut vao = 0u32;
             let mut vbo = 0u32;
@@ -73,7 +112,31 @@ impl HotbarRenderer {
             gl::BindVertexArray(0);
             let _ = vbo;
 
-            HotbarRenderer { vao, shader, pos_loc, size_loc, screen_loc, color_loc }
+            let block_atlas = create_block_atlas();
+            let geo_atlas   = GeoAtlas::build("assets/models");
+
+            HotbarRenderer {
+                vao, shader, pos_loc, size_loc, screen_loc, color_loc,
+                tex_shader, tex_pos_loc, tex_size_loc, tex_screen_loc,
+                tex_uv0_loc, tex_uv1_loc, block_atlas, geo_atlas,
+            }
+        }
+    }
+
+    fn draw_tex(&self, x: f32, y: f32, size: f32,
+                tex: u32, u0: f32, v0: f32, u1: f32, v1: f32, screen: [f32; 2]) {
+        unsafe {
+            gl::UseProgram(self.tex_shader);
+            gl::ActiveTexture(gl::TEXTURE0);
+            gl::BindTexture(gl::TEXTURE_2D, tex);
+            gl::Uniform2f(self.tex_pos_loc,    x, y);
+            gl::Uniform2f(self.tex_size_loc,   size, size);
+            gl::Uniform2f(self.tex_screen_loc, screen[0], screen[1]);
+            gl::Uniform2f(self.tex_uv0_loc,    u0, v0);
+            gl::Uniform2f(self.tex_uv1_loc,    u1, v1);
+            gl::DrawArrays(gl::TRIANGLES, 0, 6);
+            gl::BindTexture(gl::TEXTURE_2D, 0);
+            gl::UseProgram(self.shader);
         }
     }
 
@@ -94,47 +157,41 @@ impl HotbarRenderer {
     fn draw_item_icon(&self, item: ItemType, sx: f32, sy: f32, screen: [f32; 2]) {
         let pad = SLOT_SIZE * 0.09; // matches bag_renderer proportions
 
+        // Block items: sample the block atlas tile for the side face.
+        // Block atlas: 256×256, 16×16 px per tile, 16 tiles per row.
+        // v_top < v_bot because pixel data is stored top-first (OpenGL row 0 = bottom).
+        let block_tile: Option<u32> = match item {
+            ItemType::LogBlock   => Some(5),
+            ItemType::DirtClump  => Some(1),
+            ItemType::StoneChunk => Some(22),
+            ItemType::WoodBlock  => Some(34),
+            ItemType::Furnace    => Some(19),
+            _                    => None,
+        };
+        if let Some(tile_idx) = block_tile {
+            let col   = (tile_idx % 16) as f32;
+            let row   = (tile_idx / 16) as f32;
+            let u0    = col / 16.0;
+            let u1    = (col + 1.0) / 16.0;
+            let v_top = row / 16.0;
+            let v_bot = (row + 1.0) / 16.0;
+            self.draw_tex(sx + pad, sy + pad, SLOT_SIZE - pad * 2.0,
+                self.block_atlas, u0, v_bot, u1, v_top, screen);
+            return;
+        }
+
+        // Geo-model items: draw icon from the geo atlas.
+        if let Some([u0, v_bot, u1, v_top]) = self.geo_atlas.uv_for_item(item) {
+            self.draw_tex(sx + pad, sy + pad, SLOT_SIZE - pad * 2.0,
+                self.geo_atlas.texture_id, u0, v_bot, u1, v_top, screen);
+            return;
+        }
+
         // Helper: convert bag-style (top_frac, bot_frac) to hotbar (y, h).
         // bag uses y-from-top; hotbar uses y-from-bottom.
         //   y = sy + (1 - bot_frac) * SLOT_SIZE
         //   h =      (bot_frac - top_frac) * SLOT_SIZE
         match item {
-            ItemType::StoneAxe => {
-                // Stone head (upper-left area)
-                self.draw_rect(
-                    sx + pad,
-                    sy + SLOT_SIZE * 0.44,   // 1 - 0.56
-                    SLOT_SIZE * 0.51,
-                    SLOT_SIZE * 0.47,        // 0.56 - 0.09
-                    [0.58, 0.58, 0.63, 1.0], screen,
-                );
-                // Wooden handle (right of centre, full height)
-                self.draw_rect(
-                    sx + SLOT_SIZE * 0.46,
-                    sy + pad,
-                    SLOT_SIZE * 0.12,
-                    SLOT_SIZE - pad * 2.0,
-                    [0.55, 0.35, 0.17, 1.0], screen,
-                );
-            }
-            ItemType::Torch => {
-                // Flame (top, orange)
-                self.draw_rect(
-                    sx + SLOT_SIZE * 0.35,
-                    sy + SLOT_SIZE * 0.58,   // 1 - 0.42
-                    SLOT_SIZE * 0.30,
-                    SLOT_SIZE * 0.33,        // 0.42 - 0.09
-                    [1.00, 0.47, 0.00, 1.0], screen,
-                );
-                // Stick (lower three-quarters)
-                self.draw_rect(
-                    sx + SLOT_SIZE * 0.44,
-                    sy + pad,
-                    SLOT_SIZE * 0.12,
-                    SLOT_SIZE * 0.55,        // 0.91 - 0.36
-                    [0.55, 0.35, 0.17, 1.0], screen,
-                );
-            }
             ItemType::Stick => {
                 // Vertical stick (bag draws it rotated 45°; hotbar can't rotate)
                 self.draw_rect(
@@ -235,6 +292,9 @@ impl Drop for HotbarRenderer {
         unsafe {
             gl::DeleteVertexArrays(1, &self.vao);
             gl::DeleteProgram(self.shader);
+            gl::DeleteProgram(self.tex_shader);
+            gl::DeleteTextures(1, &self.block_atlas);
+            // geo_atlas has its own Drop impl
         }
     }
 }
