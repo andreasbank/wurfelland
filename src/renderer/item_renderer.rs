@@ -83,6 +83,26 @@ fn build_bed_mesh() -> Vec<f32> {
     v
 }
 
+// ── Grass sprite: flat double-sided quad using block atlas tile 8 (tall grass) ──
+fn build_grass_sprite_mesh() -> Vec<f32> {
+    // Block atlas: 256×256, 16 tiles/row, 16 px/tile.  Tile 8 = tall grass.
+    let col = 8usize;
+    let u0 = col as f32 / 16.0;
+    let u1 = (col + 1) as f32 / 16.0;
+    let vt = 0.0f32;             // row 0
+    let vb = 1.0 / 16.0_f32;
+    let mut v = Vec::new();
+    const W: f32 = 0.175;
+    const H: f32 = 0.35;
+    push_quad(&mut v,
+        [[-W, 0.0, 0.0], [W, 0.0, 0.0], [W, H, 0.0], [-W, H, 0.0]],
+        [[u0, vb], [u1, vb], [u1, vt], [u0, vt]]);
+    push_quad(&mut v,
+        [[-W, H, 0.0], [W, H, 0.0], [W, 0.0, 0.0], [-W, 0.0, 0.0]],
+        [[u0, vt], [u1, vt], [u1, vb], [u0, vb]]);
+    v
+}
+
 // ── Small cube (0.35³, base at Y=0): all 6 faces map the same tile ──
 fn build_cube_mesh(tile_idx: usize) -> Vec<f32> {
     let (u0, u1, vt, vb) = tile_uv(tile_idx);
@@ -152,6 +172,8 @@ pub struct ItemRenderer {
     vao_blk_wood:      u32,
     // Flat PNG-sprite items (RawCopper, Coal, …)
     vao_sprite:        u32,
+    vao_grass:         u32,
+    grass_vert_count:  i32,
     sprite_vert_count: i32,
     raw_copper_tex:    u32,
     coal_tex:          u32,
@@ -229,11 +251,13 @@ impl ItemRenderer {
         let blk_wood_mesh    = build_cube_mesh(34);  // wood planks
 
         let sprite_mesh = build_sprite_mesh();
+        let grass_mesh  = build_grass_sprite_mesh();
 
         let stick_vert_count  = (stick_mesh.len()  / STRIDE) as i32;
         let cube_vert_count   = (log_mesh.len()    / STRIDE) as i32;
         let bed_vert_count    = (bed_mesh.len()    / STRIDE) as i32;
         let sprite_vert_count = (sprite_mesh.len() / STRIDE) as i32;
+        let grass_vert_count  = (grass_mesh.len()  / STRIDE) as i32;
 
         let vao_stick  = upload_vao(&stick_mesh);
         let vao_log    = upload_vao(&log_mesh);
@@ -242,6 +266,7 @@ impl ItemRenderer {
         let vao_seeds  = upload_vao(&seeds_mesh);
         let vao_bed    = upload_vao(&bed_mesh);
         let vao_sprite = upload_vao(&sprite_mesh);
+        let vao_grass  = upload_vao(&grass_mesh);
         let vao_blk_log     = upload_vao(&blk_log_mesh);
         let vao_blk_dirt    = upload_vao(&blk_dirt_mesh);
         let vao_blk_cobble  = upload_vao(&blk_cobble_mesh);
@@ -271,7 +296,8 @@ impl ItemRenderer {
             vao_stick, vao_log, vao_dirt, vao_stone, vao_seeds, vao_bed,
             shader, mvp_loc, atlas,
             stick_vert_count, cube_vert_count, bed_vert_count,
-            vao_sprite, sprite_vert_count, raw_copper_tex, coal_tex,
+            vao_sprite, sprite_vert_count, vao_grass, grass_vert_count,
+            raw_copper_tex, coal_tex,
             colored_shader, colored_mvp_loc,
             axe_model, torch_model,
             block_atlas,
@@ -316,8 +342,21 @@ impl ItemRenderer {
             gl::BindVertexArray(0);
             gl::BindTexture(gl::TEXTURE_2D, self.atlas);
 
-            // ── Block-atlas cube items ─────────────────────────────────────────
+            // ── Block-atlas items (cubes + grass sprite) ──────────────────────
             gl::BindTexture(gl::TEXTURE_2D, self.block_atlas);
+            // Grass seeds: flat sprite with the tall-grass tile
+            gl::BindVertexArray(self.vao_grass);
+            for item in items {
+                if item.item != ItemType::Seeds { continue; }
+                let pos = glam::Vec3::new(
+                    item.position[0] + 0.5, item.visual_y(), item.position[2] + 0.5,
+                );
+                let model = glam::Mat4::from_translation(pos)
+                    * glam::Mat4::from_rotation_y(item.age * 1.5);
+                let mvp = *projection * *view * model;
+                gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE, mvp.to_cols_array().as_ptr());
+                gl::DrawArrays(gl::TRIANGLES, 0, self.grass_vert_count);
+            }
             for item in items {
                 let vao = match item.item {
                     ItemType::LogBlock   => self.vao_blk_log,
@@ -347,7 +386,7 @@ impl ItemRenderer {
                     ItemType::LogBlock    => continue, // handled by block-atlas pass above
                     ItemType::DirtClump   => continue,
                     ItemType::StoneChunk  => continue,
-                    ItemType::Seeds       => (self.vao_seeds, self.cube_vert_count),
+                    ItemType::Seeds       => continue, // handled by grass sprite pass above
                     ItemType::Bed         => (self.vao_bed,   self.bed_vert_count),
                     ItemType::Feather     => (self.vao_stone, self.cube_vert_count),
                     ItemType::Egg         => (self.vao_stone, self.cube_vert_count),
@@ -432,7 +471,12 @@ impl ItemRenderer {
 
             if let Some(geo) = geo {
                 gl::UseProgram(self.colored_shader);
-                gl::UniformMatrix4fv(self.colored_mvp_loc, 1, gl::FALSE, mvp.to_cols_array().as_ptr());
+                // Rotate axe 90° around Y so the blade faces forward (-Z) instead of left (-X).
+                let held_mvp = match item {
+                    ItemType::StoneAxe => *mvp * glam::Mat4::from_rotation_y(-std::f32::consts::FRAC_PI_2),
+                    _ => *mvp,
+                };
+                gl::UniformMatrix4fv(self.colored_mvp_loc, 1, gl::FALSE, held_mvp.to_cols_array().as_ptr());
                 gl::BindVertexArray(geo.vao);
                 gl::DrawArrays(gl::TRIANGLES, 0, geo.vert_count);
             } else {
@@ -448,7 +492,11 @@ impl ItemRenderer {
                 gl::UseProgram(self.shader);
                 gl::ActiveTexture(gl::TEXTURE0);
                 gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE, mvp.to_cols_array().as_ptr());
-                if let Some(vao) = block_vao {
+                if item == ItemType::Seeds {
+                    gl::BindTexture(gl::TEXTURE_2D, self.block_atlas);
+                    gl::BindVertexArray(self.vao_grass);
+                    gl::DrawArrays(gl::TRIANGLES, 0, self.grass_vert_count);
+                } else if let Some(vao) = block_vao {
                     gl::BindTexture(gl::TEXTURE_2D, self.block_atlas);
                     gl::BindVertexArray(vao);
                     gl::DrawArrays(gl::TRIANGLES, 0, self.cube_vert_count);
@@ -483,6 +531,7 @@ impl Drop for ItemRenderer {
             gl::DeleteVertexArrays(1, &self.vao_seeds);
             gl::DeleteVertexArrays(1, &self.vao_bed);
             gl::DeleteVertexArrays(1, &self.vao_sprite);
+            gl::DeleteVertexArrays(1, &self.vao_grass);
             gl::DeleteVertexArrays(1, &self.vao_blk_log);
             gl::DeleteVertexArrays(1, &self.vao_blk_dirt);
             gl::DeleteVertexArrays(1, &self.vao_blk_cobble);

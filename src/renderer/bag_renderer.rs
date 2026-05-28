@@ -269,6 +269,7 @@ impl BagRenderer {
             ItemType::StoneChunk => Some(22),
             ItemType::WoodBlock  => Some(34),
             ItemType::Furnace    => Some(19),
+            ItemType::Seeds      => Some(8),
             _                    => None,
         };
         if let Some(tile_idx) = block_tile {
