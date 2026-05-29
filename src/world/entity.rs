@@ -69,6 +69,34 @@ fn direction_suits_habitat(
     }
 }
 
+/// True when there is solid ground within 3 blocks below the projected foot
+/// position, i.e. no dangerous drop ahead.
+fn no_cliff_ahead(
+    pos: [f32; 3], yaw_rad: f32,
+    get_block: &impl Fn(i32, i32, i32) -> BlockType,
+) -> bool {
+    let tx = pos[0] + yaw_rad.cos() * 2.5;
+    let tz = pos[2] + yaw_rad.sin() * 2.5;
+    let bx = tx.floor() as i32;
+    let bz = tz.floor() as i32;
+    let foot_y = pos[1].floor() as i32;
+    for drop in 0..=3i32 {
+        if get_block(bx, foot_y - 1 - drop, bz).is_solid() { return true; }
+    }
+    false
+}
+
+/// Combined habitat + cliff check used when picking wander directions.
+/// `find_escape_yaw` deliberately uses `direction_suits_habitat` directly so
+/// that habitat-escape is never blocked by cliffs.
+fn direction_is_safe(
+    pos: [f32; 3], yaw_rad: f32, habitat: Habitat,
+    get_block: &impl Fn(i32, i32, i32) -> BlockType,
+) -> bool {
+    direction_suits_habitat(pos, yaw_rad, habitat, get_block)
+        && no_cliff_ahead(pos, yaw_rad, get_block)
+}
+
 /// Sweep 8 directions starting opposite of `current_yaw_deg`; return the
 /// first yaw (degrees) that suits the habitat, or None if surrounded.
 fn find_escape_yaw(
@@ -174,7 +202,7 @@ impl Chicken {
                 let mut chosen = seed.rem_euclid(360.0);
                 for attempt in 0..4u32 {
                     let candidate = (seed + attempt as f32 * 97.3).rem_euclid(360.0);
-                    if direction_suits_habitat(self.position, candidate.to_radians(), habitat, &get_block) {
+                    if direction_is_safe(self.position, candidate.to_radians(), habitat, &get_block) {
                         chosen = candidate;
                         break;
                     }
@@ -335,7 +363,7 @@ impl Pig {
                 let mut chosen = seed.rem_euclid(360.0);
                 for attempt in 0..4u32 {
                     let candidate = (seed + attempt as f32 * 113.7).rem_euclid(360.0);
-                    if direction_suits_habitat(self.position, candidate.to_radians(), habitat, &get_block) {
+                    if direction_is_safe(self.position, candidate.to_radians(), habitat, &get_block) {
                         chosen = candidate;
                         break;
                     }
@@ -496,7 +524,7 @@ impl Penguin {
                 let mut chosen = seed.rem_euclid(360.0);
                 for attempt in 0..4u32 {
                     let candidate = (seed + attempt as f32 * 89.1).rem_euclid(360.0);
-                    if direction_suits_habitat(self.position, candidate.to_radians(), habitat, &get_block) {
+                    if direction_is_safe(self.position, candidate.to_radians(), habitat, &get_block) {
                         chosen = candidate;
                         break;
                     }
@@ -821,7 +849,7 @@ impl Skeleton {
                             let mut chosen = seed.rem_euclid(360.0);
                             for attempt in 0..4u32 {
                                 let candidate = (seed + attempt as f32 * 107.3).rem_euclid(360.0);
-                                if direction_suits_habitat(self.position, candidate.to_radians(), habitat, &get_block) {
+                                if direction_is_safe(self.position, candidate.to_radians(), habitat, &get_block) {
                                     chosen = candidate;
                                     break;
                                 }
@@ -1104,7 +1132,7 @@ impl Cat {
                 let mut chosen = seed.rem_euclid(360.0);
                 for attempt in 0..4u32 {
                     let candidate = (seed + attempt as f32 * 101.3).rem_euclid(360.0);
-                    if direction_suits_habitat(self.position, candidate.to_radians(), habitat, &get_block) {
+                    if direction_is_safe(self.position, candidate.to_radians(), habitat, &get_block) {
                         chosen = candidate;
                         break;
                     }
