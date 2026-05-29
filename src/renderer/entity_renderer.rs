@@ -683,23 +683,32 @@ impl EntityRenderer {
                 gl::DrawArrays(gl::TRIANGLES, 0, SKEL_STATIC_CNT);
 
                 // Limb animation
-                let swing = (skel.anim_time * 7.0 * skel.move_speed_norm()).sin() * 0.60;
+                let walk_swing = (skel.anim_time * 7.0 * skel.move_speed_norm()).sin() * 0.60;
                 let pivot_arm_y = 1.45_f32;
                 let pivot_leg_y = 0.65_f32;
 
-                // Left arm (swings forward with right leg)
+                // Attack arm swing: both arms lunge forward together.
+                let (la_angle, ra_angle) = if skel.attack_anim > 0.0 {
+                    let t = 1.0 - skel.attack_anim / 0.5;
+                    let a = (std::f32::consts::PI * t).sin() * 1.4;
+                    (a, a)
+                } else {
+                    (walk_swing, -walk_swing)
+                };
+
+                // Left arm
                 let la_p = glam::Vec3::new(-0.21, pivot_arm_y, 0.0);
                 let la_m = glam::Mat4::from_translation(la_p)
-                    * glam::Mat4::from_rotation_x(swing)
+                    * glam::Mat4::from_rotation_x(la_angle)
                     * glam::Mat4::from_translation(-la_p);
                 gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE,
                     (*projection * *view * model * la_m).to_cols_array().as_ptr());
                 gl::DrawArrays(gl::TRIANGLES, SKEL_LARM, VPB);
 
-                // Right arm (opposite)
+                // Right arm
                 let ra_p = glam::Vec3::new(0.21, pivot_arm_y, 0.0);
                 let ra_m = glam::Mat4::from_translation(ra_p)
-                    * glam::Mat4::from_rotation_x(-swing)
+                    * glam::Mat4::from_rotation_x(ra_angle)
                     * glam::Mat4::from_translation(-ra_p);
                 gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE,
                     (*projection * *view * model * ra_m).to_cols_array().as_ptr());
@@ -708,7 +717,7 @@ impl EntityRenderer {
                 // Left leg (opposite to left arm → same as right arm)
                 let ll_p = glam::Vec3::new(-0.08, pivot_leg_y, 0.0);
                 let ll_m = glam::Mat4::from_translation(ll_p)
-                    * glam::Mat4::from_rotation_x(-swing)
+                    * glam::Mat4::from_rotation_x(-walk_swing)
                     * glam::Mat4::from_translation(-ll_p);
                 gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE,
                     (*projection * *view * model * ll_m).to_cols_array().as_ptr());
@@ -717,7 +726,7 @@ impl EntityRenderer {
                 // Right leg (opposite to right arm → same as left arm)
                 let rl_p = glam::Vec3::new(0.08, pivot_leg_y, 0.0);
                 let rl_m = glam::Mat4::from_translation(rl_p)
-                    * glam::Mat4::from_rotation_x(swing)
+                    * glam::Mat4::from_rotation_x(walk_swing)
                     * glam::Mat4::from_translation(-rl_p);
                 gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE,
                     (*projection * *view * model * rl_m).to_cols_array().as_ptr());

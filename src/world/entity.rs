@@ -566,6 +566,57 @@ impl HittableEntity for Penguin {
 
 // ─── Skeleton ─────────────────────────────────────────────────────────────────
 
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum AggroState { Idle, Chasing, InCombat }
+
+const COMBAT_RANGE: f32 = 2.0;   // Metres: enter/attack range
+const PASSIVE_DETECT_R2: f32 = 36.0;   // 6² — always noticed
+const ACTIVE_DETECT_R2:  f32 = 196.0;  // 14² — frontal cone + LOS
+const LOSE_TARGET_R2:    f32 = 576.0;  // 24² — give up chase
+const LOSE_TARGET_TIME:  f32 = 4.0;    // seconds without target → Idle
+
+/// DDA line-of-sight: returns false if any solid block sits between the two points.
+fn has_line_of_sight(
+    from: [f32; 3], to: [f32; 3],
+    get_block: &impl Fn(i32, i32, i32) -> BlockType,
+) -> bool {
+    let eye_y = 1.6_f32;
+    let (fx, fy, fz) = (from[0], from[1] + eye_y, from[2]);
+    let (dx, dy, dz) = (to[0] - fx, to[1] + eye_y - fy, to[2] - fz);
+    let dist = (dx*dx + dy*dy + dz*dz).sqrt();
+    if dist < 0.001 { return true; }
+    let steps = (dist / 0.4).ceil() as i32;
+    let inv = 1.0 / steps as f32;
+    for i in 1..steps {
+        let t = i as f32 * inv;
+        if get_block(
+            (fx + dx * t).floor() as i32,
+            (fy + dy * t).floor() as i32,
+            (fz + dz * t).floor() as i32,
+        ).is_solid() { return false; }
+    }
+    true
+}
+
+/// Returns true when a player at `player_pos` should be noticed by an Idle skeleton.
+fn detect_from_idle(
+    skel_pos: [f32; 3], skel_yaw: f32,
+    player_pos: [f32; 3],
+    get_block: &impl Fn(i32, i32, i32) -> BlockType,
+) -> bool {
+    let dx = player_pos[0] - skel_pos[0];
+    let dz = player_pos[2] - skel_pos[2];
+    let dist2_xz = dx * dx + dz * dz;
+    if dist2_xz < PASSIVE_DETECT_R2 { return true; }
+    if dist2_xz < ACTIVE_DETECT_R2 {
+        let angle_to = dx.atan2(dz).to_degrees();
+        if angle_diff(angle_to, skel_yaw).abs() < 60.0 {
+            return has_line_of_sight(skel_pos, player_pos, get_block);
+        }
+    }
+    false
+}
+
 pub struct Skeleton {
     pub position: [f32; 3],
     pub yaw: f32,
@@ -583,6 +634,13 @@ pub struct Skeleton {
     knockback: f32,
     burn_timer: f32,
     attack_cooldown: f32,
+    pub attack_anim: f32,
+    attack_hit_pending: bool,
+    aggro: AggroState,
+    target_player: Option<usize>,
+    target_lost_timer: f32,
+    strafe_dir: f32,
+    strafe_timer: f32,
 }
 
 impl Skeleton {
@@ -607,6 +665,13 @@ impl Skeleton {
             knockback: 0.0,
             burn_timer: 0.0,
             attack_cooldown: 0.0,
+            attack_anim: 0.0,
+            attack_hit_pending: false,
+            aggro: AggroState::Idle,
+            target_player: None,
+            target_lost_timer: 0.0,
+            strafe_dir: if seed.rem_euclid(2.0) < 1.0 { 1.0 } else { -1.0 },
+            strafe_timer: 2.0 + seed.rem_euclid(1.5),
         }
     }
 
@@ -631,6 +696,10 @@ impl Skeleton {
         self.target_yaw = push_dir[0].atan2(push_dir[2]).to_degrees() + 180.0;
         self.move_speed = self.def.speed;
         self.wander_timer = 2.0;
+        if self.aggro == AggroState::Idle {
+            self.aggro = AggroState::Chasing;
+            self.target_lost_timer = 0.0;
+        }
     }
 
     pub fn drops(&self) -> Vec<ItemType> {
@@ -645,20 +714,20 @@ impl Skeleton {
         if self.move_speed > 0.0 { 1.0 } else { 0.0 }
     }
 
-    /// Returns damage dealt to the player this frame (0.0 if none).
+    /// Returns `Some((player_index, damage))` if a hit lands this frame, else `None`.
     pub fn update(
         &mut self,
         dt: f32,
         get_block: impl Fn(i32, i32, i32) -> BlockType,
         get_sky_light: impl Fn(i32, i32, i32) -> u8,
-        player_pos: [f32; 3],
+        player_positions: &[[f32; 3]],
         sun_angle: f32,
-    ) -> f32 {
+    ) -> Option<(usize, f32)> {
         self.anim_time += dt;
 
         // Sunburn: direct sky light during daytime deals 1 HP/s.
         let bx = self.position[0].floor() as i32;
-        let by = self.position[1].floor() as i32 + 1; // head block
+        let by = self.position[1].floor() as i32 + 1;
         let bz = self.position[2].floor() as i32;
         let sky = get_sky_light(bx, by, bz);
         let is_daytime = sun_angle.sin() > 0.15;
@@ -669,46 +738,128 @@ impl Skeleton {
                 self.burn_timer = 1.0;
             }
         } else {
-            self.burn_timer = self.burn_timer.min(0.0); // reset so it ticks immediately on next sunburn
+            self.burn_timer = self.burn_timer.min(0.0);
         }
 
-        // AI: chase player when in range, otherwise wander.
-        let dx = player_pos[0] - self.position[0];
-        let dz = player_pos[2] - self.position[2];
-        let dist2_xz = dx * dx + dz * dz;
+        // ── Target acquisition ────────────────────────────────────────────────
+        // Find the nearest player detectable given current aggro state.
+        let best_target: Option<(usize, f32)> = {
+            let mut best: Option<(usize, f32)> = None;
+            for (i, &ppos) in player_positions.iter().enumerate() {
+                let dx = ppos[0] - self.position[0];
+                let dz = ppos[2] - self.position[2];
+                let dy = ppos[1] - self.position[1];
+                let dist2 = dx*dx + dz*dz + dy*dy;
+                let detected = match self.aggro {
+                    AggroState::Idle =>
+                        detect_from_idle(self.position, self.yaw, ppos, &get_block),
+                    AggroState::Chasing | AggroState::InCombat =>
+                        dist2 < LOSE_TARGET_R2,
+                };
+                if detected {
+                    if best.map_or(true, |(_, bd)| dist2 < bd) {
+                        best = Some((i, dist2));
+                    }
+                }
+            }
+            best
+        };
 
+        if best_target.is_some() {
+            self.target_lost_timer = 0.0;
+            self.target_player = best_target.map(|(i, _)| i);
+        } else {
+            self.target_lost_timer += dt;
+        }
+
+        // ── Aggro state transitions ───────────────────────────────────────────
+        let target_pos = self.target_player
+            .and_then(|i| player_positions.get(i))
+            .copied();
+
+        if self.target_lost_timer >= LOSE_TARGET_TIME {
+            self.aggro = AggroState::Idle;
+            self.target_player = None;
+        } else if let Some(tpos) = target_pos {
+            let dx = tpos[0] - self.position[0];
+            let dz = tpos[2] - self.position[2];
+            let dy = tpos[1] - self.position[1];
+            let dist2_3d = dx*dx + dz*dz + dy*dy;
+            match self.aggro {
+                AggroState::Idle => {
+                    if best_target.is_some() { self.aggro = AggroState::Chasing; }
+                }
+                AggroState::Chasing => {
+                    if dist2_3d < COMBAT_RANGE * COMBAT_RANGE {
+                        self.aggro = AggroState::InCombat;
+                    }
+                }
+                AggroState::InCombat => {
+                    if dist2_3d > COMBAT_RANGE * COMBAT_RANGE * 2.25 {
+                        self.aggro = AggroState::Chasing;
+                    }
+                }
+            }
+        }
+
+        // ── Movement AI ───────────────────────────────────────────────────────
         let habitat = self.def.habitat;
         if self.knockback > 0.0 {
             self.knockback -= dt;
-        } else if dist2_xz < 16.0_f32 * 16.0 {
-            self.target_yaw = dx.atan2(dz).to_degrees();
-            self.move_speed = self.def.speed;
-        } else if in_wrong_habitat(self.position, habitat, &get_block) {
-            if let Some(ey) = find_escape_yaw(self.position, self.yaw, habitat, &get_block) {
-                self.target_yaw = ey;
-            }
-            self.move_speed = self.def.speed;
         } else {
-            self.wander_timer -= dt;
-            if self.wander_timer <= 0.0 {
-                let seed = self.position[0] * 137.1 + self.position[2] * 83.7 + self.anim_time * 53.9;
-                let mut chosen = seed.rem_euclid(360.0);
-                for attempt in 0..4u32 {
-                    let candidate = (seed + attempt as f32 * 107.3).rem_euclid(360.0);
-                    if direction_suits_habitat(self.position, candidate.to_radians(), habitat, &get_block) {
-                        chosen = candidate;
-                        break;
+            match self.aggro {
+                AggroState::Idle => {
+                    if in_wrong_habitat(self.position, habitat, &get_block) {
+                        if let Some(ey) = find_escape_yaw(self.position, self.yaw, habitat, &get_block) {
+                            self.target_yaw = ey;
+                        }
+                        self.move_speed = self.def.speed;
+                    } else {
+                        self.wander_timer -= dt;
+                        if self.wander_timer <= 0.0 {
+                            let seed = self.position[0] * 137.1 + self.position[2] * 83.7 + self.anim_time * 53.9;
+                            let mut chosen = seed.rem_euclid(360.0);
+                            for attempt in 0..4u32 {
+                                let candidate = (seed + attempt as f32 * 107.3).rem_euclid(360.0);
+                                if direction_suits_habitat(self.position, candidate.to_radians(), habitat, &get_block) {
+                                    chosen = candidate;
+                                    break;
+                                }
+                            }
+                            self.target_yaw = chosen;
+                            let r = (seed * 9.1).rem_euclid(1.0);
+                            let (ir, wr) = (self.def.idle_range, self.def.walk_range);
+                            if r < self.def.idle_chance {
+                                self.move_speed = 0.0;
+                                self.wander_timer = ir.0 + (seed * 0.01).rem_euclid(ir.1 - ir.0);
+                            } else {
+                                self.move_speed = self.def.speed;
+                                self.wander_timer = wr.0 + (seed * 0.01).rem_euclid(wr.1 - wr.0);
+                            }
+                        }
                     }
                 }
-                self.target_yaw = chosen;
-                let r = (seed * 9.1).rem_euclid(1.0);
-                let (ir, wr) = (self.def.idle_range, self.def.walk_range);
-                if r < self.def.idle_chance {
-                    self.move_speed = 0.0;
-                    self.wander_timer = ir.0 + (seed * 0.01).rem_euclid(ir.1 - ir.0);
-                } else {
-                    self.move_speed = self.def.speed;
-                    self.wander_timer = wr.0 + (seed * 0.01).rem_euclid(wr.1 - wr.0);
+                AggroState::Chasing => {
+                    if let Some(tpos) = target_pos {
+                        let dx = tpos[0] - self.position[0];
+                        let dz = tpos[2] - self.position[2];
+                        self.target_yaw = dx.atan2(dz).to_degrees();
+                        self.move_speed = self.def.speed;
+                    }
+                }
+                AggroState::InCombat => {
+                    if let Some(tpos) = target_pos {
+                        let dx = tpos[0] - self.position[0];
+                        let dz = tpos[2] - self.position[2];
+                        // Orbit the target — periodically flip strafe direction.
+                        self.strafe_timer -= dt;
+                        if self.strafe_timer <= 0.0 {
+                            self.strafe_dir = -self.strafe_dir;
+                            self.strafe_timer = 1.5 + self.anim_time.rem_euclid(1.5);
+                        }
+                        self.target_yaw = dx.atan2(dz).to_degrees() + self.strafe_dir * 70.0;
+                        self.move_speed = self.def.speed * 0.7;
+                    }
                 }
             }
         }
@@ -753,16 +904,41 @@ impl Skeleton {
             if self.on_ground { self.velocity[1] = js; self.on_ground = false; }
         }
 
-        // Melee attack: deal 1 damage when close enough and cooldown expired.
+        // ── Melee attack ──────────────────────────────────────────────────────
         self.attack_cooldown = (self.attack_cooldown - dt).max(0.0);
-        let dy = player_pos[1] - self.position[1];
-        let dist2_3d = dist2_xz + dy * dy;
-        if dist2_3d < 2.25 && self.attack_cooldown <= 0.0 {
-            self.attack_cooldown = 1.5;
-            1.0
-        } else {
-            0.0
+        self.attack_anim = (self.attack_anim - dt).max(0.0);
+
+        // Resolve pending hit at the swing peak (0.25 s into the 0.5 s animation).
+        if self.attack_hit_pending && self.attack_anim <= 0.25 {
+            self.attack_hit_pending = false;
+            if let (Some(pidx), Some(tpos)) = (self.target_player, target_pos) {
+                let dx = tpos[0] - self.position[0];
+                let dz = tpos[2] - self.position[2];
+                let dy = tpos[1] - self.position[1];
+                if dx*dx + dz*dz + dy*dy < COMBAT_RANGE * COMBAT_RANGE {
+                    return Some((pidx, 1.0));
+                }
+            }
         }
+
+        // Start a new swing when in combat range and cooldown is ready.
+        if self.aggro == AggroState::InCombat
+            && self.attack_cooldown <= 0.0
+            && !self.attack_hit_pending
+        {
+            if let Some(tpos) = target_pos {
+                let dx = tpos[0] - self.position[0];
+                let dz = tpos[2] - self.position[2];
+                let dy = tpos[1] - self.position[1];
+                if dx*dx + dz*dz + dy*dy < COMBAT_RANGE * COMBAT_RANGE {
+                    self.attack_cooldown = 1.5;
+                    self.attack_anim = 0.5;
+                    self.attack_hit_pending = true;
+                }
+            }
+        }
+
+        None
     }
 }
 

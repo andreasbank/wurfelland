@@ -1702,21 +1702,31 @@ fn main() {
                                 penguin.update(delta_time, |x, y, z| world.get_block(x, y, z));
                             }
                         }
+                        // Collect all player positions: local player first, then remote clients.
+                        let skel_targets: Vec<[f32; 3]> = {
+                            let mut v = vec![player.position];
+                            if let Some(ref srv) = net_server {
+                                for (pos, _, _) in srv.remote_players() { v.push(pos); }
+                            }
+                            v
+                        };
                         if !god_mode {
                             for skeleton in &mut skeletons {
                                 let ecx = (skeleton.position[0] / 16.0).floor() as i32;
                                 let ecz = (skeleton.position[2] / 16.0).floor() as i32;
                                 let dx = ecx - pc_x; let dz = ecz - pc_z;
                                 if dx*dx + dz*dz <= sim_r2 {
-                                    let dmg = skeleton.update(
+                                    if let Some((pidx, dmg)) = skeleton.update(
                                         delta_time,
                                         |x, y, z| world.get_block(x, y, z),
                                         |x, y, z| world.get_sky_light(x, y, z),
-                                        player.position,
+                                        &skel_targets,
                                         sun_angle,
-                                    );
-                                    if dmg > 0.0 {
-                                        player.health = player.health.saturating_sub(dmg as u32);
+                                    ) {
+                                        if pidx == 0 {
+                                            player.health = player.health.saturating_sub(dmg as u32);
+                                        }
+                                        // Remote-player damage (pidx >= 1) would be forwarded here.
                                     }
                                 }
                             }
@@ -1730,7 +1740,7 @@ fn main() {
                                         delta_time,
                                         |x, y, z| world.get_block(x, y, z),
                                         |x, y, z| world.get_sky_light(x, y, z),
-                                        player.position,
+                                        &skel_targets,
                                         sun_angle,
                                     );
                                 }
