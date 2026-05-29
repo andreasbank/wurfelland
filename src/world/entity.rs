@@ -128,6 +128,8 @@ pub struct Chicken {
     target_yaw: f32,
     move_speed: f32,
     knockback: f32,
+    scared_timer: f32,
+    scare_yaw: f32,
 }
 
 impl Chicken {
@@ -150,6 +152,8 @@ impl Chicken {
             target_yaw: init_yaw,
             move_speed: speed,
             knockback: 0.0,
+            scared_timer: 0.0,
+            scare_yaw: init_yaw,
         }
     }
 
@@ -171,9 +175,10 @@ impl Chicken {
         self.velocity[2] = push_dir[2] * 6.0;
         self.on_ground = false;
         self.knockback = 0.4;
-        self.target_yaw = push_dir[0].atan2(push_dir[2]).to_degrees() + 180.0;
-        self.move_speed = self.def.speed;
-        self.wander_timer = 3.0;
+        self.scare_yaw = push_dir[0].atan2(push_dir[2]).to_degrees();
+        self.target_yaw = self.scare_yaw;
+        self.scared_timer = 5.0;
+        self.wander_timer = 0.0;
     }
 
     pub fn interact(&mut self) {}
@@ -195,6 +200,16 @@ impl Chicken {
                 self.target_yaw = ey;
             }
             self.move_speed = self.def.speed;
+        } else if self.scared_timer > 0.0 {
+            self.scared_timer -= dt;
+            let jitter = (self.anim_time * 5.7).sin() * 25.0;
+            let candidate = self.scare_yaw + jitter;
+            if no_cliff_ahead(self.position, candidate.to_radians(), &get_block) {
+                self.target_yaw = candidate;
+            } else if no_cliff_ahead(self.position, self.scare_yaw.to_radians(), &get_block) {
+                self.target_yaw = self.scare_yaw;
+            }
+            self.move_speed = self.def.speed * 1.5;
         } else {
             self.wander_timer -= dt;
             if self.wander_timer <= 0.0 {
@@ -287,6 +302,8 @@ pub struct Pig {
     target_yaw: f32,
     move_speed: f32,
     knockback: f32,
+    scared_timer: f32,
+    scare_yaw: f32,
 }
 
 impl Pig {
@@ -309,6 +326,8 @@ impl Pig {
             target_yaw: init_yaw,
             move_speed: speed,
             knockback: 0.0,
+            scared_timer: 0.0,
+            scare_yaw: init_yaw,
         }
     }
 
@@ -330,9 +349,10 @@ impl Pig {
         self.velocity[2] = push_dir[2] * 5.0;
         self.on_ground = false;
         self.knockback = 0.4;
-        self.target_yaw = push_dir[0].atan2(push_dir[2]).to_degrees() + 180.0;
-        self.move_speed = self.def.speed;
-        self.wander_timer = 3.0;
+        self.scare_yaw = push_dir[0].atan2(push_dir[2]).to_degrees();
+        self.target_yaw = self.scare_yaw;
+        self.scared_timer = 5.0;
+        self.wander_timer = 0.0;
     }
 
     pub fn drops(&self) -> Vec<ItemType> {
@@ -356,6 +376,16 @@ impl Pig {
                 self.target_yaw = ey;
             }
             self.move_speed = self.def.speed;
+        } else if self.scared_timer > 0.0 {
+            self.scared_timer -= dt;
+            let jitter = (self.anim_time * 5.7).sin() * 25.0;
+            let candidate = self.scare_yaw + jitter;
+            if no_cliff_ahead(self.position, candidate.to_radians(), &get_block) {
+                self.target_yaw = candidate;
+            } else if no_cliff_ahead(self.position, self.scare_yaw.to_radians(), &get_block) {
+                self.target_yaw = self.scare_yaw;
+            }
+            self.move_speed = self.def.speed * 1.5;
         } else {
             self.wander_timer -= dt;
             if self.wander_timer <= 0.0 {
@@ -448,6 +478,8 @@ pub struct Penguin {
     target_yaw: f32,
     move_speed: f32,
     knockback: f32,
+    scared_timer: f32,
+    scare_yaw: f32,
 }
 
 impl Penguin {
@@ -470,6 +502,8 @@ impl Penguin {
             target_yaw: init_yaw,
             move_speed: speed,
             knockback: 0.0,
+            scared_timer: 0.0,
+            scare_yaw: init_yaw,
         }
     }
 
@@ -491,9 +525,10 @@ impl Penguin {
         self.velocity[2] = push_dir[2] * 5.0;
         self.on_ground = false;
         self.knockback = 0.4;
-        self.target_yaw = push_dir[0].atan2(push_dir[2]).to_degrees() + 180.0;
-        self.move_speed = self.def.speed;
-        self.wander_timer = 3.0;
+        self.scare_yaw = push_dir[0].atan2(push_dir[2]).to_degrees();
+        self.target_yaw = self.scare_yaw;
+        self.scared_timer = 5.0;
+        self.wander_timer = 0.0;
     }
 
     pub fn drops(&self) -> Vec<ItemType> {
@@ -517,6 +552,16 @@ impl Penguin {
                 self.target_yaw = ey;
             }
             self.move_speed = self.def.speed;
+        } else if self.scared_timer > 0.0 {
+            self.scared_timer -= dt;
+            let jitter = (self.anim_time * 5.7).sin() * 25.0;
+            let candidate = self.scare_yaw + jitter;
+            if no_cliff_ahead(self.position, candidate.to_radians(), &get_block) {
+                self.target_yaw = candidate;
+            } else if no_cliff_ahead(self.position, self.scare_yaw.to_radians(), &get_block) {
+                self.target_yaw = self.scare_yaw;
+            }
+            self.move_speed = self.def.speed * 1.5;
         } else {
             self.wander_timer -= dt;
             if self.wander_timer <= 0.0 {
@@ -1036,6 +1081,8 @@ pub struct Cat {
     target_yaw: f32,
     move_speed: f32,
     knockback: f32,
+    scared_timer: f32,
+    scare_yaw: f32,
 }
 
 impl Cat {
@@ -1059,6 +1106,8 @@ impl Cat {
             target_yaw: init_yaw,
             move_speed: speed,
             knockback: 0.0,
+            scared_timer: 0.0,
+            scare_yaw: init_yaw,
         }
     }
 
@@ -1080,9 +1129,10 @@ impl Cat {
         self.velocity[2] = push_dir[2] * 5.0;
         self.on_ground = false;
         self.knockback = 0.4;
-        self.target_yaw = push_dir[0].atan2(push_dir[2]).to_degrees() + 180.0;
-        self.move_speed = self.def.speed;
-        self.wander_timer = 3.0;
+        self.scare_yaw = push_dir[0].atan2(push_dir[2]).to_degrees();
+        self.target_yaw = self.scare_yaw;
+        self.scared_timer = 5.0;
+        self.wander_timer = 0.0;
         self.sitting = false;
     }
 
@@ -1125,6 +1175,16 @@ impl Cat {
                 self.target_yaw = ey;
             }
             self.move_speed = self.def.speed;
+        } else if self.scared_timer > 0.0 {
+            self.scared_timer -= dt;
+            let jitter = (self.anim_time * 5.7).sin() * 25.0;
+            let candidate = self.scare_yaw + jitter;
+            if no_cliff_ahead(self.position, candidate.to_radians(), &get_block) {
+                self.target_yaw = candidate;
+            } else if no_cliff_ahead(self.position, self.scare_yaw.to_radians(), &get_block) {
+                self.target_yaw = self.scare_yaw;
+            }
+            self.move_speed = self.def.speed * 1.5;
         } else {
             self.wander_timer -= dt;
             if self.wander_timer <= 0.0 {
