@@ -4,7 +4,7 @@ use std::f32::consts::FRAC_PI_2;
 use crate::renderer::utils::{compile_shader, link_program};
 use crate::renderer::shadow_pass::{ShadowPass, NUM_CASCADES, CASCADE_ENDS};
 use crate::world::entity::{Chicken, Pig, Skeleton, Cat, Cow};
-use crate::world::{WorkbenchProp, BedProp};
+use crate::world::{WorkbenchProp, BedProp, FurnaceProp};
 
 // Vertex format: [x, y, z, r, g, b] — 6 floats
 const STRIDE: usize = 6;
@@ -297,6 +297,34 @@ fn build_bed_mesh() -> Vec<f32> {
 
 const BED_VERT_COUNT: i32 = VPB * 10; // 4 legs + headboard + footboard + 2 rails + mattress + pillow
 
+// Furnace mesh: 2-block wide stone kiln, long axis = X.
+// Spans x:[-1,+1], z:[-0.5,+0.5], y:[0,1.05].
+// Two glowing fire chambers face the -Z side.
+fn build_furnace_mesh() -> Vec<f32> {
+    let mut v = Vec::new();
+    let stone   = [0.40f32, 0.40, 0.40]; // medium gray body
+    let dark    = [0.10f32, 0.07, 0.04]; // dark door frame
+    let glow    = [0.92f32, 0.48, 0.08]; // orange fire glow
+    let chimney = [0.50f32, 0.50, 0.50]; // lighter gray chimney
+
+    // Main stone body
+    add_box(&mut v, -1.00, 0.00, -0.50,  1.00, 0.88,  0.50, stone[0], stone[1], stone[2]);
+    // Left door frame (protrudes slightly south of stone body)
+    add_box(&mut v, -0.76, 0.05, -0.52, -0.07, 0.62, -0.50, dark[0],  dark[1],  dark[2]);
+    // Left fire glow (in front of door frame, smaller)
+    add_box(&mut v, -0.69, 0.12, -0.54, -0.14, 0.55, -0.51, glow[0],  glow[1],  glow[2]);
+    // Right door frame
+    add_box(&mut v,  0.07, 0.05, -0.52,  0.76, 0.62, -0.50, dark[0],  dark[1],  dark[2]);
+    // Right fire glow
+    add_box(&mut v,  0.14, 0.12, -0.54,  0.69, 0.55, -0.51, glow[0],  glow[1],  glow[2]);
+    // Chimney stack on top
+    add_box(&mut v, -0.22, 0.88, -0.20,  0.22, 1.05,  0.20, chimney[0], chimney[1], chimney[2]);
+
+    v
+}
+
+const FURNACE_VERT_COUNT: i32 = VPB * 6; // body + 2 door frames + 2 glows + chimney
+
 pub struct EntityRenderer {
     vao: u32,
     vbo: u32,
@@ -312,6 +340,8 @@ pub struct EntityRenderer {
     workbench_vbo: u32,
     bed_vao: u32,
     bed_vbo: u32,
+    furnace_vao: u32,
+    furnace_vbo: u32,
     shader: u32,
     mvp_loc: i32,
     model_loc: i32,
@@ -373,6 +403,7 @@ impl EntityRenderer {
         let (cow_vao, cow_vbo) = Self::upload_mesh(&build_cow_mesh());
         let (workbench_vao, workbench_vbo) = Self::upload_mesh(&build_workbench_mesh());
         let (bed_vao, bed_vbo) = Self::upload_mesh(&build_bed_mesh());
+        let (furnace_vao, furnace_vbo) = Self::upload_mesh(&build_furnace_mesh());
 
         unsafe {
 
@@ -505,7 +536,7 @@ impl EntityRenderer {
 
             EntityRenderer {
                 vao, vbo, pig_vao, pig_vbo, skel_vao, skel_vbo, cat_vao, cat_vbo, cow_vao, cow_vbo,
-                workbench_vao, workbench_vbo, bed_vao, bed_vbo, shader,
+                workbench_vao, workbench_vbo, bed_vao, bed_vbo, furnace_vao, furnace_vbo, shader,
                 mvp_loc, model_loc,
                 fog_start_loc, fog_end_loc, fog_override_loc, fog_color_override_loc,
                 screen_size_loc, sky_sampler_loc,
@@ -1140,6 +1171,49 @@ impl EntityRenderer {
             shadow_pass.draw_solid_mesh(self.bed_vao, 0, BED_VERT_COUNT, &model);
         }
     }
+
+    pub fn draw_furnaces(
+        &self, furnaces: &[FurnaceProp],
+        view: &glam::Mat4, projection: &glam::Mat4,
+        fog_start: f32, fog_end: f32, screen_w: f32, screen_h: f32, sky_tex: u32,
+        fog_override: f32, fog_color_override: glam::Vec3,
+        ambient_light: f32, directional_light: f32, sun_dir: glam::Vec3,
+        shadow_tex: u32, light_space: &[glam::Mat4; NUM_CASCADES],
+        texel_sizes: &[f32; NUM_CASCADES],
+        torch_pos: glam::Vec3, torch_strength: f32,
+    ) {
+        if furnaces.is_empty() { return; }
+        unsafe {
+            gl::Disable(gl::CULL_FACE);
+            self.bind_frame_uniforms(fog_start, fog_end, screen_w, screen_h, sky_tex,
+                fog_override, fog_color_override, ambient_light, directional_light, sun_dir,
+                shadow_tex, light_space, texel_sizes, torch_pos, torch_strength);
+            gl::BindVertexArray(self.furnace_vao);
+
+            for f in furnaces {
+                gl::Uniform1f(self.block_light_loc, 1.0);
+                let c = f.center();
+                let model = glam::Mat4::from_translation(glam::Vec3::from(c))
+                    * glam::Mat4::from_rotation_y(f.yaw());
+                let mvp = *projection * *view * model;
+                gl::UniformMatrix4fv(self.model_loc, 1, gl::FALSE, model.to_cols_array().as_ptr());
+                gl::UniformMatrix4fv(self.mvp_loc,   1, gl::FALSE, mvp.to_cols_array().as_ptr());
+                gl::DrawArrays(gl::TRIANGLES, 0, FURNACE_VERT_COUNT);
+            }
+
+            gl::BindVertexArray(0);
+            gl::Enable(gl::CULL_FACE);
+        }
+    }
+
+    pub fn draw_furnace_shadows(&self, furnaces: &[FurnaceProp], shadow_pass: &ShadowPass) {
+        for f in furnaces {
+            let c = f.center();
+            let model = glam::Mat4::from_translation(glam::Vec3::from(c))
+                * glam::Mat4::from_rotation_y(f.yaw());
+            shadow_pass.draw_solid_mesh(self.furnace_vao, 0, FURNACE_VERT_COUNT, &model);
+        }
+    }
 }
 
 impl Drop for EntityRenderer {
@@ -1159,6 +1233,8 @@ impl Drop for EntityRenderer {
             gl::DeleteBuffers(1, &self.workbench_vbo);
             gl::DeleteVertexArrays(1, &self.bed_vao);
             gl::DeleteBuffers(1, &self.bed_vbo);
+            gl::DeleteVertexArrays(1, &self.furnace_vao);
+            gl::DeleteBuffers(1, &self.furnace_vbo);
             gl::DeleteProgram(self.shader);
             gl::DeleteVertexArrays(1, &self.bar_vao);
             gl::DeleteBuffers(1, &self.bar_vbo);

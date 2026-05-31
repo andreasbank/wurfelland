@@ -1,0 +1,55 @@
+{
+  "minecraft:geometry": [
+    {
+      "description": {
+        "identifier": "geometry.furnace",
+        "item_id": "furnace",
+        "item_scale": 0.018
+      },
+      "bones": [
+        {
+          "name": "body",
+          "item_color": "#666666",
+          "cubes": [
+            { "origin": [-16, 0, -8], "size": [32, 14, 16] }
+          ]
+        },
+        {
+          "name": "left_door",
+          "item_color": "#1A0F05",
+          "cubes": [
+            { "origin": [-14, 1, -9], "size": [11, 9, 1] }
+          ]
+        },
+        {
+          "name": "left_glow",
+          "item_color": "#E87810",
+          "cubes": [
+            { "origin": [-12, 2, -10], "size": [7, 6, 1] }
+          ]
+        },
+        {
+          "name": "right_door",
+          "item_color": "#1A0F05",
+          "cubes": [
+            { "origin": [3, 1, -9], "size": [11, 9, 1] }
+          ]
+        },
+        {
+          "name": "right_glow",
+          "item_color": "#E87810",
+          "cubes": [
+            { "origin": [6, 2, -10], "size": [7, 6, 1] }
+          ]
+        },
+        {
+          "name": "chimney",
+          "item_color": "#7A7A7A",
+          "cubes": [
+            { "origin": [-3, 14, -3], "size": [6, 4, 6] }
+          ]
+        }
+      ]
+    }
+  ]
+}

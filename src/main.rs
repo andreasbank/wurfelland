@@ -16,7 +16,7 @@ mod camera;
 use camera::Camera;
 
 mod world;
-use world::{World, ItemEntity, ItemType, Chicken, Pig, Penguin, Skeleton, Cat, Cow, nearest_entity_hit, EntityRegistry, WorkbenchProp, BedProp};
+use world::{World, ItemEntity, ItemType, Chicken, Pig, Penguin, Skeleton, Cat, Cow, nearest_entity_hit, EntityRegistry, WorkbenchProp, BedProp, FurnaceProp};
 use world::block::BlockType;
 
 mod renderer;
@@ -335,6 +335,7 @@ fn main() {
         let mut item_entities: Vec<ItemEntity> = Vec::new();
         let mut workbenches: Vec<WorkbenchProp> = Vec::new();
         let mut beds: Vec<BedProp> = Vec::new();
+        let mut furnaces: Vec<FurnaceProp> = Vec::new();
         let mut entity_broadcast_timer = 0.0f32;
 
         #[derive(Default)]
@@ -841,6 +842,9 @@ fn main() {
                                                 beds: beds.iter().map(|b| save::BedSave {
                                                     pos: b.pos, dx: b.dx, dz: b.dz,
                                                 }).collect(),
+                                                furnaces: furnaces.iter().map(|f| save::FurnaceSave {
+                                                    pos: f.pos, dx: f.dx, dz: f.dz,
+                                                }).collect(),
                                             };
                                             if let Err(e) = save::save(&name, &data) {
                                                 eprintln!("[save] {}", e);
@@ -971,14 +975,26 @@ fn main() {
                             );
                             if holding_furnace {
                                 if let Some((_hit, adj)) = world.raycast_face(ro, rd, 5.0) {
-                                    if world.get_block(adj[0], adj[1], adj[2]) == BlockType::Air {
+                                    let (dx2, dz2) = if rd[0].abs() >= rd[2].abs() {
+                                        (rd[0].signum() as i32, 0i32)
+                                    } else {
+                                        (0i32, rd[2].signum() as i32)
+                                    };
+                                    let adj2 = [adj[0] + dx2, adj[1], adj[2] + dz2];
+                                    if world.get_block(adj[0], adj[1], adj[2]) == BlockType::Air
+                                        && world.get_block(adj2[0], adj2[1], adj2[2]) == BlockType::Air
+                                    {
                                         world.set_block_recorded(adj[0], adj[1], adj[2], BlockType::Furnace);
+                                        world.set_block_recorded(adj2[0], adj2[1], adj2[2], BlockType::Furnace);
+                                        furnaces.push(FurnaceProp { pos: adj, dx: dx2, dz: dz2 });
                                         let bid = BlockType::Furnace.to_net_id();
                                         if let Some(ref mut server) = net_server {
                                             server.broadcast_block_change(adj[0], adj[1], adj[2], bid);
+                                            server.broadcast_block_change(adj2[0], adj2[1], adj2[2], bid);
                                         }
                                         if let Some(ref mut client) = net_client {
                                             client.send_block_place(adj[0], adj[1], adj[2], bid);
+                                            client.send_block_place(adj2[0], adj2[1], adj2[2], bid);
                                         }
                                         if !god_mode {
                                             if let Some((_, count)) = &mut hotbar[selected_slot] {
@@ -1569,6 +1585,10 @@ fn main() {
                             for b in &data.beds {
                                 beds.push(BedProp { pos: b.pos, dx: b.dx, dz: b.dz });
                             }
+                            furnaces.clear();
+                            for f in &data.furnaces {
+                                furnaces.push(FurnaceProp { pos: f.pos, dx: f.dx, dz: f.dz });
+                            }
                         }
 
                         // Spawn entities in every column that finished loading during startup.
@@ -1747,13 +1767,16 @@ fn main() {
                                         dig_sound_timer = 0.4;
                                     }
                                     if dig_progress >= hardness {
-                                        // For multi-block structures (bed, workbench): remove both halves, drop one item.
+                                        // For multi-block structures (bed, workbench, furnace): remove both halves, drop one item.
                                         let is_bed       = block == BlockType::Bed;
                                         let is_workbench = block == BlockType::Workbench;
+                                        let is_furnace   = block == BlockType::Furnace;
                                         let drops = if is_bed {
                                             vec![ItemType::Bed]
                                         } else if is_workbench {
                                             vec![ItemType::Workbench]
+                                        } else if is_furnace {
+                                            vec![ItemType::Furnace]
                                         } else {
                                             block.drops(target[0], target[1], target[2])
                                         };
@@ -1781,6 +1804,16 @@ fn main() {
                                                 }
                                             }
                                             workbenches.retain(|wb| !wb.contains_block(tx, ty, tz));
+                                        }
+                                        if is_furnace {
+                                            let [tx, ty, tz] = target;
+                                            for (dx, dz) in [(1,0),(-1,0),(0,1),(0,-1)] {
+                                                if world.get_block(tx+dx, ty, tz+dz) == BlockType::Furnace {
+                                                    world.set_block_recorded(tx+dx, ty, tz+dz, BlockType::Air);
+                                                    break;
+                                                }
+                                            }
+                                            furnaces.retain(|f| !f.contains_block(tx, ty, tz));
                                         }
                                         if let Some(ref mut server) = net_server {
                                             server.broadcast_block_change(
@@ -2494,6 +2527,7 @@ fn main() {
                         entity_renderer.draw_cow_shadows(&cows, &shadow_pass);
                         entity_renderer.draw_workbench_shadows(&workbenches, &shadow_pass);
                         entity_renderer.draw_bed_shadows(&beds, &shadow_pass);
+                        entity_renderer.draw_furnace_shadows(&furnaces, &shadow_pass);
                         placed_object_renderer.draw_penguin_shadows(&penguins, &shadow_pass);
                     }
                 }
@@ -2585,6 +2619,14 @@ fn main() {
                         shadow_pass.texel_world_sizes(),
                         torch_pos, torch_strength);
                     entity_renderer.draw_beds(&beds, &view, &projection,
+                        fog_start, fog_end, fb_w as f32, fb_h as f32, sky_tex,
+                        fog_override, fog_override_color,
+                        ambient_light, directional_light, sun_dir,
+                        shadow_pass.depth_texture_array(),
+                        shadow_pass.light_space_matrices(),
+                        shadow_pass.texel_world_sizes(),
+                        torch_pos, torch_strength);
+                    entity_renderer.draw_furnaces(&furnaces, &view, &projection,
                         fog_start, fog_end, fb_w as f32, fb_h as f32, sky_tex,
                         fog_override, fog_override_color,
                         ambient_light, directional_light, sun_dir,

@@ -50,6 +50,15 @@ pub struct WorkbenchSave {
     pub dz:  i32,
 }
 
+// ── Furnace placement record ────────────────────────────────────────────────
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct FurnaceSave {
+    pub pos: [i32; 3],
+    pub dx:  i32,
+    pub dz:  i32,
+}
+
 // ── Bed placement record ───────────────────────────────────────────────────
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -114,6 +123,8 @@ pub struct SaveData {
     pub workbenches: Vec<WorkbenchSave>,
     #[serde(default)]
     pub beds: Vec<BedSave>,
+    #[serde(default)]
+    pub furnaces: Vec<FurnaceSave>,
 }
 
 impl SaveData {
