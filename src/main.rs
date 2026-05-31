@@ -16,7 +16,7 @@ mod camera;
 use camera::Camera;
 
 mod world;
-use world::{World, ItemEntity, ItemType, Chicken, Pig, Penguin, Skeleton, Cat, Cow, nearest_entity_hit, EntityRegistry};
+use world::{World, ItemEntity, ItemType, Chicken, Pig, Penguin, Skeleton, Cat, Cow, nearest_entity_hit, EntityRegistry, WorkbenchProp};
 use world::block::BlockType;
 
 mod renderer;
@@ -294,6 +294,7 @@ fn main() {
         let hotbar_renderer     = HotbarRenderer::new();
         let bag_renderer        = BagRenderer::new();
         let build_renderer      = BuildMenuRenderer::new();
+        let workbench_renderer  = BuildMenuRenderer::new_expanded();
         let mut console         = ConsoleRenderer::new();
         let mut mp_menu         = MultiplayerMenuRenderer::new();
         let mut options_menu    = OptionsMenuRenderer::new();
@@ -332,6 +333,7 @@ fn main() {
         let mut cats: Vec<Cat> = Vec::new();
         let mut cows: Vec<Cow> = Vec::new();
         let mut item_entities: Vec<ItemEntity> = Vec::new();
+        let mut workbenches: Vec<WorkbenchProp> = Vec::new();
         let mut entity_broadcast_timer = 0.0f32;
 
         #[derive(Default)]
@@ -350,9 +352,10 @@ fn main() {
         let mut cursor_item: Option<(ItemType, u32)> = None;
         let mut drag_inv_source: Option<usize> = None;
         let mut drag_hotbar_source: Option<usize> = None;
-        let mut bag_open     = false;
-        let mut build_open   = false;
-        let mut console_open = false;
+        let mut bag_open       = false;
+        let mut build_open     = false;
+        let mut build_expanded = false; // true when opened from a placed workbench
+        let mut console_open   = false;
         let mut god_mode = false;
 
         // ── System stats (CPU / memory) ───────────────────────────────────────
@@ -702,15 +705,17 @@ fn main() {
                                         Some("options")   => options_open = true,
                                         Some("main_menu") => {
                                             // Tear down the session, then load the panorama world.
-                                            paused       = false;
-                                            bag_open     = false;
-                                            build_open   = false;
-                                            console_open = false;
+                                            paused         = false;
+                                            bag_open       = false;
+                                            build_open     = false;
+                                            build_expanded = false;
+                                            console_open   = false;
                                             cursor_item  = None;
                                             chickens.clear();
                                             pigs.clear();
                                             penguins.clear();
                                             item_entities.clear();
+                                            workbenches.clear();
                                             dormant.clear();
                                             spawned_columns.clear();
                                             player       = Player::new();
@@ -822,6 +827,9 @@ fn main() {
                                                 dormant_penguins:  dormant_penguin_saves,
                                                 dormant_skeletons: dormant_skeleton_saves,
                                                 visited_columns:   spawned_columns.iter().copied().collect(),
+                                                workbenches: workbenches.iter().map(|wb| save::WorkbenchSave {
+                                                    pos: wb.pos, dx: wb.dx, dz: wb.dz,
+                                                }).collect(),
                                             };
                                             if let Err(e) = save::save(&name, &data) {
                                                 eprintln!("[save] {}", e);
@@ -859,8 +867,43 @@ fn main() {
                                         }
                                     }
                                 } else if build_open {
-                                    if let Some(recipe) = build_renderer.handle_click(last_mouse_x, last_mouse_y, win_w, win_h) {
-                                        if recipe == "bed" {
+                                    let clicked = if build_expanded {
+                                        workbench_renderer.handle_click(last_mouse_x, last_mouse_y, win_w, win_h)
+                                    } else {
+                                        build_renderer.handle_click(last_mouse_x, last_mouse_y, win_w, win_h)
+                                    };
+                                    if let Some(recipe) = clicked {
+                                        if recipe == "workbench" {
+                                            let stone_count: u32 = player.inventory.iter()
+                                                .filter_map(|s| if let Some((ItemType::StoneChunk, c)) = s { Some(*c) } else { None })
+                                                .sum();
+                                            let log_count: u32 = player.inventory.iter()
+                                                .filter_map(|s| if let Some((ItemType::LogBlock, c)) = s { Some(*c) } else { None })
+                                                .sum();
+                                            if god_mode || (stone_count >= 4 && log_count >= 4) {
+                                                if !god_mode {
+                                                    let mut stone_left = 4u32;
+                                                    for slot in player.inventory.iter_mut() {
+                                                        if stone_left == 0 { break; }
+                                                        if let Some((ItemType::StoneChunk, c)) = slot {
+                                                            let take = (*c).min(stone_left);
+                                                            *c -= take; stone_left -= take;
+                                                            if *c == 0 { *slot = None; }
+                                                        }
+                                                    }
+                                                    let mut log_left = 4u32;
+                                                    for slot in player.inventory.iter_mut() {
+                                                        if log_left == 0 { break; }
+                                                        if let Some((ItemType::LogBlock, c)) = slot {
+                                                            let take = (*c).min(log_left);
+                                                            *c -= take; log_left -= take;
+                                                            if *c == 0 { *slot = None; }
+                                                        }
+                                                    }
+                                                }
+                                                player.pick_up(ItemType::Workbench);
+                                            }
+                                        } else if recipe == "bed" {
                                             let log_count: u32 = player.inventory.iter()
                                                 .filter_map(|s| if let Some((ItemType::LogBlock, c)) = s { Some(*c) } else { None })
                                                 .sum();
@@ -909,8 +952,9 @@ fn main() {
                         if game_state == GameState::Playing && !paused && !bag_open && !build_open {
                             let ro = [camera.position.x, camera.position.y, camera.position.z];
                             let rd = [camera.front.x,    camera.front.y,    camera.front.z];
-                            let holding_furnace = hotbar[selected_slot].map_or(false, |(item, _)| item == ItemType::Furnace);
-                            let holding_bed     = hotbar[selected_slot].map_or(false, |(item, _)| item == ItemType::Bed);
+                            let holding_furnace   = hotbar[selected_slot].map_or(false, |(item, _)| item == ItemType::Furnace);
+                            let holding_bed       = hotbar[selected_slot].map_or(false, |(item, _)| item == ItemType::Bed);
+                            let holding_workbench = hotbar[selected_slot].map_or(false, |(item, _)| item == ItemType::Workbench);
                             let holding_crop_id: Option<u8> = hotbar[selected_slot].and_then(|(item, _)|
                                 world::block::CROPS.iter().find(|d| d.seed_item == item).map(|d| d.id)
                             );
@@ -947,6 +991,36 @@ fn main() {
                                         world.set_block_recorded(adj[0], adj[1], adj[2], BlockType::Bed);
                                         world.set_block_recorded(adj2[0], adj2[1], adj2[2], BlockType::Bed);
                                         let bid = BlockType::Bed.to_net_id();
+                                        if let Some(ref mut server) = net_server {
+                                            server.broadcast_block_change(adj[0], adj[1], adj[2], bid);
+                                            server.broadcast_block_change(adj2[0], adj2[1], adj2[2], bid);
+                                        }
+                                        if let Some(ref mut client) = net_client {
+                                            client.send_block_place(adj[0], adj[1], adj[2], bid);
+                                            client.send_block_place(adj2[0], adj2[1], adj2[2], bid);
+                                        }
+                                        if !god_mode {
+                                            if let Some((_, count)) = &mut hotbar[selected_slot] {
+                                                if *count > 1 { *count -= 1; } else { hotbar[selected_slot] = None; }
+                                            }
+                                        }
+                                    }
+                                }
+                            } else if holding_workbench {
+                                if let Some((_hit, adj)) = world.raycast_face(ro, rd, 5.0) {
+                                    let (dx2, dz2) = if rd[0].abs() >= rd[2].abs() {
+                                        (rd[0].signum() as i32, 0i32)
+                                    } else {
+                                        (0i32, rd[2].signum() as i32)
+                                    };
+                                    let adj2 = [adj[0] + dx2, adj[1], adj[2] + dz2];
+                                    if world.get_block(adj[0], adj[1], adj[2]) == BlockType::Air
+                                        && world.get_block(adj2[0], adj2[1], adj2[2]) == BlockType::Air
+                                    {
+                                        world.set_block_recorded(adj[0], adj[1], adj[2], BlockType::Workbench);
+                                        world.set_block_recorded(adj2[0], adj2[1], adj2[2], BlockType::Workbench);
+                                        workbenches.push(WorkbenchProp { pos: adj, dx: dx2, dz: dz2 });
+                                        let bid = BlockType::Workbench.to_net_id();
                                         if let Some(ref mut server) = net_server {
                                             server.broadcast_block_change(adj[0], adj[1], adj[2], bid);
                                             server.broadcast_block_change(adj2[0], adj2[1], adj2[2], bid);
@@ -1020,6 +1094,13 @@ fn main() {
                                 }
                             } else if let Some((idx, _)) = nearest_entity_hit(&chickens, ro, rd, 5.0) {
                                 chickens[idx].interact();
+                            } else if let Some((hit, _)) = world.raycast_face(ro, rd, 5.0) {
+                                if world.get_block(hit[0], hit[1], hit[2]) == BlockType::Workbench {
+                                    build_open = true;
+                                    build_expanded = true;
+                                    window.set_cursor_mode(glfw::CursorMode::Normal);
+                                    first_mouse = true;
+                                }
                             }
                         }
                     }
@@ -1086,6 +1167,7 @@ fn main() {
                                         window.set_cursor_mode(glfw::CursorMode::Disabled);
                                     } else if build_open {
                                         build_open = false;
+                                        build_expanded = false;
                                         window.set_cursor_mode(glfw::CursorMode::Disabled);
                                     } else {
                                         paused = !paused;
@@ -1162,6 +1244,7 @@ fn main() {
                                 } else if key == Key::I && !paused && !console_open {
                                     bag_open = !bag_open;
                                     build_open = false;
+                                    build_expanded = false;
                                     if bag_open {
                                         window.set_cursor_mode(glfw::CursorMode::Normal);
                                         first_mouse = true;
@@ -1181,6 +1264,7 @@ fn main() {
                                     }
                                 } else if key == Key::B && !paused && !console_open {
                                     build_open = !build_open;
+                                    build_expanded = false; // B always opens normal menu
                                     bag_open = false;
                                     if build_open {
                                         window.set_cursor_mode(glfw::CursorMode::Normal);
@@ -1465,6 +1549,10 @@ fn main() {
                                     }
                                 }
                             }
+                            workbenches.clear();
+                            for wb in &data.workbenches {
+                                workbenches.push(WorkbenchProp { pos: wb.pos, dx: wb.dx, dz: wb.dz });
+                            }
                         }
 
                         // Spawn entities in every column that finished loading during startup.
@@ -1643,10 +1731,13 @@ fn main() {
                                         dig_sound_timer = 0.4;
                                     }
                                     if dig_progress >= hardness {
-                                        // For beds: find and remove the paired half, drop only one item.
-                                        let is_bed = block == BlockType::Bed;
+                                        // For multi-block structures (bed, workbench): remove both halves, drop one item.
+                                        let is_bed       = block == BlockType::Bed;
+                                        let is_workbench = block == BlockType::Workbench;
                                         let drops = if is_bed {
                                             vec![ItemType::Bed]
+                                        } else if is_workbench {
+                                            vec![ItemType::Workbench]
                                         } else {
                                             block.drops(target[0], target[1], target[2])
                                         };
@@ -1663,6 +1754,16 @@ fn main() {
                                                     break;
                                                 }
                                             }
+                                        }
+                                        if is_workbench {
+                                            let [tx, ty, tz] = target;
+                                            for (dx, dz) in [(1,0),(-1,0),(0,1),(0,-1)] {
+                                                if world.get_block(tx+dx, ty, tz+dz) == BlockType::Workbench {
+                                                    world.set_block_recorded(tx+dx, ty, tz+dz, BlockType::Air);
+                                                    break;
+                                                }
+                                            }
+                                            workbenches.retain(|wb| !wb.contains_block(tx, ty, tz));
                                         }
                                         if let Some(ref mut server) = net_server {
                                             server.broadcast_block_change(
@@ -2374,6 +2475,7 @@ fn main() {
                         entity_renderer.draw_skeleton_shadows(&skeletons, &shadow_pass);
                         entity_renderer.draw_cat_shadows(&cats, &shadow_pass);
                         entity_renderer.draw_cow_shadows(&cows, &shadow_pass);
+                        entity_renderer.draw_workbench_shadows(&workbenches, &shadow_pass);
                         placed_object_renderer.draw_penguin_shadows(&penguins, &shadow_pass);
                     }
                 }
@@ -2449,6 +2551,14 @@ fn main() {
                         shadow_pass.texel_world_sizes(),
                         torch_pos, torch_strength);
                     entity_renderer.draw_cows(&cows, &view, &projection,
+                        fog_start, fog_end, fb_w as f32, fb_h as f32, sky_tex,
+                        fog_override, fog_override_color,
+                        ambient_light, directional_light, sun_dir,
+                        shadow_pass.depth_texture_array(),
+                        shadow_pass.light_space_matrices(),
+                        shadow_pass.texel_world_sizes(),
+                        torch_pos, torch_strength);
+                    entity_renderer.draw_workbenches(&workbenches, &view, &projection,
                         fog_start, fog_end, fb_w as f32, fb_h as f32, sky_tex,
                         fog_override, fog_override_color,
                         ambient_light, directional_light, sun_dir,
@@ -2627,7 +2737,11 @@ fn main() {
                     }
                 }
                 if build_open {
-                    build_renderer.draw(last_mouse_x / win_w, last_mouse_y / win_h);
+                    if build_expanded {
+                        workbench_renderer.draw(last_mouse_x / win_w, last_mouse_y / win_h);
+                    } else {
+                        build_renderer.draw(last_mouse_x / win_w, last_mouse_y / win_h);
+                    }
                 }
                 if paused && !options_open { menu_renderer.draw(win_w, win_h); }
                 if console_open { console.draw(win_w, win_h); }

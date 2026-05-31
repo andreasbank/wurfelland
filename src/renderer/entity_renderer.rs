@@ -4,6 +4,7 @@ use std::f32::consts::FRAC_PI_2;
 use crate::renderer::utils::{compile_shader, link_program};
 use crate::renderer::shadow_pass::{ShadowPass, NUM_CASCADES, CASCADE_ENDS};
 use crate::world::entity::{Chicken, Pig, Skeleton, Cat, Cow};
+use crate::world::WorkbenchProp;
 
 // Vertex format: [x, y, z, r, g, b] — 6 floats
 const STRIDE: usize = 6;
@@ -232,6 +233,35 @@ fn build_chicken_mesh() -> Vec<f32> {
     v
 }
 
+// Workbench mesh: 2-block wide table centred at origin, long axis = X.
+// Spans x:[-1,+1], z:[-0.5,+0.5], y:[0,0.82].
+fn build_workbench_mesh() -> Vec<f32> {
+    let mut v = Vec::new();
+    let leg   = [0.38f32, 0.24, 0.11]; // dark wood legs
+    let top   = [0.62f32, 0.43, 0.21]; // medium wood tabletop
+    let shelf = [0.34f32, 0.21, 0.09]; // lower shelf
+    let mark  = [0.28f32, 0.16, 0.06]; // crafting-mark inset
+
+    // Four corner legs (x0→x1, y0→y1, z0→z1)
+    add_box(&mut v, -1.00, 0.00, -0.50, -0.84, 0.68, -0.34, leg[0], leg[1], leg[2]);
+    add_box(&mut v,  0.84, 0.00, -0.50,  1.00, 0.68, -0.34, leg[0], leg[1], leg[2]);
+    add_box(&mut v, -1.00, 0.00,  0.34, -0.84, 0.68,  0.50, leg[0], leg[1], leg[2]);
+    add_box(&mut v,  0.84, 0.00,  0.34,  1.00, 0.68,  0.50, leg[0], leg[1], leg[2]);
+
+    // Tabletop slab
+    add_box(&mut v, -1.00, 0.68, -0.50,  1.00, 0.82,  0.50, top[0], top[1], top[2]);
+
+    // Lower shelf / stretcher
+    add_box(&mut v, -0.86, 0.26, -0.38,  0.86, 0.32,  0.38, shelf[0], shelf[1], shelf[2]);
+
+    // Crafting-mark inset on the tabletop surface
+    add_box(&mut v, -0.38, 0.82, -0.28,  0.38, 0.85,  0.28, mark[0], mark[1], mark[2]);
+
+    v
+}
+
+const WORKBENCH_VERT_COUNT: i32 = VPB * 7; // 4 legs + top + shelf + mark
+
 pub struct EntityRenderer {
     vao: u32,
     vbo: u32,
@@ -243,6 +273,8 @@ pub struct EntityRenderer {
     cat_vbo: u32,
     cow_vao: u32,
     cow_vbo: u32,
+    workbench_vao: u32,
+    workbench_vbo: u32,
     shader: u32,
     mvp_loc: i32,
     model_loc: i32,
@@ -302,6 +334,7 @@ impl EntityRenderer {
         let (skel_vao, skel_vbo) = Self::upload_mesh(&build_skeleton_mesh());
         let (cat_vao, cat_vbo) = Self::upload_mesh(&build_cat_mesh());
         let (cow_vao, cow_vbo) = Self::upload_mesh(&build_cow_mesh());
+        let (workbench_vao, workbench_vbo) = Self::upload_mesh(&build_workbench_mesh());
 
         unsafe {
 
@@ -433,7 +466,8 @@ impl EntityRenderer {
             let bar_color_loc = gl::GetUniformLocation(bar_shader, c"u_color".as_ptr());
 
             EntityRenderer {
-                vao, vbo, pig_vao, pig_vbo, skel_vao, skel_vbo, cat_vao, cat_vbo, cow_vao, cow_vbo, shader,
+                vao, vbo, pig_vao, pig_vbo, skel_vao, skel_vbo, cat_vao, cat_vbo, cow_vao, cow_vbo,
+                workbench_vao, workbench_vbo, shader,
                 mvp_loc, model_loc,
                 fog_start_loc, fog_end_loc, fog_override_loc, fog_color_override_loc,
                 screen_size_loc, sky_sampler_loc,
@@ -982,6 +1016,49 @@ impl EntityRenderer {
             shadow_pass.draw_solid_mesh(self.cow_vao, 0, VPB * 9, &model);
         }
     }
+
+    pub fn draw_workbenches(
+        &self, workbenches: &[WorkbenchProp],
+        view: &glam::Mat4, projection: &glam::Mat4,
+        fog_start: f32, fog_end: f32, screen_w: f32, screen_h: f32, sky_tex: u32,
+        fog_override: f32, fog_color_override: glam::Vec3,
+        ambient_light: f32, directional_light: f32, sun_dir: glam::Vec3,
+        shadow_tex: u32, light_space: &[glam::Mat4; NUM_CASCADES],
+        texel_sizes: &[f32; NUM_CASCADES],
+        torch_pos: glam::Vec3, torch_strength: f32,
+    ) {
+        if workbenches.is_empty() { return; }
+        unsafe {
+            gl::Disable(gl::CULL_FACE);
+            self.bind_frame_uniforms(fog_start, fog_end, screen_w, screen_h, sky_tex,
+                fog_override, fog_color_override, ambient_light, directional_light, sun_dir,
+                shadow_tex, light_space, texel_sizes, torch_pos, torch_strength);
+            gl::BindVertexArray(self.workbench_vao);
+
+            for wb in workbenches {
+                gl::Uniform1f(self.block_light_loc, 1.0);
+                let c = wb.center();
+                let model = glam::Mat4::from_translation(glam::Vec3::from(c))
+                    * glam::Mat4::from_rotation_y(wb.yaw());
+                let mvp = *projection * *view * model;
+                gl::UniformMatrix4fv(self.model_loc, 1, gl::FALSE, model.to_cols_array().as_ptr());
+                gl::UniformMatrix4fv(self.mvp_loc,   1, gl::FALSE, mvp.to_cols_array().as_ptr());
+                gl::DrawArrays(gl::TRIANGLES, 0, WORKBENCH_VERT_COUNT);
+            }
+
+            gl::BindVertexArray(0);
+            gl::Enable(gl::CULL_FACE);
+        }
+    }
+
+    pub fn draw_workbench_shadows(&self, workbenches: &[WorkbenchProp], shadow_pass: &ShadowPass) {
+        for wb in workbenches {
+            let c = wb.center();
+            let model = glam::Mat4::from_translation(glam::Vec3::from(c))
+                * glam::Mat4::from_rotation_y(wb.yaw());
+            shadow_pass.draw_solid_mesh(self.workbench_vao, 0, WORKBENCH_VERT_COUNT, &model);
+        }
+    }
 }
 
 impl Drop for EntityRenderer {
@@ -997,6 +1074,8 @@ impl Drop for EntityRenderer {
             gl::DeleteBuffers(1, &self.cat_vbo);
             gl::DeleteVertexArrays(1, &self.cow_vao);
             gl::DeleteBuffers(1, &self.cow_vbo);
+            gl::DeleteVertexArrays(1, &self.workbench_vao);
+            gl::DeleteBuffers(1, &self.workbench_vbo);
             gl::DeleteProgram(self.shader);
             gl::DeleteVertexArrays(1, &self.bar_vao);
             gl::DeleteBuffers(1, &self.bar_vbo);

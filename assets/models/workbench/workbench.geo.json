@@ -1,0 +1,34 @@
+{
+  "minecraft:geometry": [
+    {
+      "description": {
+        "identifier": "geometry.workbench",
+        "item_id": "workbench",
+        "item_scale": 0.018
+      },
+      "bones": [
+        {
+          "name": "body",
+          "item_color": "#8B5E3C",
+          "cubes": [
+            { "origin": [-16, 0, -8], "size": [32, 11, 16] }
+          ]
+        },
+        {
+          "name": "top",
+          "item_color": "#5A3A1C",
+          "cubes": [
+            { "origin": [-16, 11, -8], "size": [32, 3, 16] }
+          ]
+        },
+        {
+          "name": "marks",
+          "item_color": "#3D2810",
+          "cubes": [
+            { "origin": [-5, 14, -4], "size": [10, 1, 8] }
+          ]
+        }
+      ]
+    }
+  ]
+}

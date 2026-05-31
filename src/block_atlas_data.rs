@@ -321,6 +321,50 @@ pub fn build_block_atlas_pixels() -> Vec<u8> {
         }
     }
 
+    // Tile 36: Workbench top — wood plank base with a central crafting-surface mark.
+    {
+        const TILE_IDX: usize = 36;
+        let tile_col = TILE_IDX % TILES_PER_ROW;
+        let tile_row = TILE_IDX / TILES_PER_ROW;
+        for py in 0..TILE_SIZE {
+            for px in 0..TILE_SIZE {
+                let ax = tile_col * TILE_SIZE + px;
+                let ay = tile_row * TILE_SIZE + py;
+                let idx = (ay * ATLAS_SIZE + ax) * 4;
+
+                // Reuse wood-plank seam pattern as base
+                let plank_row = py / 4;
+                let (base_r, base_g, base_b): (i16, i16, i16) = if plank_row % 2 == 0 {
+                    (194, 153, 89)
+                } else {
+                    (174, 133, 73)
+                };
+                let seam_x = if plank_row % 2 == 0 { 8usize } else { 0usize };
+                let is_seam = py % 4 == 0 || px == seam_x;
+
+                // Crafting marks: a darker 4×4 region centered in the tile
+                let in_mark = px >= 5 && px <= 10 && py >= 5 && py <= 10;
+                let mark_border = px == 5 || px == 10 || py == 5 || py == 10;
+
+                let (r, g, b) = if in_mark && mark_border {
+                    (110i16, 75, 40)   // darker border of craft area
+                } else if in_mark {
+                    (150i16, 105, 58)  // slightly darker inner surface
+                } else if is_seam {
+                    ((base_r - 30).max(0), (base_g - 25).max(0), (base_b - 18).max(0))
+                } else {
+                    let grain = if px % 3 == 0 { 6i16 } else if px % 3 == 2 { -4 } else { 0 };
+                    (base_r + grain, base_g + grain, base_b + grain)
+                };
+
+                pixels[idx]     = r.clamp(0, 255) as u8;
+                pixels[idx + 1] = g.clamp(0, 255) as u8;
+                pixels[idx + 2] = b.clamp(0, 255) as u8;
+                pixels[idx + 3] = 255;
+            }
+        }
+    }
+
     // Tile 35: Missing-icon fallback — purple/black 2×2 checkerboard.
     // Read by geo_atlas::load_broken_icon() when a model has no icon.png.
     // Index is exported as MISSING_ICON_TILE so geo_atlas can find it.

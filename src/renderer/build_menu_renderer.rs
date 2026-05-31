@@ -51,9 +51,44 @@ pub struct BuildMenuRenderer {
 
 impl BuildMenuRenderer {
     pub fn new() -> Self {
-        let mut items: Vec<BuildItem> = Vec::new();
+        Self::build("BUILD", &[
+            ("workbench", "WORKBENCH", &[
+                "A CRAFTING TABLE.",
+                "COSTS 4 STONE",
+                "+ 4 WOOD.",
+            ]),
+            ("bed", "BED", &[
+                "A COZY BED.",
+                "SLEEP TO SKIP",
+                "THE NIGHT.",
+            ]),
+            ("furnace", "FURNACE", &[
+                "SMELT ORES AND",
+                "COOK FOOD.",
+                "COSTS 8 STONE.",
+            ]),
+        ])
+    }
 
-        let mut add = |id: &'static str, name: &str, desc_lines: &[&str]| {
+    /// Expanded menu opened from a placed workbench.
+    pub fn new_expanded() -> Self {
+        Self::build("WORKBENCH", &[
+            ("bed", "BED", &[
+                "A COZY BED.",
+                "SLEEP TO SKIP",
+                "THE NIGHT.",
+            ]),
+            ("furnace", "FURNACE", &[
+                "SMELT ORES AND",
+                "COOK FOOD.",
+                "COSTS 8 STONE.",
+            ]),
+        ])
+    }
+
+    fn build(title: &str, recipes: &[(&'static str, &str, &[&str])]) -> Self {
+        let mut items: Vec<BuildItem> = Vec::new();
+        for &(id, name, desc_lines) in recipes {
             let i = items.len();
             let y0 = LIST_Y0 + i as f32 * (ITEM_H + ITEM_GAP);
             items.push(BuildItem {
@@ -62,23 +97,10 @@ impl BuildMenuRenderer {
                 desc: desc_lines.iter().map(|s| create_text_texture(s)).collect(),
                 bounds: (LIST_X0 + 0.004, y0, LIST_X1 - 0.004, y0 + ITEM_H),
             });
-        };
-
-        add("bed", "BED", &[
-            "A COZY BED.",
-            "SLEEP TO SKIP",
-            "THE NIGHT.",
-        ]);
-
-        add("furnace", "FURNACE", &[
-            "SMELT ORES AND",
-            "COOK FOOD.",
-            "COSTS 8 STONE.",
-        ]);
-
+        }
         BuildMenuRenderer {
             window: Window::new(),
-            title:  create_text_texture("BUILD"),
+            title:  create_text_texture(title),
             items,
         }
     }

@@ -162,6 +162,9 @@ pub fn create_item_atlas() -> u32 {
     // === TILE 21: Leather ===
     fill_tile_placeholder(&mut pixels, 21, 158, 107, 56);
 
+    // === TILE 22: Workbench ===
+    fill_tile_placeholder(&mut pixels, 22, 139, 95, 56);
+
     unsafe {
         let mut id = 0u32;
         gl::GenTextures(1, &mut id);

@@ -24,6 +24,7 @@ pub enum ItemType {
     WoodBlock,
     Beef,
     Leather,
+    Workbench,
 }
 
 impl ItemType {
@@ -52,6 +53,7 @@ impl ItemType {
             ItemType::WoodBlock     => 19,
             ItemType::Beef          => 20,
             ItemType::Leather       => 21,
+            ItemType::Workbench     => 22,
         }
     }
 
@@ -79,6 +81,7 @@ impl ItemType {
             19 => Some(Self::WoodBlock),
             20 => Some(Self::Beef),
             21 => Some(Self::Leather),
+            22 => Some(Self::Workbench),
             _  => None,
         }
     }
@@ -107,6 +110,7 @@ impl ItemType {
             "wood_block"     => Some(Self::WoodBlock),
             "beef"           => Some(Self::Beef),
             "leather"        => Some(Self::Leather),
+            "workbench"      => Some(Self::Workbench),
             _                => None,
         }
     }
@@ -146,6 +150,7 @@ impl ItemType {
             ItemType::WoodBlock    => [0.76, 0.60, 0.35],
             ItemType::Beef         => [0.75, 0.28, 0.18],
             ItemType::Leather      => [0.62, 0.42, 0.22],
+            ItemType::Workbench    => [0.55, 0.37, 0.18],
         }
     }
 }

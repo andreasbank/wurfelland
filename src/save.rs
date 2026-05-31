@@ -41,6 +41,15 @@ pub struct InventorySlotSave {
     pub count:   u32,
 }
 
+// ── Workbench placement record ─────────────────────────────────────────────
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct WorkbenchSave {
+    pub pos: [i32; 3],
+    pub dx:  i32,
+    pub dz:  i32,
+}
+
 // ── Per-block-change record ────────────────────────────────────────────────
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -92,6 +101,8 @@ pub struct SaveData {
     /// don't re-populate them on reload.
     #[serde(default)]
     pub visited_columns: Vec<[i32; 2]>,
+    #[serde(default)]
+    pub workbenches: Vec<WorkbenchSave>,
 }
 
 impl SaveData {
