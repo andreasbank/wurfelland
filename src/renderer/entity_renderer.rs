@@ -4,7 +4,7 @@ use std::f32::consts::FRAC_PI_2;
 use crate::renderer::utils::{compile_shader, link_program};
 use crate::renderer::shadow_pass::{ShadowPass, NUM_CASCADES, CASCADE_ENDS};
 use crate::world::entity::{Chicken, Pig, Skeleton, Cat, Cow};
-use crate::world::WorkbenchProp;
+use crate::world::{WorkbenchProp, BedProp};
 
 // Vertex format: [x, y, z, r, g, b] — 6 floats
 const STRIDE: usize = 6;
@@ -185,23 +185,23 @@ fn build_cow_mesh() -> Vec<f32> {
     let leg  = [0.40f32, 0.26, 0.12]; // darker brown legs
 
     // Body
-    add_box(&mut v, -0.30, 0.40, -0.42,  0.30, 1.00,  0.42, body[0], body[1], body[2]);
+    add_box(&mut v, -0.41, 0.54, -0.57,  0.41, 1.35,  0.57, body[0], body[1], body[2]);
     // Head (juts forward -Z)
-    add_box(&mut v, -0.25, 0.62, -0.72,  0.25, 1.10, -0.42, head[0], head[1], head[2]);
+    add_box(&mut v, -0.34, 0.84, -0.97,  0.34, 1.49, -0.57, head[0], head[1], head[2]);
     // Snout
-    add_box(&mut v, -0.14, 0.65, -0.82,  0.14, 0.84, -0.72, snout[0], snout[1], snout[2]);
+    add_box(&mut v, -0.19, 0.88, -1.11,  0.19, 1.14, -0.97, snout[0], snout[1], snout[2]);
     // Left horn
-    add_box(&mut v, -0.32, 1.06, -0.62, -0.24, 1.22, -0.52, horn[0], horn[1], horn[2]);
+    add_box(&mut v, -0.43, 1.43, -0.84, -0.32, 1.65, -0.70, horn[0], horn[1], horn[2]);
     // Right horn
-    add_box(&mut v,  0.24, 1.06, -0.62,  0.32, 1.22, -0.52, horn[0], horn[1], horn[2]);
+    add_box(&mut v,  0.32, 1.43, -0.84,  0.43, 1.65, -0.70, horn[0], horn[1], horn[2]);
     // Front-left leg
-    add_box(&mut v, -0.23, 0.00, -0.30, -0.09, 0.40, -0.16, leg[0], leg[1], leg[2]);
+    add_box(&mut v, -0.31, 0.00, -0.41, -0.12, 0.54, -0.22, leg[0], leg[1], leg[2]);
     // Front-right leg
-    add_box(&mut v,  0.09, 0.00, -0.30,  0.23, 0.40, -0.16, leg[0], leg[1], leg[2]);
+    add_box(&mut v,  0.12, 0.00, -0.41,  0.31, 0.54, -0.22, leg[0], leg[1], leg[2]);
     // Back-left leg
-    add_box(&mut v, -0.23, 0.00,  0.16, -0.09, 0.40,  0.30, leg[0], leg[1], leg[2]);
+    add_box(&mut v, -0.31, 0.00,  0.22, -0.12, 0.54,  0.41, leg[0], leg[1], leg[2]);
     // Back-right leg
-    add_box(&mut v,  0.09, 0.00,  0.16,  0.23, 0.40,  0.30, leg[0], leg[1], leg[2]);
+    add_box(&mut v,  0.12, 0.00,  0.22,  0.31, 0.54,  0.41, leg[0], leg[1], leg[2]);
 
     v
 }
@@ -262,6 +262,41 @@ fn build_workbench_mesh() -> Vec<f32> {
 
 const WORKBENCH_VERT_COUNT: i32 = VPB * 7; // 4 legs + top + shelf + mark
 
+// Bed mesh: head at x=+1, foot at x=-1. Long axis = X.
+// Spans x:[-1,+1], z:[-0.5,+0.5], y:[0,0.70].
+fn build_bed_mesh() -> Vec<f32> {
+    let mut v = Vec::new();
+    let frame    = [0.32f32, 0.20, 0.09]; // dark wood frame
+    let mattress = [0.72f32, 0.14, 0.14]; // red mattress
+    let pillow   = [0.93f32, 0.88, 0.80]; // cream pillow
+
+    // Four corner legs
+    add_box(&mut v, -1.00, 0.00, -0.50, -0.86, 0.28, -0.36, frame[0], frame[1], frame[2]);
+    add_box(&mut v, -1.00, 0.00,  0.36, -0.86, 0.28,  0.50, frame[0], frame[1], frame[2]);
+    add_box(&mut v,  0.86, 0.00, -0.50,  1.00, 0.28, -0.36, frame[0], frame[1], frame[2]);
+    add_box(&mut v,  0.86, 0.00,  0.36,  1.00, 0.28,  0.50, frame[0], frame[1], frame[2]);
+
+    // Headboard (x=+1 end, tall)
+    add_box(&mut v, 0.86, 0.00, -0.50, 1.00, 0.70, 0.50, frame[0], frame[1], frame[2]);
+
+    // Footboard (x=-1 end, shorter)
+    add_box(&mut v, -1.00, 0.00, -0.50, -0.86, 0.45, 0.50, frame[0], frame[1], frame[2]);
+
+    // Side rails connecting foot to head
+    add_box(&mut v, -0.86, 0.10,  0.36,  0.86, 0.28,  0.50, frame[0], frame[1], frame[2]);
+    add_box(&mut v, -0.86, 0.10, -0.50,  0.86, 0.28, -0.36, frame[0], frame[1], frame[2]);
+
+    // Mattress
+    add_box(&mut v, -0.84, 0.28, -0.34, 0.84, 0.42, 0.34, mattress[0], mattress[1], mattress[2]);
+
+    // Pillow (at head end)
+    add_box(&mut v, 0.54, 0.42, -0.26, 0.84, 0.50, 0.26, pillow[0], pillow[1], pillow[2]);
+
+    v
+}
+
+const BED_VERT_COUNT: i32 = VPB * 10; // 4 legs + headboard + footboard + 2 rails + mattress + pillow
+
 pub struct EntityRenderer {
     vao: u32,
     vbo: u32,
@@ -275,6 +310,8 @@ pub struct EntityRenderer {
     cow_vbo: u32,
     workbench_vao: u32,
     workbench_vbo: u32,
+    bed_vao: u32,
+    bed_vbo: u32,
     shader: u32,
     mvp_loc: i32,
     model_loc: i32,
@@ -335,6 +372,7 @@ impl EntityRenderer {
         let (cat_vao, cat_vbo) = Self::upload_mesh(&build_cat_mesh());
         let (cow_vao, cow_vbo) = Self::upload_mesh(&build_cow_mesh());
         let (workbench_vao, workbench_vbo) = Self::upload_mesh(&build_workbench_mesh());
+        let (bed_vao, bed_vbo) = Self::upload_mesh(&build_bed_mesh());
 
         unsafe {
 
@@ -467,7 +505,7 @@ impl EntityRenderer {
 
             EntityRenderer {
                 vao, vbo, pig_vao, pig_vbo, skel_vao, skel_vbo, cat_vao, cat_vbo, cow_vao, cow_vbo,
-                workbench_vao, workbench_vbo, shader,
+                workbench_vao, workbench_vbo, bed_vao, bed_vbo, shader,
                 mvp_loc, model_loc,
                 fog_start_loc, fog_end_loc, fog_override_loc, fog_color_override_loc,
                 screen_size_loc, sky_sampler_loc,
@@ -1059,6 +1097,49 @@ impl EntityRenderer {
             shadow_pass.draw_solid_mesh(self.workbench_vao, 0, WORKBENCH_VERT_COUNT, &model);
         }
     }
+
+    pub fn draw_beds(
+        &self, beds: &[BedProp],
+        view: &glam::Mat4, projection: &glam::Mat4,
+        fog_start: f32, fog_end: f32, screen_w: f32, screen_h: f32, sky_tex: u32,
+        fog_override: f32, fog_color_override: glam::Vec3,
+        ambient_light: f32, directional_light: f32, sun_dir: glam::Vec3,
+        shadow_tex: u32, light_space: &[glam::Mat4; NUM_CASCADES],
+        texel_sizes: &[f32; NUM_CASCADES],
+        torch_pos: glam::Vec3, torch_strength: f32,
+    ) {
+        if beds.is_empty() { return; }
+        unsafe {
+            gl::Disable(gl::CULL_FACE);
+            self.bind_frame_uniforms(fog_start, fog_end, screen_w, screen_h, sky_tex,
+                fog_override, fog_color_override, ambient_light, directional_light, sun_dir,
+                shadow_tex, light_space, texel_sizes, torch_pos, torch_strength);
+            gl::BindVertexArray(self.bed_vao);
+
+            for bed in beds {
+                gl::Uniform1f(self.block_light_loc, 1.0);
+                let c = bed.center();
+                let model = glam::Mat4::from_translation(glam::Vec3::from(c))
+                    * glam::Mat4::from_rotation_y(bed.yaw());
+                let mvp = *projection * *view * model;
+                gl::UniformMatrix4fv(self.model_loc, 1, gl::FALSE, model.to_cols_array().as_ptr());
+                gl::UniformMatrix4fv(self.mvp_loc,   1, gl::FALSE, mvp.to_cols_array().as_ptr());
+                gl::DrawArrays(gl::TRIANGLES, 0, BED_VERT_COUNT);
+            }
+
+            gl::BindVertexArray(0);
+            gl::Enable(gl::CULL_FACE);
+        }
+    }
+
+    pub fn draw_bed_shadows(&self, beds: &[BedProp], shadow_pass: &ShadowPass) {
+        for bed in beds {
+            let c = bed.center();
+            let model = glam::Mat4::from_translation(glam::Vec3::from(c))
+                * glam::Mat4::from_rotation_y(bed.yaw());
+            shadow_pass.draw_solid_mesh(self.bed_vao, 0, BED_VERT_COUNT, &model);
+        }
+    }
 }
 
 impl Drop for EntityRenderer {
@@ -1076,6 +1157,8 @@ impl Drop for EntityRenderer {
             gl::DeleteBuffers(1, &self.cow_vbo);
             gl::DeleteVertexArrays(1, &self.workbench_vao);
             gl::DeleteBuffers(1, &self.workbench_vbo);
+            gl::DeleteVertexArrays(1, &self.bed_vao);
+            gl::DeleteBuffers(1, &self.bed_vbo);
             gl::DeleteProgram(self.shader);
             gl::DeleteVertexArrays(1, &self.bar_vao);
             gl::DeleteBuffers(1, &self.bar_vbo);

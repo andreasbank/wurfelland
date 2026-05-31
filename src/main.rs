@@ -16,7 +16,7 @@ mod camera;
 use camera::Camera;
 
 mod world;
-use world::{World, ItemEntity, ItemType, Chicken, Pig, Penguin, Skeleton, Cat, Cow, nearest_entity_hit, EntityRegistry, WorkbenchProp};
+use world::{World, ItemEntity, ItemType, Chicken, Pig, Penguin, Skeleton, Cat, Cow, nearest_entity_hit, EntityRegistry, WorkbenchProp, BedProp};
 use world::block::BlockType;
 
 mod renderer;
@@ -334,6 +334,7 @@ fn main() {
         let mut cows: Vec<Cow> = Vec::new();
         let mut item_entities: Vec<ItemEntity> = Vec::new();
         let mut workbenches: Vec<WorkbenchProp> = Vec::new();
+        let mut beds: Vec<BedProp> = Vec::new();
         let mut entity_broadcast_timer = 0.0f32;
 
         #[derive(Default)]
@@ -588,6 +589,13 @@ fn main() {
                                         item_entities.clear();
                                         dormant.clear();
                                         spawned_columns.clear();
+                                        player.inventory = [None; game::INVENTORY_SIZE];
+                                        hotbar = [None; 9];
+                                        if DEBUG {
+                                            player.inventory[0] = Some((ItemType::LogBlock,   50));
+                                            player.inventory[1] = Some((ItemType::StoneChunk, 50));
+                                            player.inventory[2] = Some((ItemType::DirtClump,  50));
+                                        }
                                         menu_reveal_timer = 0.0;
                                         sun_angle  = std::f32::consts::FRAC_PI_4;
                                         total_time = 0.0;
@@ -830,6 +838,9 @@ fn main() {
                                                 workbenches: workbenches.iter().map(|wb| save::WorkbenchSave {
                                                     pos: wb.pos, dx: wb.dx, dz: wb.dz,
                                                 }).collect(),
+                                                beds: beds.iter().map(|b| save::BedSave {
+                                                    pos: b.pos, dx: b.dx, dz: b.dz,
+                                                }).collect(),
                                             };
                                             if let Err(e) = save::save(&name, &data) {
                                                 eprintln!("[save] {}", e);
@@ -990,6 +1001,7 @@ fn main() {
                                     {
                                         world.set_block_recorded(adj[0], adj[1], adj[2], BlockType::Bed);
                                         world.set_block_recorded(adj2[0], adj2[1], adj2[2], BlockType::Bed);
+                                        beds.push(BedProp { pos: adj, dx: dx2, dz: dz2 });
                                         let bid = BlockType::Bed.to_net_id();
                                         if let Some(ref mut server) = net_server {
                                             server.broadcast_block_change(adj[0], adj[1], adj[2], bid);
@@ -1553,6 +1565,10 @@ fn main() {
                             for wb in &data.workbenches {
                                 workbenches.push(WorkbenchProp { pos: wb.pos, dx: wb.dx, dz: wb.dz });
                             }
+                            beds.clear();
+                            for b in &data.beds {
+                                beds.push(BedProp { pos: b.pos, dx: b.dx, dz: b.dz });
+                            }
                         }
 
                         // Spawn entities in every column that finished loading during startup.
@@ -1754,6 +1770,7 @@ fn main() {
                                                     break;
                                                 }
                                             }
+                                            beds.retain(|b| !b.contains_block(tx, ty, tz));
                                         }
                                         if is_workbench {
                                             let [tx, ty, tz] = target;
@@ -2476,6 +2493,7 @@ fn main() {
                         entity_renderer.draw_cat_shadows(&cats, &shadow_pass);
                         entity_renderer.draw_cow_shadows(&cows, &shadow_pass);
                         entity_renderer.draw_workbench_shadows(&workbenches, &shadow_pass);
+                        entity_renderer.draw_bed_shadows(&beds, &shadow_pass);
                         placed_object_renderer.draw_penguin_shadows(&penguins, &shadow_pass);
                     }
                 }
@@ -2559,6 +2577,14 @@ fn main() {
                         shadow_pass.texel_world_sizes(),
                         torch_pos, torch_strength);
                     entity_renderer.draw_workbenches(&workbenches, &view, &projection,
+                        fog_start, fog_end, fb_w as f32, fb_h as f32, sky_tex,
+                        fog_override, fog_override_color,
+                        ambient_light, directional_light, sun_dir,
+                        shadow_pass.depth_texture_array(),
+                        shadow_pass.light_space_matrices(),
+                        shadow_pass.texel_world_sizes(),
+                        torch_pos, torch_strength);
+                    entity_renderer.draw_beds(&beds, &view, &projection,
                         fog_start, fog_end, fb_w as f32, fb_h as f32, sky_tex,
                         fog_override, fog_override_color,
                         ambient_light, directional_light, sun_dir,

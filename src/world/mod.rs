@@ -61,3 +61,34 @@ impl WorkbenchProp {
             || (x == px + self.dx && y == py && z == pz + self.dz)
     }
 }
+
+// ── Placed bed prop ───────────────────────────────────────────────────────────
+pub struct BedProp {
+    pub pos: [i32; 3],
+    pub dx: i32,
+    pub dz: i32,
+}
+
+impl BedProp {
+    pub fn center(&self) -> [f32; 3] {
+        [
+            self.pos[0] as f32 + self.dx as f32 * 0.5 + 0.5,
+            self.pos[1] as f32,
+            self.pos[2] as f32 + self.dz as f32 * 0.5 + 0.5,
+        ]
+    }
+
+    pub fn yaw(&self) -> f32 {
+        use std::f32::consts::{PI, FRAC_PI_2};
+        if self.dx == 1       { 0.0        }
+        else if self.dx == -1 { PI         }
+        else if self.dz == 1  { FRAC_PI_2  }
+        else                  { -FRAC_PI_2 }
+    }
+
+    pub fn contains_block(&self, x: i32, y: i32, z: i32) -> bool {
+        let [px, py, pz] = self.pos;
+        (x == px && y == py && z == pz)
+            || (x == px + self.dx && y == py && z == pz + self.dz)
+    }
+}

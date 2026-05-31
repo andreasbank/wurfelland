@@ -916,6 +916,7 @@ impl Chunk {
             && block != BlockType::TallGrass
             && block != BlockType::GrassShort
             && block != BlockType::Workbench
+            && block != BlockType::Bed
     }
 
     /// Emit a merged quad (6 vertices × 14 floats) into `out`.

@@ -50,6 +50,15 @@ pub struct WorkbenchSave {
     pub dz:  i32,
 }
 
+// ── Bed placement record ───────────────────────────────────────────────────
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct BedSave {
+    pub pos: [i32; 3],
+    pub dx:  i32,
+    pub dz:  i32,
+}
+
 // ── Per-block-change record ────────────────────────────────────────────────
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -103,6 +112,8 @@ pub struct SaveData {
     pub visited_columns: Vec<[i32; 2]>,
     #[serde(default)]
     pub workbenches: Vec<WorkbenchSave>,
+    #[serde(default)]
+    pub beds: Vec<BedSave>,
 }
 
 impl SaveData {
