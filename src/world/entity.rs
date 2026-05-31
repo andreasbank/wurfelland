@@ -1260,6 +1260,182 @@ impl HittableEntity for Cat {
     fn is_dead(&self) -> bool { self.is_dead() }
 }
 
+// ─── Cow ─────────────────────────────────────────────────────────────────────
+
+pub struct Cow {
+    pub position: [f32; 3],
+    pub yaw: f32,
+    pub anim_time: f32,
+    pub health: f32,
+    pub block_light: f32,
+    pub net_target_pos: [f32; 3],
+    pub net_target_yaw: f32,
+    pub def: Arc<EntityDef>,
+    velocity: [f32; 3],
+    on_ground: bool,
+    wander_timer: f32,
+    target_yaw: f32,
+    move_speed: f32,
+    knockback: f32,
+    scared_timer: f32,
+    scare_yaw: f32,
+}
+
+impl Cow {
+    pub fn new(x: f32, y: f32, z: f32, def: Arc<EntityDef>) -> Self {
+        let seed = x * 247.1 + z * 433.7;
+        let init_yaw = seed.rem_euclid(360.0);
+        let speed = def.speed;
+        Cow {
+            position: [x, y, z],
+            yaw: init_yaw,
+            anim_time: seed.rem_euclid(6.28),
+            health: def.max_health,
+            block_light: 1.0,
+            net_target_pos: [x, y, z],
+            net_target_yaw: init_yaw,
+            def,
+            velocity: [0.0; 3],
+            on_ground: false,
+            wander_timer: seed.rem_euclid(7.0),
+            target_yaw: init_yaw,
+            move_speed: speed,
+            knockback: 0.0,
+            scared_timer: 0.0,
+            scare_yaw: init_yaw,
+        }
+    }
+
+    pub fn is_dead(&self) -> bool { self.health <= 0.0 }
+
+    pub fn aabb_min(&self) -> [f32; 3] {
+        let h = self.def.hit_half_width;
+        [self.position[0] - h, self.position[1], self.position[2] - h]
+    }
+    pub fn aabb_max(&self) -> [f32; 3] {
+        let h = self.def.hit_half_width;
+        [self.position[0] + h, self.position[1] + self.def.height, self.position[2] + h]
+    }
+
+    pub fn take_hit(&mut self, push_dir: [f32; 3]) {
+        self.health -= 1.0;
+        self.velocity[0] = push_dir[0] * 4.5;
+        self.velocity[1] = 4.0;
+        self.velocity[2] = push_dir[2] * 4.5;
+        self.on_ground = false;
+        self.knockback = 0.4;
+        self.scare_yaw = push_dir[0].atan2(push_dir[2]).to_degrees();
+        self.target_yaw = self.scare_yaw;
+        self.scared_timer = 5.0;
+        self.wander_timer = 0.0;
+    }
+
+    pub fn drops(&self) -> Vec<ItemType> {
+        let s = self.anim_time;
+        self.def.loot.iter().enumerate().filter_map(|(i, entry)| {
+            let r = (s * (247.1 + i as f32 * 79.3)).rem_euclid(1.0);
+            if r < entry.chance { Some(entry.item) } else { None }
+        }).collect()
+    }
+
+    pub fn move_speed_norm(&self) -> f32 {
+        if self.move_speed > 0.0 { 1.0 } else { 0.0 }
+    }
+
+    pub fn update(&mut self, dt: f32, get_block: impl Fn(i32, i32, i32) -> BlockType) {
+        self.anim_time += dt;
+
+        let habitat = self.def.habitat;
+        if in_wrong_habitat(self.position, habitat, &get_block) {
+            if let Some(ey) = find_escape_yaw(self.position, self.yaw, habitat, &get_block) {
+                self.target_yaw = ey;
+            }
+            self.move_speed = self.def.speed;
+        } else if self.scared_timer > 0.0 {
+            self.scared_timer -= dt;
+            let jitter = (self.anim_time * 5.7).sin() * 25.0;
+            let candidate = self.scare_yaw + jitter;
+            if no_cliff_ahead(self.position, candidate.to_radians(), &get_block) {
+                self.target_yaw = candidate;
+            } else if no_cliff_ahead(self.position, self.scare_yaw.to_radians(), &get_block) {
+                self.target_yaw = self.scare_yaw;
+            }
+            self.move_speed = self.def.speed * 1.5;
+        } else {
+            self.wander_timer -= dt;
+            if self.wander_timer <= 0.0 {
+                let seed = self.position[0] * 113.7 + self.position[2] * 67.3 + self.anim_time * 53.9;
+                let mut chosen = seed.rem_euclid(360.0);
+                for attempt in 0..4u32 {
+                    let candidate = (seed + attempt as f32 * 107.3).rem_euclid(360.0);
+                    if direction_is_safe(self.position, candidate.to_radians(), habitat, &get_block) {
+                        chosen = candidate;
+                        break;
+                    }
+                }
+                self.target_yaw = chosen;
+
+                let r = (seed * 9.3).rem_euclid(1.0);
+                let (ir, wr) = (self.def.idle_range, self.def.walk_range);
+                if r < self.def.idle_chance {
+                    self.move_speed = 0.0;
+                    self.wander_timer = ir.0 + (seed * 0.01).rem_euclid(ir.1 - ir.0);
+                } else {
+                    self.move_speed = self.def.speed;
+                    self.wander_timer = wr.0 + (seed * 0.01).rem_euclid(wr.1 - wr.0);
+                }
+            }
+        }
+
+        let diff = angle_diff(self.target_yaw, self.yaw);
+        let turn_step = 80.0_f32 * dt;
+        if diff.abs() <= turn_step { self.yaw = self.target_yaw; }
+        else { self.yaw += diff.signum() * turn_step; }
+
+        if self.knockback > 0.0 { self.knockback -= dt; }
+        else {
+            let yr = self.yaw.to_radians();
+            self.velocity[0] = yr.cos() * self.move_speed;
+            self.velocity[2] = yr.sin() * self.move_speed;
+        }
+
+        if !self.on_ground {
+            self.velocity[1] += GRAVITY * dt;
+            self.velocity[1] = self.velocity[1].max(-50.0);
+        }
+
+        let is_solid = |x: i32, y: i32, z: i32| get_block(x, y, z).is_solid();
+        let (hw, ht, js) = (self.def.half_width, self.def.height, self.def.jump_speed);
+
+        self.position[0] += self.velocity[0] * dt;
+        if aabb_collides(self.position, hw, ht, &is_solid) {
+            self.position[0] -= self.velocity[0] * dt;
+            self.velocity[0] = 0.0;
+            if self.on_ground { self.velocity[1] = js; self.on_ground = false; }
+        }
+
+        self.position[1] += self.velocity[1] * dt;
+        if aabb_collides(self.position, hw, ht, &is_solid) {
+            if self.velocity[1] < 0.0 { self.position[1] = self.position[1].floor() + 1.0; self.on_ground = true; }
+            else { self.position[1] = (self.position[1] + ht).floor() - ht; }
+            self.velocity[1] = 0.0;
+        } else { self.on_ground = false; }
+
+        self.position[2] += self.velocity[2] * dt;
+        if aabb_collides(self.position, hw, ht, &is_solid) {
+            self.position[2] -= self.velocity[2] * dt;
+            self.velocity[2] = 0.0;
+            if self.on_ground { self.velocity[1] = js; self.on_ground = false; }
+        }
+    }
+}
+
+impl HittableEntity for Cow {
+    fn aabb_min(&self) -> [f32; 3] { self.aabb_min() }
+    fn aabb_max(&self) -> [f32; 3] { self.aabb_max() }
+    fn is_dead(&self) -> bool { self.is_dead() }
+}
+
 pub fn angle_diff(target: f32, current: f32) -> f32 {
     let mut d = target - current;
     while d > 180.0 { d -= 360.0; }

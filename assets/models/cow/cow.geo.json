@@ -1,0 +1,106 @@
+{
+  "format_version": "1.12.0",
+  "minecraft:geometry": [
+    {
+      "description": {
+        "identifier": "geometry.cow",
+        "item_id": "beef",
+        "texture_width": 16,
+        "texture_height": 16,
+        "visible_bounds_width": 3,
+        "visible_bounds_height": 3,
+        "visible_bounds_offset": [0, 1, 0],
+        "item_scale": 0.025
+      },
+      "bones": [
+        {
+          "name": "body",
+          "pivot": [0, 0, 0],
+          "cubes": [
+            {
+              "origin": [-12, 16, -14],
+              "size": [24, 16, 28],
+              "uv": [0, 0]
+            }
+          ],
+          "item_color": "#7A4820"
+        },
+        {
+          "name": "head",
+          "pivot": [0, 0, 0],
+          "cubes": [
+            {
+              "origin": [-10, 24, -30],
+              "size": [20, 18, 16],
+              "uv": [0, 0]
+            }
+          ],
+          "item_color": "#7D4E25"
+        },
+        {
+          "name": "snout",
+          "pivot": [0, 0, 0],
+          "cubes": [
+            {
+              "origin": [-6, 24, -34],
+              "size": [12, 8, 4],
+              "uv": [0, 0]
+            }
+          ],
+          "item_color": "#C48C6A"
+        },
+        {
+          "name": "horn_left",
+          "pivot": [0, 0, 0],
+          "cubes": [
+            {
+              "origin": [-13, 42, -28],
+              "size": [3, 6, 3],
+              "uv": [0, 0]
+            }
+          ],
+          "item_color": "#E3D09A"
+        },
+        {
+          "name": "horn_right",
+          "pivot": [0, 0, 0],
+          "cubes": [
+            {
+              "origin": [10, 42, -28],
+              "size": [3, 6, 3],
+              "uv": [0, 0]
+            }
+          ],
+          "item_color": "#E3D09A"
+        },
+        {
+          "name": "legs",
+          "pivot": [0, 0, 0],
+          "cubes": [
+            {
+              "origin": [-10, 0, -12],
+              "size": [5, 16, 5],
+              "uv": [0, 0]
+            },
+            {
+              "origin": [5, 0, -12],
+              "size": [5, 16, 5],
+              "uv": [0, 0]
+            },
+            {
+              "origin": [-10, 0, 9],
+              "size": [5, 16, 5],
+              "uv": [0, 0]
+            },
+            {
+              "origin": [5, 0, 9],
+              "size": [5, 16, 5],
+              "uv": [0, 0]
+            }
+          ],
+          "item_color": "#6B3D18"
+        }
+      ]
+    }
+  ]
+}

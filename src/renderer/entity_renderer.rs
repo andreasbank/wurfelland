@@ -3,7 +3,7 @@ use std::os::raw::c_void;
 use std::f32::consts::FRAC_PI_2;
 use crate::renderer::utils::{compile_shader, link_program};
 use crate::renderer::shadow_pass::{ShadowPass, NUM_CASCADES, CASCADE_ENDS};
-use crate::world::entity::{Chicken, Pig, Skeleton, Cat};
+use crate::world::entity::{Chicken, Pig, Skeleton, Cat, Cow};
 
 // Vertex format: [x, y, z, r, g, b] — 6 floats
 const STRIDE: usize = 6;
@@ -72,6 +72,22 @@ const CAT_FL_LEG: i32 = VPB * 5;
 const CAT_FR_LEG: i32 = VPB * 6;
 const CAT_BL_LEG: i32 = VPB * 7;
 const CAT_BR_LEG: i32 = VPB * 8;
+
+// Cow mesh layout:
+//   [0]   Body             — static
+//   [1]   Head             — static
+//   [2]   Snout            — static
+//   [3]   Left horn        — static
+//   [4]   Right horn       — static
+//   [5]   Front-left leg   ← animated
+//   [6]   Front-right leg  ← animated (opposite phase)
+//   [7]   Back-left leg    ← animated (opposite to front-left)
+//   [8]   Back-right leg   ← animated (opposite to front-right)
+const COW_STATIC_CNT: i32 = VPB * 5; // body + head + snout + 2 horns
+const COW_FL_LEG: i32 = VPB * 5;
+const COW_FR_LEG: i32 = VPB * 6;
+const COW_BL_LEG: i32 = VPB * 7;
+const COW_BR_LEG: i32 = VPB * 8;
 
 // Skeleton mesh layout:
 //   [0]   Head  (skull)       — static
@@ -159,6 +175,36 @@ fn build_pig_mesh() -> Vec<f32> {
     v
 }
 
+fn build_cow_mesh() -> Vec<f32> {
+    let mut v = Vec::new();
+    let body = [0.45f32, 0.30, 0.15]; // warm dark brown body
+    let head = [0.50f32, 0.34, 0.18]; // slightly lighter head
+    let snout = [0.78f32, 0.58, 0.44]; // pinkish muzzle
+    let horn = [0.88f32, 0.82, 0.60]; // cream horns
+    let leg  = [0.40f32, 0.26, 0.12]; // darker brown legs
+
+    // Body
+    add_box(&mut v, -0.30, 0.40, -0.42,  0.30, 1.00,  0.42, body[0], body[1], body[2]);
+    // Head (juts forward -Z)
+    add_box(&mut v, -0.25, 0.62, -0.72,  0.25, 1.10, -0.42, head[0], head[1], head[2]);
+    // Snout
+    add_box(&mut v, -0.14, 0.65, -0.82,  0.14, 0.84, -0.72, snout[0], snout[1], snout[2]);
+    // Left horn
+    add_box(&mut v, -0.32, 1.06, -0.62, -0.24, 1.22, -0.52, horn[0], horn[1], horn[2]);
+    // Right horn
+    add_box(&mut v,  0.24, 1.06, -0.62,  0.32, 1.22, -0.52, horn[0], horn[1], horn[2]);
+    // Front-left leg
+    add_box(&mut v, -0.23, 0.00, -0.30, -0.09, 0.40, -0.16, leg[0], leg[1], leg[2]);
+    // Front-right leg
+    add_box(&mut v,  0.09, 0.00, -0.30,  0.23, 0.40, -0.16, leg[0], leg[1], leg[2]);
+    // Back-left leg
+    add_box(&mut v, -0.23, 0.00,  0.16, -0.09, 0.40,  0.30, leg[0], leg[1], leg[2]);
+    // Back-right leg
+    add_box(&mut v,  0.09, 0.00,  0.16,  0.23, 0.40,  0.30, leg[0], leg[1], leg[2]);
+
+    v
+}
+
 fn build_chicken_mesh() -> Vec<f32> {
     let mut v = Vec::new();
     let wh = [0.95f32, 0.95, 0.85]; // feather white
@@ -195,6 +241,8 @@ pub struct EntityRenderer {
     skel_vbo: u32,
     cat_vao: u32,
     cat_vbo: u32,
+    cow_vao: u32,
+    cow_vbo: u32,
     shader: u32,
     mvp_loc: i32,
     model_loc: i32,
@@ -253,6 +301,7 @@ impl EntityRenderer {
         let (pig_vao, pig_vbo) = Self::upload_mesh(&build_pig_mesh());
         let (skel_vao, skel_vbo) = Self::upload_mesh(&build_skeleton_mesh());
         let (cat_vao, cat_vbo) = Self::upload_mesh(&build_cat_mesh());
+        let (cow_vao, cow_vbo) = Self::upload_mesh(&build_cow_mesh());
 
         unsafe {
 
@@ -384,7 +433,7 @@ impl EntityRenderer {
             let bar_color_loc = gl::GetUniformLocation(bar_shader, c"u_color".as_ptr());
 
             EntityRenderer {
-                vao, vbo, pig_vao, pig_vbo, skel_vao, skel_vbo, cat_vao, cat_vbo, shader,
+                vao, vbo, pig_vao, pig_vbo, skel_vao, skel_vbo, cat_vao, cat_vbo, cow_vao, cow_vbo, shader,
                 mvp_loc, model_loc,
                 fog_start_loc, fog_end_loc, fog_override_loc, fog_color_override_loc,
                 screen_size_loc, sky_sampler_loc,
@@ -846,6 +895,93 @@ impl EntityRenderer {
             shadow_pass.draw_solid_mesh(self.cat_vao, 0, VPB * 9, &model);
         }
     }
+
+    pub fn draw_cows(&self, cows: &[Cow], view: &glam::Mat4, projection: &glam::Mat4,
+                     fog_start: f32, fog_end: f32, screen_w: f32, screen_h: f32, sky_tex: u32,
+                     fog_override: f32, fog_color_override: glam::Vec3,
+                     ambient_light: f32, directional_light: f32, sun_dir: glam::Vec3,
+                     shadow_tex: u32, light_space: &[glam::Mat4; NUM_CASCADES],
+                     texel_sizes: &[f32; NUM_CASCADES],
+                     torch_pos: glam::Vec3, torch_strength: f32) {
+        unsafe {
+            gl::Disable(gl::CULL_FACE);
+            self.bind_frame_uniforms(fog_start, fog_end, screen_w, screen_h, sky_tex,
+                fog_override, fog_color_override, ambient_light, directional_light, sun_dir,
+                shadow_tex, light_space, texel_sizes, torch_pos, torch_strength);
+            gl::BindVertexArray(self.cow_vao);
+
+            for cow in cows {
+                gl::Uniform1f(self.block_light_loc, cow.block_light);
+                let rot_y = -(cow.yaw.to_radians() + FRAC_PI_2);
+                let model = glam::Mat4::from_translation(glam::Vec3::from(cow.position))
+                    * glam::Mat4::from_rotation_y(rot_y);
+                let mvp = *projection * *view * model;
+
+                gl::UniformMatrix4fv(self.model_loc, 1, gl::FALSE, model.to_cols_array().as_ptr());
+                // Static parts: body + head + snout + 2 horns
+                gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE, mvp.to_cols_array().as_ptr());
+                gl::DrawArrays(gl::TRIANGLES, 0, COW_STATIC_CNT);
+
+                let swing = (cow.anim_time * 5.5 * cow.move_speed_norm()).sin() * 0.55;
+                let pivot_y = 0.40_f32;
+
+                // Front-left leg (swings with back-right)
+                let fl_p = glam::Vec3::new(-0.16, pivot_y, -0.23);
+                let fl_m = glam::Mat4::from_translation(fl_p)
+                    * glam::Mat4::from_rotation_x(swing)
+                    * glam::Mat4::from_translation(-fl_p);
+                gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE,
+                    (*projection * *view * model * fl_m).to_cols_array().as_ptr());
+                gl::DrawArrays(gl::TRIANGLES, COW_FL_LEG, VPB);
+
+                // Front-right leg (opposite phase)
+                let fr_p = glam::Vec3::new(0.16, pivot_y, -0.23);
+                let fr_m = glam::Mat4::from_translation(fr_p)
+                    * glam::Mat4::from_rotation_x(-swing)
+                    * glam::Mat4::from_translation(-fr_p);
+                gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE,
+                    (*projection * *view * model * fr_m).to_cols_array().as_ptr());
+                gl::DrawArrays(gl::TRIANGLES, COW_FR_LEG, VPB);
+
+                // Back-left leg (opposite to front-left)
+                let bl_p = glam::Vec3::new(-0.16, pivot_y, 0.23);
+                let bl_m = glam::Mat4::from_translation(bl_p)
+                    * glam::Mat4::from_rotation_x(-swing)
+                    * glam::Mat4::from_translation(-bl_p);
+                gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE,
+                    (*projection * *view * model * bl_m).to_cols_array().as_ptr());
+                gl::DrawArrays(gl::TRIANGLES, COW_BL_LEG, VPB);
+
+                // Back-right leg (opposite to front-right)
+                let br_p = glam::Vec3::new(0.16, pivot_y, 0.23);
+                let br_m = glam::Mat4::from_translation(br_p)
+                    * glam::Mat4::from_rotation_x(swing)
+                    * glam::Mat4::from_translation(-br_p);
+                gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE,
+                    (*projection * *view * model * br_m).to_cols_array().as_ptr());
+                gl::DrawArrays(gl::TRIANGLES, COW_BR_LEG, VPB);
+            }
+
+            gl::BindVertexArray(0);
+            gl::Enable(gl::CULL_FACE);
+        }
+
+        for cow in cows {
+            let frac = cow.health / cow.def.max_health;
+            if frac < 1.0 {
+                self.draw_health_bar(cow.position, frac, 1.55, view, projection);
+            }
+        }
+    }
+
+    pub fn draw_cow_shadows(&self, cows: &[Cow], shadow_pass: &ShadowPass) {
+        for cow in cows {
+            let rot_y = -(cow.yaw.to_radians() + FRAC_PI_2);
+            let model = glam::Mat4::from_translation(glam::Vec3::from(cow.position))
+                * glam::Mat4::from_rotation_y(rot_y);
+            shadow_pass.draw_solid_mesh(self.cow_vao, 0, VPB * 9, &model);
+        }
+    }
 }
 
 impl Drop for EntityRenderer {
@@ -859,6 +995,8 @@ impl Drop for EntityRenderer {
             gl::DeleteBuffers(1, &self.skel_vbo);
             gl::DeleteVertexArrays(1, &self.cat_vao);
             gl::DeleteBuffers(1, &self.cat_vbo);
+            gl::DeleteVertexArrays(1, &self.cow_vao);
+            gl::DeleteBuffers(1, &self.cow_vbo);
             gl::DeleteProgram(self.shader);
             gl::DeleteVertexArrays(1, &self.bar_vao);
             gl::DeleteBuffers(1, &self.bar_vbo);

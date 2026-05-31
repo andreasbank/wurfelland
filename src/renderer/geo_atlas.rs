@@ -22,7 +22,7 @@ struct GeoDesc {
 /// Each model folder must contain a `*.geo.json` with `"item_id"` in its description.
 /// Icons are packed into a 64×64 GPU texture (4×4 grid of 16×16 tiles).
 /// If `icon.png` is missing or malformed the broken-icon tile from
-/// `assets/ui/blocks_atlas.png` is used instead.
+/// `assets/textures/blocks_atlas.png` is used instead.
 pub struct GeoAtlas {
     pub texture_id: u32,
     uvs: HashMap<ItemType, [f32; 4]>,
@@ -143,22 +143,29 @@ fn load_icon(path: &Path, size: u32, broken: &[u8]) -> Vec<u8> {
 }
 
 fn load_broken_icon() -> Vec<u8> {
-    let path = Path::new("assets/ui/blocks_atlas.png");
+    // Read the missing-icon tile (purple/black checkerboard) from the block atlas.
+    const TILE: u32 = 16;
+    const TPR:  u32 = 16; // tiles per row in the 256×256 atlas
+    let tile = crate::block_atlas_data::MISSING_ICON_TILE as u32;
+    let ox = (tile % TPR) * TILE;
+    let oy = (tile / TPR) * TILE;
+
+    let path = Path::new("assets/textures/blocks_atlas.png");
     if let Ok(img) = image::open(path) {
         let img = img.into_rgba8();
-        if img.width() >= 16 && img.height() >= 16 {
-            let mut px = vec![0u8; 16 * 16 * 4];
-            for y in 0..16u32 {
-                for x in 0..16u32 {
-                    let src = img.get_pixel(x, y).0;
-                    let idx = (y * 16 + x) as usize * 4;
+        if img.width() >= ox + TILE && img.height() >= oy + TILE {
+            let mut px = vec![0u8; (TILE * TILE * 4) as usize];
+            for y in 0..TILE {
+                for x in 0..TILE {
+                    let src = img.get_pixel(ox + x, oy + y).0;
+                    let idx = (y * TILE + x) as usize * 4;
                     px[idx..idx+4].copy_from_slice(&src);
                 }
             }
             return px;
         }
     }
-    // Inline fallback if the file is missing: purple/black 2-pixel checkerboard
+    // Inline fallback if the atlas file is missing: purple/black 2-pixel checkerboard
     let mut px = vec![0u8; 16 * 16 * 4];
     for y in 0..16u32 {
         for x in 0..16u32 {

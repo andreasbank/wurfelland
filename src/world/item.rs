@@ -22,6 +22,8 @@ pub enum ItemType {
     Bone,
     CatItem,
     WoodBlock,
+    Beef,
+    Leather,
 }
 
 impl ItemType {
@@ -48,6 +50,8 @@ impl ItemType {
             ItemType::Bone          => 17,
             ItemType::CatItem       => 18,
             ItemType::WoodBlock     => 19,
+            ItemType::Beef          => 20,
+            ItemType::Leather       => 21,
         }
     }
 
@@ -73,6 +77,8 @@ impl ItemType {
             17 => Some(Self::Bone),
             18 => Some(Self::CatItem),
             19 => Some(Self::WoodBlock),
+            20 => Some(Self::Beef),
+            21 => Some(Self::Leather),
             _  => None,
         }
     }
@@ -99,6 +105,8 @@ impl ItemType {
             "bone"           => Some(Self::Bone),
             "cat_item"       => Some(Self::CatItem),
             "wood_block"     => Some(Self::WoodBlock),
+            "beef"           => Some(Self::Beef),
+            "leather"        => Some(Self::Leather),
             _                => None,
         }
     }
@@ -136,6 +144,8 @@ impl ItemType {
             ItemType::Bone         => [0.91, 0.89, 0.83],
             ItemType::CatItem      => [0.80, 0.50, 0.18],
             ItemType::WoodBlock    => [0.76, 0.60, 0.35],
+            ItemType::Beef         => [0.75, 0.28, 0.18],
+            ItemType::Leather      => [0.62, 0.42, 0.22],
         }
     }
 }

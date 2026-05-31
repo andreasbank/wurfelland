@@ -402,6 +402,8 @@ impl ItemRenderer {
                     ItemType::Bone         => (self.vao_stone, self.cube_vert_count),
                     ItemType::CatItem      => continue, // handled by geo pass below
                     ItemType::WoodBlock    => continue,
+                    ItemType::Beef         => (self.vao_stone, self.cube_vert_count),
+                    ItemType::Leather      => (self.vao_stone, self.cube_vert_count),
                 };
 
                 let pos = glam::Vec3::new(

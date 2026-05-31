@@ -208,8 +208,9 @@ impl GameServer {
         penguins: Vec<NetEntity>,
         skeletons: Vec<NetEntity>,
         cats: Vec<NetEntity>,
+        cows: Vec<NetEntity>,
     ) {
-        let msg = ServerMessage::EntityUpdate { chickens, pigs, penguins, skeletons, cats };
+        let msg = ServerMessage::EntityUpdate { chickens, pigs, penguins, skeletons, cats, cows };
         if let Ok(bytes) = bincode::serialize(&msg) {
             self.server.broadcast_message(DefaultChannel::Unreliable, bytes);
         }

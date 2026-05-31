@@ -34,7 +34,7 @@ pub enum ServerMessage {
     PeerLeft     { id: u64 },
     PeerState    { id: u64, x: f32, y: f32, z: f32, yaw: f32, pitch: f32, health: u8 },
     BlockChange  { x: i32, y: i32, z: i32, block_id: u8 },
-    EntityUpdate { chickens: Vec<NetEntity>, pigs: Vec<NetEntity>, penguins: Vec<NetEntity>, skeletons: Vec<NetEntity>, cats: Vec<NetEntity> },
+    EntityUpdate { chickens: Vec<NetEntity>, pigs: Vec<NetEntity>, penguins: Vec<NetEntity>, skeletons: Vec<NetEntity>, cats: Vec<NetEntity>, cows: Vec<NetEntity> },
     TimeUpdate   { sun_angle: f32 },
     ItemUpdate   { items: Vec<NetItem> },
     InventoryAdd { item_id: u8 },

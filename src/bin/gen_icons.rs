@@ -1,9 +1,12 @@
-//! Generates a 16×16 `icon.png` for every geo model found under `assets/models/`.
-//! Run once after creating or editing a geo.json:
+//! Generates assets for the game:
+//!   • `assets/textures/blocks_atlas.png` — 256×256 block face atlas (edit this in an image editor)
+//!   • `assets/textures/blocks_atlas.png` (broken-icon fallback) — already included above
+//!   • `assets/models/*/icon.png` — 16×16 isometric icons for each geo model
+//! Run once after creating or editing geo.json files, or to regenerate the initial block atlas:
 //!     cargo run --bin gen_icons
-//!
-//! The icon is an orthographic isometric render of the model boxes:
-//!   Yaw −25° (right face visible) + Pitch +20° (top face visible).
+
+#[path = "../block_atlas_data.rs"]
+mod block_atlas_data;
 
 use serde::Deserialize;
 use std::path::PathBuf;
@@ -58,7 +61,7 @@ struct B { x0:f32,y0:f32,z0:f32, x1:f32,y1:f32,z1:f32, r:f32,g:f32,b:f32 }
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 fn main() {
-    gen_broken_icon();
+    gen_block_atlas();
 
     let models_dir = PathBuf::from("assets/models");
     let mut dirs: Vec<_> = std::fs::read_dir(&models_dir)
@@ -130,25 +133,15 @@ fn main() {
     }
 }
 
-// ── Broken icon ───────────────────────────────────────────────────────────────
+// ── Block atlas ───────────────────────────────────────────────────────────────
 
-fn gen_broken_icon() {
-    let dir = PathBuf::from("assets/ui");
+fn gen_block_atlas() {
+    let dir = PathBuf::from("assets/textures");
     std::fs::create_dir_all(&dir).unwrap();
     let out = dir.join("blocks_atlas.png");
-    let mut px = vec![0u8; 16 * 16 * 4];
-    for y in 0..16u32 {
-        for x in 0..16u32 {
-            let idx = (y * 16 + x) as usize * 4;
-            px[idx+3] = 255;
-            if (x / 2 + y / 2) % 2 == 0 {
-                px[idx]   = 148; // purple
-                px[idx+2] = 211;
-            }
-        }
-    }
-    let img = image::RgbaImage::from_raw(16, 16, px).unwrap();
-    img.save(&out).unwrap_or_else(|e| eprintln!("failed to save {out:?}: {e}"));
+    let pixels = block_atlas_data::build_block_atlas_pixels();
+    let img = image::RgbaImage::from_raw(256, 256, pixels).unwrap();
+    img.save(&out).unwrap_or_else(|e| panic!("failed to save {out:?}: {e}"));
     println!("wrote {}", out.display());
 }
 

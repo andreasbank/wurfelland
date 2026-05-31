@@ -1,0 +1,26 @@
+{
+  "format_version": "1.0",
+  "identifier": "cow",
+  "components": {
+    "habitat": "land",
+    "health": { "max": 15.0 },
+    "physics": {
+      "half_width": 0.32,
+      "height": 1.40,
+      "jump_speed": 7.0,
+      "hit_half_width": 0.42
+    },
+    "movement": { "speed": 1.0 },
+    "wander": {
+      "idle_chance": 0.30,
+      "idle_min_secs": 4.0,
+      "idle_max_secs": 9.0,
+      "walk_min_secs": 6.0,
+      "walk_max_secs": 15.0
+    },
+    "loot": [
+      { "item": "beef",    "chance": 1.0 },
+      { "item": "leather", "chance": 0.70 }
+    ]
+  }
+}

@@ -99,6 +99,10 @@ impl Biome {
     pub fn allows_penguins(&self) -> bool {
         matches!(self, Biome::SnowyTundra)
     }
+
+    pub fn allows_cows(&self) -> bool {
+        matches!(self, Biome::Plains | Biome::Forest)
+    }
 }
 
 /// Convenience: derive the biome at a world-space coordinate.
