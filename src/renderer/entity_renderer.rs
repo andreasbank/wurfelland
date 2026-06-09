@@ -6,27 +6,29 @@ use crate::renderer::shadow_pass::{ShadowPass, NUM_CASCADES, CASCADE_ENDS};
 use crate::world::entity::{Chicken, Pig, Skeleton, Cat, Cow};
 use crate::world::{WorkbenchProp, BedProp, FurnaceProp};
 
-// Vertex format: [x, y, z, r, g, b] — 6 floats
-const STRIDE: usize = 6;
+// Vertex format: [x, y, z, r, g, b, nx, ny, nz] — 9 floats
+const STRIDE: usize = 9;
 
-fn push_vertex(verts: &mut Vec<f32>, x: f32, y: f32, z: f32, r: f32, g: f32, b: f32) {
-    verts.extend_from_slice(&[x, y, z, r, g, b]);
+fn push_vertex(verts: &mut Vec<f32>, x: f32, y: f32, z: f32, r: f32, g: f32, b: f32,
+               nx: f32, ny: f32, nz: f32) {
+    verts.extend_from_slice(&[x, y, z, r, g, b, nx, ny, nz]);
 }
 
-fn add_face(verts: &mut Vec<f32>, p: [[f32; 3]; 4], shade: f32, r: f32, g: f32, b: f32) {
+fn add_face(verts: &mut Vec<f32>, p: [[f32; 3]; 4], shade: f32, r: f32, g: f32, b: f32,
+            nx: f32, ny: f32, nz: f32) {
     for &i in &[0usize, 1, 2, 0, 2, 3] {
-        push_vertex(verts, p[i][0], p[i][1], p[i][2], r * shade, g * shade, b * shade);
+        push_vertex(verts, p[i][0], p[i][1], p[i][2], r * shade, g * shade, b * shade, nx, ny, nz);
     }
 }
 
 fn add_box(verts: &mut Vec<f32>, x0: f32, y0: f32, z0: f32, x1: f32, y1: f32, z1: f32,
            r: f32, g: f32, b: f32) {
-    add_face(verts, [[x0,y1,z0],[x1,y1,z0],[x1,y1,z1],[x0,y1,z1]], 1.00, r, g, b); // top
-    add_face(verts, [[x0,y0,z1],[x1,y0,z1],[x1,y0,z0],[x0,y0,z0]], 0.50, r, g, b); // bottom
-    add_face(verts, [[x0,y0,z1],[x1,y0,z1],[x1,y1,z1],[x0,y1,z1]], 0.80, r, g, b); // front +Z
-    add_face(verts, [[x1,y0,z0],[x0,y0,z0],[x0,y1,z0],[x1,y1,z0]], 0.80, r, g, b); // back  -Z
-    add_face(verts, [[x0,y0,z0],[x0,y0,z1],[x0,y1,z1],[x0,y1,z0]], 0.65, r, g, b); // left  -X
-    add_face(verts, [[x1,y0,z1],[x1,y0,z0],[x1,y1,z0],[x1,y1,z1]], 0.65, r, g, b); // right +X
+    add_face(verts, [[x0,y1,z0],[x1,y1,z0],[x1,y1,z1],[x0,y1,z1]], 1.00, r, g, b,  0., 1., 0.); // top
+    add_face(verts, [[x0,y0,z1],[x1,y0,z1],[x1,y0,z0],[x0,y0,z0]], 0.50, r, g, b,  0.,-1., 0.); // bottom
+    add_face(verts, [[x0,y0,z1],[x1,y0,z1],[x1,y1,z1],[x0,y1,z1]], 0.80, r, g, b,  0., 0., 1.); // front +Z
+    add_face(verts, [[x1,y0,z0],[x0,y0,z0],[x0,y1,z0],[x1,y1,z0]], 0.80, r, g, b,  0., 0.,-1.); // back  -Z
+    add_face(verts, [[x0,y0,z0],[x0,y0,z1],[x0,y1,z1],[x0,y1,z0]], 0.65, r, g, b, -1., 0., 0.); // left  -X
+    add_face(verts, [[x1,y0,z1],[x1,y0,z0],[x1,y1,z0],[x1,y1,z1]], 0.65, r, g, b,  1., 0., 0.); // right +X
 }
 
 // Chicken mesh layout (36 verts per box, 6 faces × 6 verts):
@@ -389,6 +391,9 @@ impl EntityRenderer {
             gl::VertexAttribPointer(1, 3, gl::FLOAT, gl::FALSE, stride,
                 (3 * mem::size_of::<f32>()) as *const c_void);
             gl::EnableVertexAttribArray(1);
+            gl::VertexAttribPointer(2, 3, gl::FLOAT, gl::FALSE, stride,
+                (6 * mem::size_of::<f32>()) as *const c_void);
+            gl::EnableVertexAttribArray(2);
             gl::BindBuffer(gl::ARRAY_BUFFER, 0);
             gl::BindVertexArray(0);
             (vao, vbo)
@@ -410,22 +415,26 @@ impl EntityRenderer {
             let vert = compile_shader(gl::VERTEX_SHADER, r#"#version 330 core
                 layout(location = 0) in vec3 aPos;
                 layout(location = 1) in vec3 aColor;
+                layout(location = 2) in vec3 aNormal;
                 uniform mat4 mvp;
                 uniform mat4 u_model;
                 out vec3 vColor;
                 out vec3 vWorldPos;
+                out vec3 vNormal;
                 out float fragDist;
                 void main() {
                     gl_Position = mvp * vec4(aPos, 1.0);
                     vColor      = aColor;
                     fragDist    = gl_Position.w;
                     vWorldPos   = (u_model * vec4(aPos, 1.0)).xyz;
+                    vNormal     = mat3(u_model) * aNormal;
                 }"#).unwrap();
 
             let frag = compile_shader(gl::FRAGMENT_SHADER, r#"#version 330 core
                 #define NUM_CASCADES 3
                 in vec3 vColor;
                 in vec3 vWorldPos;
+                in vec3 vNormal;
                 in float fragDist;
                 out vec4 FragColor;
                 uniform sampler2D      u_sky_sampler;
@@ -446,6 +455,7 @@ impl EntityRenderer {
                 uniform float u_block_light;
 
                 float calcShadow(vec3 worldPos, float viewDist) {
+                    if (dot(normalize(vNormal), -normalize(u_light_dir)) <= 0.0) return 0.0;
                     int cascade = NUM_CASCADES - 1;
                     for (int i = 0; i < NUM_CASCADES - 1; i++) {
                         if (viewDist < u_cascade_ends[i]) { cascade = i; break; }
@@ -1207,12 +1217,15 @@ impl EntityRenderer {
     }
 
     pub fn draw_furnace_shadows(&self, furnaces: &[FurnaceProp], shadow_pass: &ShadowPass) {
+        if furnaces.is_empty() { return; }
+        unsafe { gl::Disable(gl::CULL_FACE); }
         for f in furnaces {
             let c = f.center();
             let model = glam::Mat4::from_translation(glam::Vec3::from(c))
                 * glam::Mat4::from_rotation_y(f.yaw());
             shadow_pass.draw_solid_mesh(self.furnace_vao, 0, FURNACE_VERT_COUNT, &model);
         }
+        unsafe { gl::Enable(gl::CULL_FACE); }
     }
 }
 
