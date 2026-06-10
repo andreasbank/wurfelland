@@ -135,7 +135,7 @@ fn spawn_column_entities(
     let biome = world::biome::biome_at_world(center_wx, center_wz);
 
     let hc = (cx.wrapping_mul(73_856_093i32) ^ cz.wrapping_mul(19_349_663i32)) as u32;
-    if hc % 55 == 0 && biome.allows_chickens() {
+    if hc % 300 == 0 && biome.allows_chickens() {
         let n = 2 + (hc >> 8) % 2;
         let bx0 = cx * 16 + ((hc >> 4)  & 0xF) as i32;
         let bz0 = cz * 16 + ((hc >> 12) & 0xF) as i32;
@@ -152,7 +152,7 @@ fn spawn_column_entities(
     }
 
     let hp = (cx.wrapping_mul(48_271i32) ^ cz.wrapping_mul(83_492_791i32)) as u32;
-    if hp % 65 == 0 && biome.allows_pigs() {
+    if hp % 350 == 0 && biome.allows_pigs() {
         let n = 2 + (hp >> 8) % 2;
         let bx0 = cx * 16 + ((hp >> 6)  & 0xF) as i32;
         let bz0 = cz * 16 + ((hp >> 14) & 0xF) as i32;
@@ -169,7 +169,7 @@ fn spawn_column_entities(
     }
 
     let hn = (cx.wrapping_mul(31_397_093i32) ^ cz.wrapping_mul(67_219_501i32)) as u32;
-    if hn % 60 == 0 && biome.allows_penguins() {
+    if hn % 320 == 0 && biome.allows_penguins() {
         let n = 2 + (hn >> 8) % 2;
         let bx0 = cx * 16 + ((hn >> 4)  & 0xF) as i32;
         let bz0 = cz * 16 + ((hn >> 12) & 0xF) as i32;
@@ -224,7 +224,7 @@ fn spawn_column_entities(
     }
 
     let hcow = (cx.wrapping_mul(74_212_831i32) ^ cz.wrapping_mul(28_491_507i32)) as u32;
-    if hcow % 70 == 0 && biome.allows_cows() {
+    if hcow % 400 == 0 && biome.allows_cows() {
         let n = 2 + (hcow >> 8) % 2;
         let bx0 = cx * 16 + ((hcow >> 4)  & 0xF) as i32;
         let bz0 = cz * 16 + ((hcow >> 12) & 0xF) as i32;
