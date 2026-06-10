@@ -3,7 +3,7 @@ use std::os::raw::c_void;
 use std::f32::consts::FRAC_PI_2;
 use crate::renderer::utils::{compile_shader, link_program};
 use crate::renderer::shadow_pass::{ShadowPass, NUM_CASCADES, CASCADE_ENDS};
-use crate::world::entity::{Chicken, Pig, Skeleton, Cat, Cow};
+use crate::world::entity::{Chicken, Pig, Skeleton, Cat, Cow, WeaponType};
 use crate::world::{WorkbenchProp, BedProp, FurnaceProp};
 
 // Vertex format: [x, y, z, r, g, b, nx, ny, nz] — 9 floats
@@ -104,6 +104,34 @@ const SKEL_LARM: i32 = VPB * 2;
 const SKEL_RARM: i32 = VPB * 3;
 const SKEL_LLEG: i32 = VPB * 4;
 const SKEL_RLEG: i32 = VPB * 5;
+
+// Sword held in skeleton right arm (x≈0.15..0.27, arm centre x=0.21).
+// Grip overlaps the base of the arm; guard and blade hang below.
+fn build_sword_weapon_mesh() -> Vec<f32> {
+    let mut v = Vec::new();
+    let silver = [0.80f32, 0.82, 0.87]; // blade
+    let brown  = [0.35f32, 0.22, 0.10]; // grip
+    let gray   = [0.60f32, 0.62, 0.65]; // guard
+    // Grip (lower part of arm + a bit below)
+    add_box(&mut v,  0.185, 0.40, -0.022,  0.235, 0.65,  0.022, brown[0], brown[1], brown[2]);
+    // Guard (crosspiece)
+    add_box(&mut v,  0.10,  0.60, -0.025,  0.32,  0.67,  0.025, gray[0],  gray[1],  gray[2]);
+    // Blade (thin, long)
+    add_box(&mut v,  0.204, 0.00, -0.012,  0.216, 0.60,  0.012, silver[0], silver[1], silver[2]);
+    v
+}
+
+// Axe held in skeleton right arm.
+fn build_axe_weapon_mesh() -> Vec<f32> {
+    let mut v = Vec::new();
+    let wood = [0.38f32, 0.24, 0.11]; // handle
+    let iron = [0.52f32, 0.53, 0.57]; // axe head
+    // Handle
+    add_box(&mut v,  0.185, 0.28, -0.022,  0.235, 0.65,  0.022, wood[0], wood[1], wood[2]);
+    // Axe head (wider, slightly asymmetric — blade faces away from body)
+    add_box(&mut v,  0.08,  0.44, -0.045,  0.34,  0.68,  0.045, iron[0], iron[1], iron[2]);
+    v
+}
 
 fn build_cat_mesh() -> Vec<f32> {
     let mut v = Vec::new();
@@ -344,6 +372,10 @@ pub struct EntityRenderer {
     bed_vbo: u32,
     furnace_vao: u32,
     furnace_vbo: u32,
+    sword_vao: u32,
+    sword_vbo: u32,
+    axe_vao: u32,
+    axe_vbo: u32,
     shader: u32,
     mvp_loc: i32,
     model_loc: i32,
@@ -409,6 +441,8 @@ impl EntityRenderer {
         let (workbench_vao, workbench_vbo) = Self::upload_mesh(&build_workbench_mesh());
         let (bed_vao, bed_vbo) = Self::upload_mesh(&build_bed_mesh());
         let (furnace_vao, furnace_vbo) = Self::upload_mesh(&build_furnace_mesh());
+        let (sword_vao, sword_vbo) = Self::upload_mesh(&build_sword_weapon_mesh());
+        let (axe_vao, axe_vbo) = Self::upload_mesh(&build_axe_weapon_mesh());
 
         unsafe {
 
@@ -546,7 +580,9 @@ impl EntityRenderer {
 
             EntityRenderer {
                 vao, vbo, pig_vao, pig_vbo, skel_vao, skel_vbo, cat_vao, cat_vbo, cow_vao, cow_vbo,
-                workbench_vao, workbench_vbo, bed_vao, bed_vbo, furnace_vao, furnace_vbo, shader,
+                workbench_vao, workbench_vbo, bed_vao, bed_vbo, furnace_vao, furnace_vbo,
+                sword_vao, sword_vbo, axe_vao, axe_vbo,
+                shader,
                 mvp_loc, model_loc,
                 fog_start_loc, fog_end_loc, fog_override_loc, fog_color_override_loc,
                 screen_size_loc, sky_sampler_loc,
@@ -876,6 +912,25 @@ impl EntityRenderer {
                     (*projection * *view * model * ra_m).to_cols_array().as_ptr());
                 gl::DrawArrays(gl::TRIANGLES, SKEL_RARM, VPB);
 
+                // Weapon: drawn under the same right-arm transform
+                match skel.weapon {
+                    WeaponType::Sword => {
+                        gl::BindVertexArray(self.sword_vao);
+                        gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE,
+                            (*projection * *view * model * ra_m).to_cols_array().as_ptr());
+                        gl::DrawArrays(gl::TRIANGLES, 0, VPB * 3);
+                        gl::BindVertexArray(self.skel_vao);
+                    }
+                    WeaponType::Axe => {
+                        gl::BindVertexArray(self.axe_vao);
+                        gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE,
+                            (*projection * *view * model * ra_m).to_cols_array().as_ptr());
+                        gl::DrawArrays(gl::TRIANGLES, 0, VPB * 2);
+                        gl::BindVertexArray(self.skel_vao);
+                    }
+                    WeaponType::BareHands => {}
+                }
+
                 // Left leg (opposite to left arm → same as right arm)
                 let ll_p = glam::Vec3::new(-0.08, pivot_leg_y, 0.0);
                 let ll_m = glam::Mat4::from_translation(ll_p)
@@ -913,6 +968,11 @@ impl EntityRenderer {
             let model = glam::Mat4::from_translation(glam::Vec3::from(skel.position))
                 * glam::Mat4::from_rotation_y(rot_y);
             shadow_pass.draw_solid_mesh(self.skel_vao, 0, VPB * 6, &model);
+            match skel.weapon {
+                WeaponType::Sword => shadow_pass.draw_solid_mesh(self.sword_vao, 0, VPB * 3, &model),
+                WeaponType::Axe   => shadow_pass.draw_solid_mesh(self.axe_vao,  0, VPB * 2, &model),
+                WeaponType::BareHands => {}
+            }
         }
     }
 
@@ -1248,6 +1308,10 @@ impl Drop for EntityRenderer {
             gl::DeleteBuffers(1, &self.bed_vbo);
             gl::DeleteVertexArrays(1, &self.furnace_vao);
             gl::DeleteBuffers(1, &self.furnace_vbo);
+            gl::DeleteVertexArrays(1, &self.sword_vao);
+            gl::DeleteBuffers(1, &self.sword_vbo);
+            gl::DeleteVertexArrays(1, &self.axe_vao);
+            gl::DeleteBuffers(1, &self.axe_vbo);
             gl::DeleteProgram(self.shader);
             gl::DeleteVertexArrays(1, &self.bar_vao);
             gl::DeleteBuffers(1, &self.bar_vbo);

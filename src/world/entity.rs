@@ -640,6 +640,9 @@ impl HittableEntity for Penguin {
 // ─── Skeleton ─────────────────────────────────────────────────────────────────
 
 #[derive(Clone, Copy, PartialEq, Debug)]
+pub enum WeaponType { BareHands, Axe, Sword }
+
+#[derive(Clone, Copy, PartialEq, Debug)]
 enum AggroState { Idle, Chasing, InCombat }
 
 const COMBAT_RANGE: f32 = 2.0;   // Metres: enter/attack range
@@ -714,6 +717,7 @@ pub struct Skeleton {
     target_lost_timer: f32,
     strafe_dir: f32,
     strafe_timer: f32,
+    pub weapon: WeaponType,
 }
 
 impl Skeleton {
@@ -721,6 +725,11 @@ impl Skeleton {
         let seed = x * 183.7 + z * 431.3;
         let init_yaw = seed.rem_euclid(360.0);
         let speed = def.speed;
+        let weapon = match (seed * 73.1 + 17.3).rem_euclid(3.0) as u32 {
+            0 => WeaponType::BareHands,
+            1 => WeaponType::Axe,
+            _ => WeaponType::Sword,
+        };
         Skeleton {
             position: [x, y, z],
             yaw: init_yaw,
@@ -745,6 +754,7 @@ impl Skeleton {
             target_lost_timer: 0.0,
             strafe_dir: if seed.rem_euclid(2.0) < 1.0 { 1.0 } else { -1.0 },
             strafe_timer: 2.0 + seed.rem_euclid(1.5),
+            weapon,
         }
     }
 
@@ -989,7 +999,12 @@ impl Skeleton {
                 let dz = tpos[2] - self.position[2];
                 let dy = tpos[1] - self.position[1];
                 if dx*dx + dz*dz + dy*dy < COMBAT_RANGE * COMBAT_RANGE {
-                    return Some((pidx, 1.0));
+                    let dmg = match self.weapon {
+                        WeaponType::BareHands => 1.0,
+                        WeaponType::Sword     => 2.0,
+                        WeaponType::Axe       => 3.0,
+                    };
+                    return Some((pidx, dmg));
                 }
             }
         }
@@ -1004,7 +1019,10 @@ impl Skeleton {
                 let dz = tpos[2] - self.position[2];
                 let dy = tpos[1] - self.position[1];
                 if dx*dx + dz*dz + dy*dy < COMBAT_RANGE * COMBAT_RANGE {
-                    self.attack_cooldown = 1.5;
+                    self.attack_cooldown = match self.weapon {
+                        WeaponType::Axe => 2.0,
+                        _               => 1.5,
+                    };
                     self.attack_anim = 0.5;
                     self.attack_hit_pending = true;
                 }
