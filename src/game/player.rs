@@ -33,11 +33,9 @@ pub struct Player {
 
 impl Player {
     pub fn new() -> Self {
-        let mut inventory = [None; INVENTORY_SIZE];
-        inventory[0] = Some((ItemType::StoneAxe, 1));
-        inventory[1] = Some((ItemType::Torch, 10));
-        inventory[2] = Some((ItemType::CatItem, 50));
-        inventory[3] = Some((ItemType::WoodBlock, 64));
+        // Players start with an empty inventory. Any starting loadout is applied
+        // by the New Game handler (DEBUG builds only) in main.rs.
+        let inventory = [None; INVENTORY_SIZE];
         Player {
             health: 100,
             position: [0.0, 64.0, 0.0],

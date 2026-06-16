@@ -590,12 +590,18 @@ fn main() {
                                         item_entities.clear();
                                         dormant.clear();
                                         spawned_columns.clear();
+                                        // Non-debug games start with an empty inventory.
+                                        // Only DEBUG builds get a starting loadout.
                                         player.inventory = [None; game::INVENTORY_SIZE];
                                         hotbar = [None; 9];
                                         if DEBUG {
-                                            player.inventory[0] = Some((ItemType::LogBlock,   50));
-                                            player.inventory[1] = Some((ItemType::StoneChunk, 50));
-                                            player.inventory[2] = Some((ItemType::DirtClump,  50));
+                                            player.inventory[0] = Some((ItemType::StoneAxe,   1));
+                                            player.inventory[1] = Some((ItemType::Torch,     10));
+                                            player.inventory[2] = Some((ItemType::CatItem,   50));
+                                            player.inventory[3] = Some((ItemType::WoodBlock, 64));
+                                            player.inventory[4] = Some((ItemType::LogBlock,   50));
+                                            player.inventory[5] = Some((ItemType::StoneChunk, 50));
+                                            player.inventory[6] = Some((ItemType::DirtClump,  50));
                                         }
                                         menu_reveal_timer = 0.0;
                                         sun_angle  = std::f32::consts::FRAC_PI_4;
