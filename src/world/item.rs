@@ -25,6 +25,8 @@ pub enum ItemType {
     Beef,
     Leather,
     Workbench,
+    RedMushroom,
+    BrownMushroom,
 }
 
 impl ItemType {
@@ -54,6 +56,8 @@ impl ItemType {
             ItemType::Beef          => 20,
             ItemType::Leather       => 21,
             ItemType::Workbench     => 22,
+            ItemType::RedMushroom   => 23,
+            ItemType::BrownMushroom => 24,
         }
     }
 
@@ -82,6 +86,8 @@ impl ItemType {
             20 => Some(Self::Beef),
             21 => Some(Self::Leather),
             22 => Some(Self::Workbench),
+            23 => Some(Self::RedMushroom),
+            24 => Some(Self::BrownMushroom),
             _  => None,
         }
     }
@@ -111,6 +117,8 @@ impl ItemType {
             "beef"           => Some(Self::Beef),
             "leather"        => Some(Self::Leather),
             "workbench"      => Some(Self::Workbench),
+            "red_mushroom"   => Some(Self::RedMushroom),
+            "brown_mushroom" => Some(Self::BrownMushroom),
             _                => None,
         }
     }
@@ -122,6 +130,8 @@ impl ItemType {
             ItemType::DirtClump  => Some(BlockType::Dirt),
             ItemType::StoneChunk => Some(BlockType::Cobblestone),
             ItemType::WoodBlock  => Some(BlockType::WoodBlock),
+            ItemType::RedMushroom   => Some(BlockType::RedMushroom),
+            ItemType::BrownMushroom => Some(BlockType::BrownMushroom),
             _ => None,
         }
     }
@@ -151,6 +161,8 @@ impl ItemType {
             ItemType::Beef         => [0.75, 0.28, 0.18],
             ItemType::Leather      => [0.62, 0.42, 0.22],
             ItemType::Workbench    => [0.55, 0.37, 0.18],
+            ItemType::RedMushroom   => [0.85, 0.18, 0.16],
+            ItemType::BrownMushroom => [0.62, 0.46, 0.33],
         }
     }
 }

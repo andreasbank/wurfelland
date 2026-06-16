@@ -8,6 +8,7 @@ pub enum Biome {
     Mountains,
     SnowyTundra,
     Ocean,
+    Swamp,
 }
 
 pub struct BiomeParams {
@@ -64,7 +65,20 @@ impl Biome {
                 sub_surface_block: BlockType::Stone,
                 tree_freq: 0, grass_freq: 0,
             },
+            Biome::Swamp => BiomeParams {
+                // Low, flat land hovering around sea level (127): gentle dips fill
+                // with water to form murky ponds.  Lush grass, scattered trees.
+                base_height: 125.0, amplitude: 3.0, scale: 0.035,
+                surface_block:     BlockType::Grass,
+                sub_surface_block: BlockType::Dirt,
+                tree_freq: 8, grass_freq: 2,
+            },
         }
+    }
+
+    /// Swamp tints water and grass with a murky colour (Minecraft Bedrock style).
+    pub fn is_swamp(&self) -> bool {
+        matches!(self, Biome::Swamp)
     }
 
     /// Map pre-sampled noise values (each in [-1, 1]) to a biome.
@@ -81,6 +95,9 @@ impl Biome {
             Biome::SnowyTundra
         } else if t > 0.65 && m < 0.40 {
             Biome::Desert
+        } else if m > 0.72 && (0.45..=0.78).contains(&t) {
+            // Warm and very wet → murky swampland.
+            Biome::Swamp
         } else if m > 0.55 {
             Biome::Forest
         } else {

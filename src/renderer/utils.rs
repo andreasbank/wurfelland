@@ -129,6 +129,49 @@ pub fn load_png_texture(path: &str) -> u32 {
     }
 }
 
+/// Builds a 16×16 mushroom icon: a domed cap over a short pale stem.
+/// `cap` is the cap colour; `red` adds white speckles (red mushroom).
+fn mushroom_icon(cap: [u8; 4], red: bool) -> [[u8; 4]; 256] {
+    const T: usize = 16;
+    let mut out = [[0u8, 0, 0, 0]; 256];
+    let cap_full = [cap[0], cap[1], cap[2], 255];
+    let cap_dark = [
+        (cap[0] as u16 * 7 / 10) as u8,
+        (cap[1] as u16 * 7 / 10) as u8,
+        (cap[2] as u16 * 7 / 10) as u8,
+        255,
+    ];
+    let stem  = [232u8, 224, 205, 255];
+    let stem_d = [196u8, 188, 168, 255];
+    let cx = 7.5f32;
+    for py in 0..T {
+        for px in 0..T {
+            let i = py * T + px;
+            let dx = px as f32 - cx;
+            // Cap: half-ellipse across the top (rows 2..9).
+            if (2..9).contains(&py) {
+                let ry = (py as f32 - 8.0) / 6.0; // -1 at top, 0 at base
+                let half = (1.0 - ry * ry).max(0.0).sqrt() * 7.0;
+                if dx.abs() <= half {
+                    let edge = dx.abs() > half - 1.2 || py == 2;
+                    let mut c = if edge { cap_dark } else { cap_full };
+                    // White speckles on the red cap.
+                    if red && !edge {
+                        let h = (px.wrapping_mul(5) ^ py.wrapping_mul(11)) % 7;
+                        if h == 0 { c = [245, 245, 240, 255]; }
+                    }
+                    out[i] = c;
+                }
+            }
+            // Stem: a short stalk under the cap (rows 8..14).
+            if (8..14).contains(&py) && (6..=9).contains(&px) {
+                out[i] = if px == 6 || px == 9 { stem_d } else { stem };
+            }
+        }
+    }
+    out
+}
+
 pub fn create_item_atlas() -> u32 {
     const ATLAS_SIZE: usize = 256;
     let mut pixels = vec![0u8; ATLAS_SIZE * ATLAS_SIZE * 4];
@@ -164,6 +207,12 @@ pub fn create_item_atlas() -> u32 {
 
     // === TILE 22: Workbench ===
     fill_tile_placeholder(&mut pixels, 22, 139, 95, 56);
+
+    // === TILE 23: RedMushroom ===
+    write_tile(&mut pixels, 23, &mushroom_icon([216, 46, 41, 255], true));
+
+    // === TILE 24: BrownMushroom ===
+    write_tile(&mut pixels, 24, &mushroom_icon([158, 117, 84, 255], false));
 
     unsafe {
         let mut id = 0u32;

@@ -263,9 +263,15 @@ impl ChunkRenderer {
                             refractUV = screenUV;
                         vec3 refractColor = texture(u_refraction_sampler, refractUV).rgb;
 
-                        // Water body: refracted terrain tinted by depth and water colour
-                        vec3 waterBody = mix(refractColor, vec3(0.0, 0.1, 0.35) * sun_light, depthFade * 0.6);
-                        waterBody      = mix(waterBody, waterBody * ourColor * 1.4, 0.25);
+                        // Water body: refracted terrain tinted by depth and water colour.
+                        // "murk" is high only for green-dominant tints (swamp water) and
+                        // zero for the default blue and for lava's red, so normal water and
+                        // lava render exactly as before. It biases the deep colour toward the
+                        // vertex tint and strengthens the body tint → murky Bedrock swamp water.
+                        float murk = clamp((ourColor.g - ourColor.b) * 8.0, 0.0, 1.0) * step(ourColor.r, 0.6);
+                        vec3 deepColor = mix(vec3(0.0, 0.1, 0.35), ourColor * vec3(0.45, 0.6, 0.5), murk);
+                        vec3 waterBody = mix(refractColor, deepColor * sun_light, depthFade * 0.6);
+                        waterBody      = mix(waterBody, waterBody * ourColor * 1.4, 0.25 + murk * 0.45);
 
                         // SSR: ray-march the reflected direction through screen space
                         vec3  fragViewPos = (view * vec4(vWorldPos, 1.0)).xyz;

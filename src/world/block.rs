@@ -73,6 +73,8 @@ pub enum BlockType {
     Cobblestone,
     WoodBlock,
     Workbench,
+    RedMushroom,
+    BrownMushroom,
     Crop(u8, u8),     // (crop_id, stage) — see CROPS table
 }
 
@@ -99,6 +101,8 @@ impl BlockType {
             BlockType::Cobblestone => [0.44, 0.44, 0.44],
             BlockType::WoodBlock   => [0.76, 0.60, 0.35],
             BlockType::Workbench   => [0.55, 0.37, 0.18],
+            BlockType::RedMushroom   => [0.85, 0.18, 0.16],
+            BlockType::BrownMushroom => [0.62, 0.46, 0.33],
             BlockType::Crop(_, _)  => [1.00, 1.00, 1.00],
         }
     }
@@ -106,7 +110,8 @@ impl BlockType {
     pub fn is_opaque(&self) -> bool {
         match self {
             BlockType::Air | BlockType::Water | BlockType::Leaves
-            | BlockType::TallGrass | BlockType::GrassShort | BlockType::Workbench => false,
+            | BlockType::TallGrass | BlockType::GrassShort | BlockType::Workbench
+            | BlockType::RedMushroom | BlockType::BrownMushroom => false,
             BlockType::Crop(id, stage) => {
                 let def = &CROPS[*id as usize];
                 def.final_solid && *stage == def.stages - 1
@@ -118,7 +123,8 @@ impl BlockType {
     pub fn is_solid(&self) -> bool {
         match self {
             BlockType::Air | BlockType::Water | BlockType::Lava
-            | BlockType::TallGrass | BlockType::GrassShort => false,
+            | BlockType::TallGrass | BlockType::GrassShort
+            | BlockType::RedMushroom | BlockType::BrownMushroom => false,
             BlockType::Crop(id, stage) => {
                 let def = &CROPS[*id as usize];
                 def.final_solid && *stage == def.stages - 1
@@ -154,6 +160,7 @@ impl BlockType {
                 if def.final_solid && *stage == def.stages - 1 { Some(1.0) } else { Some(0.05) }
             }
             BlockType::Snow       => Some(0.2),
+            BlockType::RedMushroom | BlockType::BrownMushroom => Some(0.05),
             BlockType::CopperOre  => Some(3.0),
             BlockType::CoalOre    => Some(3.0),
             BlockType::IronOre    => Some(3.0),
@@ -204,13 +211,16 @@ impl BlockType {
             BlockType::Cobblestone => vec![ItemType::StoneChunk],
             BlockType::WoodBlock   => vec![ItemType::WoodBlock],
             BlockType::Workbench   => vec![ItemType::Workbench],
+            BlockType::RedMushroom   => vec![ItemType::RedMushroom],
+            BlockType::BrownMushroom => vec![ItemType::BrownMushroom],
             _ => vec![],
         }
     }
 
     pub fn material(&self) -> Option<BlockMaterial> {
         match self {
-            BlockType::Grass | BlockType::TallGrass | BlockType::GrassShort => Some(BlockMaterial::Grass),
+            BlockType::Grass | BlockType::TallGrass | BlockType::GrassShort
+            | BlockType::RedMushroom | BlockType::BrownMushroom => Some(BlockMaterial::Grass),
             BlockType::Crop(id, stage) => {
                 let def = &CROPS[*id as usize];
                 if def.final_solid && *stage == def.stages - 1 {
@@ -266,6 +276,8 @@ impl BlockType {
             BlockType::Cobblestone => 17,
             BlockType::WoodBlock   => 28,
             BlockType::Workbench   => 29,
+            BlockType::RedMushroom   => 30,
+            BlockType::BrownMushroom => 31,
             BlockType::Crop(0, s) => 18 + s,
             BlockType::Crop(1, s) => 23 + s,
             BlockType::Crop(id, s) => 32 + id * 8 + s,
@@ -296,6 +308,8 @@ impl BlockType {
             27      => Self::Crop(1, 3),          // backward compat: old Pumpkin → solid stage
             28 => Self::WoodBlock,
             29 => Self::Workbench,
+            30 => Self::RedMushroom,
+            31 => Self::BrownMushroom,
             _  => Self::Air,
         }
     }
@@ -335,6 +349,8 @@ impl BlockType {
                 crate::world::Face::Up => 36,
                 _                      => 34,
             },
+            BlockType::RedMushroom   => 37,
+            BlockType::BrownMushroom => 38,
             BlockType::Crop(id, stage) => {
                 let def = &CROPS[*id as usize];
                 if def.final_solid && *stage == def.stages - 1 {
@@ -351,6 +367,7 @@ impl BlockType {
 
     pub fn selection_height(&self) -> f32 {
         match self {
+            BlockType::RedMushroom | BlockType::BrownMushroom => 0.5,
             BlockType::Crop(id, stage) => {
                 let def = &CROPS[*id as usize];
                 if def.final_solid && *stage == def.stages - 1 {

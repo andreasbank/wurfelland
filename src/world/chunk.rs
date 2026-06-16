@@ -156,6 +156,8 @@ pub struct Chunk {
     model: glam::Mat4,
     /// Sky-light per block: 15 = unobstructed sky above, 0 = underground.
     sky_light: Box<SkyLight>,
+    /// Biome per XZ column — drives water/grass tinting at mesh-build time.
+    biome_grid: [[Biome; 16]; 16],
 }
 
 
@@ -184,7 +186,8 @@ impl Chunk {
             // Entire chunk is above the highest possible terrain — leave all-air.
             let sky_light = Box::new([[[0u8; 16]; 16]; 16]);
             return Chunk { position, blocks, mesh: None, needs_rebuild: true,
-                           sky_dirty: true, sky_ready: false, model, sky_light };
+                           sky_dirty: true, sky_ready: false, model, sky_light,
+                           biome_grid: [[Biome::Plains; 16]; 16] };
         }
 
         // ── Block placement ──────────────────────────────────────────────────
@@ -326,6 +329,34 @@ impl Chunk {
             }
         }
 
+        // ── Swamp mushrooms (red & brown, pickable) ──────────────────────────
+        // Scattered on swamp grass.  Deterministic per-column hash keeps them
+        // stable across regeneration; ~1 in 18 eligible columns gets one.
+        for x in 0..16usize {
+            for z in 0..16usize {
+                if !biome_grid[x][z].is_swamp() { continue; }
+                let surf_wy = surface[x][z];
+                let local_surf = surf_wy - wy_base;
+                if local_surf < 0 || local_surf >= 15 { continue; }
+                let local_surf = local_surf as usize;
+                let above = local_surf + 1;
+                if surf_wy <= SEA_LEVEL { continue; } // not under water
+                if blocks[x][local_surf][z] != BlockType::Grass { continue; }
+                if blocks[x][above][z]      != BlockType::Air   { continue; }
+
+                let world_x = position[0] * 16 + x as i32;
+                let world_z = position[2] * 16 + z as i32;
+                let h = (world_x.wrapping_mul(2_246_822_519_u32 as i32)
+                         ^ world_z.wrapping_mul(3_266_489_917_u32 as i32)) as u32;
+                if h % 18 != 0 { continue; }
+                blocks[x][above][z] = if (h / 18) % 2 == 0 {
+                    BlockType::RedMushroom
+                } else {
+                    BlockType::BrownMushroom
+                };
+            }
+        }
+
         // ── Wild crop patches (data-driven from CROPS table) ─────────────────
         for crop_def in crate::world::block::CROPS {
             if crop_def.wild_chance == 0 { continue; }
@@ -428,6 +459,92 @@ impl Chunk {
 
                     if is_cave {
                         blocks[x][ly][z] = BlockType::Air;
+                    }
+                }
+            }
+        }
+
+        // ── Bedrock-style worm tunnel carver ─────────────────────────────────
+        // Each XZ-chunk origin spawns 0–2 worms that carve cylindrical passages.
+        // Surrounding origins are checked so tunnels continue across chunk borders.
+        // Worms travel mostly horizontally with gentle curvature, producing the
+        // straight-ish tube passages characteristic of old Minecraft Bedrock caves.
+        {
+            const WORM_RADIUS: f64  = 2.5;
+            const CHECK_R: i32      = 5; // chunk radius (5×16 = 80 blocks max worm length)
+
+            let r_i     = WORM_RADIUS as i32 + 1;
+            let cmin_x  = position[0] * 16;
+            let cmin_y  = position[1] * 16;
+            let cmin_z  = position[2] * 16;
+            let cmax_x  = cmin_x + 16;
+            let cmax_y  = cmin_y + 16;
+            let cmax_z  = cmin_z + 16;
+
+            let worm_next = |r: &mut u32| -> u32 {
+                *r ^= *r << 13; *r ^= *r >> 17; *r ^= *r << 5; *r
+            };
+
+            for ocx in (position[0] - CHECK_R)..=(position[0] + CHECK_R) {
+                for ocz in (position[2] - CHECK_R)..=(position[2] + CHECK_R) {
+                    // Deterministic seed per origin chunk
+                    let mut wr = seed
+                        .wrapping_add((ocx as u32).wrapping_mul(0x9E37_79B9))
+                        .wrapping_add((ocz as u32).wrapping_mul(0x6C62_272E))
+                        ^ 0xA3B1_95DB;
+
+                    let worm_count = worm_next(&mut wr) % 3; // 0, 1, or 2
+
+                    for _ in 0..worm_count {
+                        let sx = ocx * 16 + (worm_next(&mut wr) % 16) as i32;
+                        let sy = 15       + (worm_next(&mut wr) % 70) as i32; // Y 15..85
+                        let sz = ocz * 16 + (worm_next(&mut wr) % 16) as i32;
+
+                        // Initial horizontal direction
+                        let angle = (worm_next(&mut wr) as f64 / 4_294_967_295.0) * 6.283_185_307;
+                        let mut dir = [angle.cos(), 0.0_f64, angle.sin()];
+                        let worm_len = 40 + (worm_next(&mut wr) % 41) as i32; // 40..80
+
+                        let [mut wx, mut wy, mut wz] = [sx as f64, sy as f64, sz as f64];
+
+                        for _ in 0..worm_len {
+                            let pi = [wx as i32, wy as i32, wz as i32];
+
+                            // AABB overlap: does the carve sphere touch this chunk?
+                            if pi[0] + r_i >= cmin_x && pi[0] - r_i < cmax_x
+                                && pi[1] + r_i >= cmin_y && pi[1] - r_i < cmax_y
+                                && pi[2] + r_i >= cmin_z && pi[2] - r_i < cmax_z
+                            {
+                                for dx in -r_i..=r_i {
+                                    for dy in -r_i..=r_i {
+                                        for dz in -r_i..=r_i {
+                                            if (dx*dx + dy*dy + dz*dz) as f64
+                                                > WORM_RADIUS * WORM_RADIUS { continue; }
+                                            let (bx, by, bz) = (pi[0]+dx, pi[1]+dy, pi[2]+dz);
+                                            let (lx, ly, lz) = (bx-cmin_x, by-cmin_y, bz-cmin_z);
+                                            if lx < 0 || lx >= 16
+                                                || ly < 0 || ly >= 16
+                                                || lz < 0 || lz >= 16 { continue; }
+                                            if by <= 0
+                                                || by >= surface[lx as usize][lz as usize] - 5 { continue; }
+                                            if !blocks[lx as usize][ly as usize][lz as usize].is_solid() { continue; }
+                                            blocks[lx as usize][ly as usize][lz as usize] = BlockType::Air;
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Advance worm head
+                            wx += dir[0]; wy += dir[1]; wz += dir[2];
+
+                            // Gentle curvature — keep mostly horizontal
+                            dir[0] += (worm_next(&mut wr) as f64 / 4_294_967_295.0 - 0.5) * 0.25;
+                            dir[1] += (worm_next(&mut wr) as f64 / 4_294_967_295.0 - 0.5) * 0.08;
+                            dir[2] += (worm_next(&mut wr) as f64 / 4_294_967_295.0 - 0.5) * 0.25;
+                            if dir[1].abs() > 0.3 { dir[1] *= 0.6; }
+                            let mag = (dir[0]*dir[0] + dir[1]*dir[1] + dir[2]*dir[2]).sqrt();
+                            dir[0] /= mag; dir[1] /= mag; dir[2] /= mag;
+                        }
                     }
                 }
             }
@@ -588,7 +705,12 @@ impl Chunk {
 
         let sky_light = Box::new([[[0u8; 16]; 16]; 16]);
         Chunk { position, blocks, mesh: None, needs_rebuild: true,
-                sky_dirty: true, sky_ready: false, model, sky_light }
+                sky_dirty: true, sky_ready: false, model, sky_light, biome_grid }
+    }
+
+    /// Copy of the per-column biome grid, for passing to the mesh builder.
+    pub fn biome_snapshot(&self) -> [[Biome; 16]; 16] {
+        self.biome_grid
     }
 
     pub fn get_block(&self, x: usize, y: usize, z: usize) -> BlockType {
@@ -960,7 +1082,22 @@ impl Chunk {
 
     /// Build geometry for this chunk. Sky-light must already be computed and
     /// stored; pass a snapshot via `sky_snapshot()` before dispatching the thread.
-    pub fn build_vertices(blocks: &Blocks, edges: &NeighborEdges, sky: &SkyLight, water_levels: &WaterLevels) -> Vec<f32> {
+    /// Block vertex colour, tinted by biome. Swamps give water and grass a murky
+    /// cast, matching Minecraft Bedrock's biome colourmaps.
+    fn tinted_color(block: BlockType, biome: Biome) -> [f32; 3] {
+        if biome.is_swamp() {
+            match block {
+                BlockType::Water      => return [0.32, 0.42, 0.36],
+                BlockType::Grass      => return [0.42, 0.45, 0.22],
+                BlockType::TallGrass | BlockType::GrassShort => return [0.40, 0.45, 0.22],
+                _ => {}
+            }
+        }
+        block.color()
+    }
+
+    pub fn build_vertices(blocks: &Blocks, edges: &NeighborEdges, sky: &SkyLight,
+                          water_levels: &WaterLevels, biomes: &[[Biome; 16]; 16]) -> Vec<f32> {
         let mut vertices = Vec::with_capacity(9216);
 
         // ── Pass 1: water and vegetation (no greedy merging) ─────────────────
@@ -969,20 +1106,28 @@ impl Chunk {
                 for z in 0..16usize {
                     let block = blocks[x][y][z];
                     let own_sl = sky[x][y][z] as f32 / 15.0;
+                    let biome  = biomes[x][z];
                     match block {
                         BlockType::Air => {}
                         BlockType::TallGrass => {
-                            vertices.extend(Self::cross_vertices(x as f32, y as f32, z as f32, block, 1.0, own_sl));
+                            vertices.extend(Self::cross_vertices(x as f32, y as f32, z as f32, block, 1.0, own_sl,
+                                Self::tinted_color(block, biome)));
                         }
                         BlockType::GrassShort => {
-                            vertices.extend(Self::cross_vertices(x as f32, y as f32, z as f32, block, 0.45, own_sl));
+                            vertices.extend(Self::cross_vertices(x as f32, y as f32, z as f32, block, 0.45, own_sl,
+                                Self::tinted_color(block, biome)));
+                        }
+                        BlockType::RedMushroom | BlockType::BrownMushroom => {
+                            vertices.extend(Self::cross_vertices(x as f32, y as f32, z as f32, block, 0.5, own_sl,
+                                block.color()));
                         }
                         BlockType::Crop(id, stage) => {
                             let def = &crate::world::block::CROPS[id as usize];
                             let is_solid_stage = def.final_solid && stage == def.stages - 1;
                             if !is_solid_stage {
                                 let h = def.stage_heights[stage as usize];
-                                vertices.extend(Self::cross_vertices(x as f32, y as f32, z as f32, block, h, own_sl));
+                                vertices.extend(Self::cross_vertices(x as f32, y as f32, z as f32, block, h, own_sl,
+                                    block.color()));
                             }
                             // solid stage handled by greedy meshing in Pass 2
                         }
@@ -1007,7 +1152,8 @@ impl Chunk {
                                                        Self::water_corner_h(lxi+1, lyi, lzi,   blocks, water_levels, edges), 0.0],
                                     Face::Down  => [0.0; 4],
                                 };
-                                vertices.extend(Self::water_face_vertices(x as f32, y as f32, z as f32, face, block, corners, own_sl));
+                                vertices.extend(Self::water_face_vertices(x as f32, y as f32, z as f32, face, block, corners, own_sl,
+                                    Self::tinted_color(block, biome)));
                             }
                         }
                         BlockType::Lava => {
@@ -1020,7 +1166,8 @@ impl Chunk {
                                     Face::Right | Face::Left | Face::Front | Face::Back  => [0.0, 1.0, 1.0, 0.0],
                                     Face::Down                                            => [0.0; 4],
                                 };
-                                vertices.extend(Self::water_face_vertices(x as f32, y as f32, z as f32, face, block, corners, -1.0));
+                                vertices.extend(Self::water_face_vertices(x as f32, y as f32, z as f32, face, block, corners, -1.0,
+                                    block.color()));
                             }
                         }
                         _ => {} // solid blocks handled by greedy passes below
@@ -1033,7 +1180,7 @@ impl Chunk {
         // Each cell in the 16×16 mask stores block type + AO bits + sky bits.
         // Two cells merge only if ALL fields match (identical AO → correct merged corners).
         #[derive(Copy, Clone, PartialEq, Eq)]
-        struct GCell { block: BlockType, ao: [u32; 4], sky: u32 }
+        struct GCell { block: BlockType, ao: [u32; 4], sky: u32, biome: Biome }
 
         // Helper: build mask + greedy rects for one face direction and one layer.
         // Returns the (pos, uv, ao, sky, block) for each found rectangle.
@@ -1049,7 +1196,7 @@ impl Chunk {
                     if Self::is_face_visible(blocks, lx, ly, lz, Face::Up, edges) {
                         let sky_val = Self::neighbor_sky(sky, edges, lx as i32, ly as i32, lz as i32, Face::Up);
                         let ao = Self::compute_ao(blocks, edges, lx as i32, ly as i32, lz as i32, Face::Up);
-                        mask[lx][lz] = Some(GCell { block: b, ao: ao.map(f32::to_bits), sky: sky_val.to_bits() });
+                        mask[lx][lz] = Some(GCell { block: b, ao: ao.map(f32::to_bits), sky: sky_val.to_bits(), biome: biomes[lx][lz] });
                     }
                 }
             }
@@ -1073,7 +1220,7 @@ impl Chunk {
                             [[lxf, lyf+1.0, lzf+wf], [lxf+hf, lyf+1.0, lzf+wf], [lxf+hf, lyf+1.0, lzf], [lxf, lyf+1.0, lzf]],
                             [[0.0, wf], [hf, wf], [hf, 0.0], [0.0, 0.0]],
                             Self::tile_base_for(cell.block.texture_id(Face::Up)),
-                            [0.0, 1.0, 0.0], ao, sky_f, cell.block.color(), 1.0);
+                            [0.0, 1.0, 0.0], ao, sky_f, Self::tinted_color(cell.block, cell.biome), 1.0);
                         lz += w;
                     } else { lz += 1; }
                 }
@@ -1090,7 +1237,7 @@ impl Chunk {
                     if Self::is_face_visible(blocks, lx, ly, lz, Face::Down, edges) {
                         let sky_val = Self::neighbor_sky(sky, edges, lx as i32, ly as i32, lz as i32, Face::Down);
                         let ao = Self::compute_ao(blocks, edges, lx as i32, ly as i32, lz as i32, Face::Down);
-                        mask[lx][lz] = Some(GCell { block: b, ao: ao.map(f32::to_bits), sky: sky_val.to_bits() });
+                        mask[lx][lz] = Some(GCell { block: b, ao: ao.map(f32::to_bits), sky: sky_val.to_bits(), biome: biomes[lx][lz] });
                     }
                 }
             }
@@ -1114,7 +1261,7 @@ impl Chunk {
                             [[lxf, lyf, lzf], [lxf+hf, lyf, lzf], [lxf+hf, lyf, lzf+wf], [lxf, lyf, lzf+wf]],
                             [[0.0, 0.0], [hf, 0.0], [hf, wf], [0.0, wf]],
                             Self::tile_base_for(cell.block.texture_id(Face::Down)),
-                            [0.0, -1.0, 0.0], ao, sky_f, cell.block.color(), 0.5);
+                            [0.0, -1.0, 0.0], ao, sky_f, Self::tinted_color(cell.block, cell.biome), 0.5);
                         lz += w;
                     } else { lz += 1; }
                 }
@@ -1131,7 +1278,7 @@ impl Chunk {
                     if Self::is_face_visible(blocks, lx, ly, lz, Face::Right, edges) {
                         let sky_val = Self::neighbor_sky(sky, edges, lx as i32, ly as i32, lz as i32, Face::Right);
                         let ao = Self::compute_ao(blocks, edges, lx as i32, ly as i32, lz as i32, Face::Right);
-                        mask[lz][ly] = Some(GCell { block: b, ao: ao.map(f32::to_bits), sky: sky_val.to_bits() });
+                        mask[lz][ly] = Some(GCell { block: b, ao: ao.map(f32::to_bits), sky: sky_val.to_bits(), biome: biomes[lx][lz] });
                     }
                 }
             }
@@ -1156,7 +1303,7 @@ impl Chunk {
                             [[lxf+1.0, lyf, lzf], [lxf+1.0, lyf+hf, lzf], [lxf+1.0, lyf+hf, lzf+wf], [lxf+1.0, lyf, lzf+wf]],
                             [[wf, 0.0], [wf, hf], [0.0, hf], [0.0, 0.0]],
                             Self::tile_base_for(cell.block.texture_id(Face::Right)),
-                            [1.0, 0.0, 0.0], ao, sky_f, cell.block.color(), 0.65);
+                            [1.0, 0.0, 0.0], ao, sky_f, Self::tinted_color(cell.block, cell.biome), 0.65);
                         ly += h;
                     } else { ly += 1; }
                 }
@@ -1173,7 +1320,7 @@ impl Chunk {
                     if Self::is_face_visible(blocks, lx, ly, lz, Face::Left, edges) {
                         let sky_val = Self::neighbor_sky(sky, edges, lx as i32, ly as i32, lz as i32, Face::Left);
                         let ao = Self::compute_ao(blocks, edges, lx as i32, ly as i32, lz as i32, Face::Left);
-                        mask[lz][ly] = Some(GCell { block: b, ao: ao.map(f32::to_bits), sky: sky_val.to_bits() });
+                        mask[lz][ly] = Some(GCell { block: b, ao: ao.map(f32::to_bits), sky: sky_val.to_bits(), biome: biomes[lx][lz] });
                     }
                 }
             }
@@ -1198,7 +1345,7 @@ impl Chunk {
                             [[lxf, lyf, lzf+wf], [lxf, lyf+hf, lzf+wf], [lxf, lyf+hf, lzf], [lxf, lyf, lzf]],
                             [[0.0, 0.0], [0.0, hf], [wf, hf], [wf, 0.0]],
                             Self::tile_base_for(cell.block.texture_id(Face::Left)),
-                            [-1.0, 0.0, 0.0], ao, sky_f, cell.block.color(), 0.65);
+                            [-1.0, 0.0, 0.0], ao, sky_f, Self::tinted_color(cell.block, cell.biome), 0.65);
                         ly += h;
                     } else { ly += 1; }
                 }
@@ -1215,7 +1362,7 @@ impl Chunk {
                     if Self::is_face_visible(blocks, lx, ly, lz, Face::Front, edges) {
                         let sky_val = Self::neighbor_sky(sky, edges, lx as i32, ly as i32, lz as i32, Face::Front);
                         let ao = Self::compute_ao(blocks, edges, lx as i32, ly as i32, lz as i32, Face::Front);
-                        mask[lx][ly] = Some(GCell { block: b, ao: ao.map(f32::to_bits), sky: sky_val.to_bits() });
+                        mask[lx][ly] = Some(GCell { block: b, ao: ao.map(f32::to_bits), sky: sky_val.to_bits(), biome: biomes[lx][lz] });
                     }
                 }
             }
@@ -1240,7 +1387,7 @@ impl Chunk {
                             [[lxf+wf, lyf, lzf+1.0], [lxf+wf, lyf+hf, lzf+1.0], [lxf, lyf+hf, lzf+1.0], [lxf, lyf, lzf+1.0]],
                             [[wf, 0.0], [wf, hf], [0.0, hf], [0.0, 0.0]],
                             Self::tile_base_for(cell.block.texture_id(Face::Front)),
-                            [0.0, 0.0, 1.0], ao, sky_f, cell.block.color(), 0.8);
+                            [0.0, 0.0, 1.0], ao, sky_f, Self::tinted_color(cell.block, cell.biome), 0.8);
                         ly += h;
                     } else { ly += 1; }
                 }
@@ -1257,7 +1404,7 @@ impl Chunk {
                     if Self::is_face_visible(blocks, lx, ly, lz, Face::Back, edges) {
                         let sky_val = Self::neighbor_sky(sky, edges, lx as i32, ly as i32, lz as i32, Face::Back);
                         let ao = Self::compute_ao(blocks, edges, lx as i32, ly as i32, lz as i32, Face::Back);
-                        mask[lx][ly] = Some(GCell { block: b, ao: ao.map(f32::to_bits), sky: sky_val.to_bits() });
+                        mask[lx][ly] = Some(GCell { block: b, ao: ao.map(f32::to_bits), sky: sky_val.to_bits(), biome: biomes[lx][lz] });
                     }
                 }
             }
@@ -1282,7 +1429,7 @@ impl Chunk {
                             [[lxf, lyf, lzf], [lxf, lyf+hf, lzf], [lxf+wf, lyf+hf, lzf], [lxf+wf, lyf, lzf]],
                             [[0.0, 0.0], [0.0, hf], [wf, hf], [wf, 0.0]],
                             Self::tile_base_for(cell.block.texture_id(Face::Back)),
-                            [0.0, 0.0, -1.0], ao, sky_f, cell.block.color(), 0.8);
+                            [0.0, 0.0, -1.0], ao, sky_f, Self::tinted_color(cell.block, cell.biome), 0.8);
                         ly += h;
                     } else { ly += 1; }
                 }
@@ -1334,7 +1481,8 @@ impl Chunk {
     /// `corners[i]` is the Y offset (0.0–1.0) for vertex i above the block's base Y.
     /// For Up: all 4 corners vary. For side faces: corners[1] and [2] are the top pair.
     fn water_face_vertices(x: f32, y: f32, z: f32, face: Face,
-                           block_type: BlockType, corners: [f32; 4], sky_light: f32) -> Vec<f32> {
+                           block_type: BlockType, corners: [f32; 4], sky_light: f32,
+                           color: [f32; 3]) -> Vec<f32> {
         // Surface water sits 10% below a full block so wave crests never
         // protrude above neighbouring non-water blocks.
         const SURFACE_SCALE: f32 = 0.9;
@@ -1354,7 +1502,7 @@ impl Chunk {
         let ts     = 1.0_f32 / 16.0;
         let atlas_tc = face.texture_coords(tex_id, 16);
         let tex: [[f32; 2]; 4] = atlas_tc.map(|[u, v]| [(u - tb[0]) / ts, (v - tb[1]) / ts]);
-        let [r, g, b] = block_type.color();
+        let [r, g, b] = color;
         let bright = match face {
             Face::Up                  => 1.0,
             Face::Down                => 0.5,
@@ -1471,8 +1619,9 @@ impl Chunk {
         ao
     }
 
-    fn cross_vertices(x: f32, y: f32, z: f32, block: BlockType, height: f32, sky_light: f32) -> Vec<f32> {
-        let [r, g, b] = block.color();
+    fn cross_vertices(x: f32, y: f32, z: f32, block: BlockType, height: f32, sky_light: f32,
+                      color: [f32; 3]) -> Vec<f32> {
+        let [r, g, b] = color;
 
         let tex_id = block.texture_id(Face::Front);
         let tb = Self::tile_base_for(tex_id);

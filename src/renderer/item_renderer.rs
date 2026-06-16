@@ -405,6 +405,8 @@ impl ItemRenderer {
                     ItemType::Beef         => (self.vao_stone, self.cube_vert_count),
                     ItemType::Leather      => (self.vao_stone, self.cube_vert_count),
                     ItemType::Workbench    => (self.vao_stone, self.cube_vert_count),
+                    ItemType::RedMushroom   => (self.vao_stone, self.cube_vert_count),
+                    ItemType::BrownMushroom => (self.vao_stone, self.cube_vert_count),
                 };
 
                 let pos = glam::Vec3::new(

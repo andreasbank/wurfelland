@@ -423,5 +423,61 @@ pub fn build_block_atlas_pixels() -> Vec<u8> {
         }
     }
 
+    // Tiles 37 / 38: Mushroom cross-billboards (red / brown).
+    // Rendered at 0.5 block height, so only the bottom half of the tile is shown:
+    // the mushroom art lives in rows py = 8..16.  Background stays transparent.
+    {
+        // (tile, cap, cap_rim, has_spots)
+        let shrooms: [(usize, [u8; 3], [u8; 3], bool); 2] = [
+            (37, [200, 40, 36], [150, 24, 22], true),  // red
+            (38, [150, 110, 78], [110, 78, 52], false), // brown
+        ];
+        let stem  = [225u8, 216, 196];
+        let stem_d = [188u8, 178, 158];
+        for (tile_idx, cap, rim, spots) in shrooms {
+            let tile_col = tile_idx % TILES_PER_ROW;
+            let tile_row = tile_idx / TILES_PER_ROW;
+            for py in 8..TILE_SIZE {
+                // Cap: a dome over rows 8..11; brown sits one row lower / flatter.
+                let cap_span: Option<(usize, usize)> = match py {
+                    8  => Some((6, 9)),
+                    9  => Some((5, 10)),
+                    10 => Some((5, 10)),
+                    _  => None,
+                };
+                for px in 0..TILE_SIZE {
+                    let ax = tile_col * TILE_SIZE + px;
+                    let ay = tile_row * TILE_SIZE + py;
+                    let idx = (ay * ATLAS_SIZE + ax) * 4;
+
+                    let mut col: Option<[u8; 3]> = None;
+                    if let Some((lo, hi)) = cap_span {
+                        if px >= lo && px <= hi {
+                            let edge = px == lo || px == hi || py == 10;
+                            col = Some(if edge { rim } else { cap });
+                            if spots && !edge
+                                && (px.wrapping_mul(5) ^ py.wrapping_mul(11)) % 5 == 0 {
+                                col = Some([238, 238, 230]);
+                            }
+                        }
+                    }
+                    // Stem: short stalk rows 11..15, centred px 7..8 with a flare.
+                    if (11..15).contains(&py) && (7..=8).contains(&px) {
+                        col = Some(stem);
+                    }
+                    if py == 14 && (px == 6 || px == 9) { col = Some(stem_d); }
+
+                    if let Some(c) = col {
+                        let vari = ((px ^ py) % 3) as i16 * 4 - 4;
+                        pixels[idx]     = (c[0] as i16 + vari).clamp(0, 255) as u8;
+                        pixels[idx + 1] = (c[1] as i16 + vari).clamp(0, 255) as u8;
+                        pixels[idx + 2] = (c[2] as i16 + vari).clamp(0, 255) as u8;
+                        pixels[idx + 3] = 255;
+                    }
+                }
+            }
+        }
+    }
+
     pixels
 }

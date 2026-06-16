@@ -417,12 +417,13 @@ impl World {
             let blocks      = self.chunks[&pos].blocks_snapshot();
             let sky         = self.chunks[&pos].sky_snapshot();
             let water_levels = self.water_levels_snapshot(cx, cy, cz);
+            let biomes      = self.chunks[&pos].biome_snapshot();
             let edges       = self.build_neighbor_edges(cx, cy, cz);
             self.chunks.get_mut(&pos).unwrap().mark_mesh_dispatched();
             self.pending_meshes.insert(pos);
             let tx = self.mesh_tx.clone();
             thread::spawn(move || {
-                let vertices = Chunk::build_vertices(&blocks, &edges, &sky, &water_levels);
+                let vertices = Chunk::build_vertices(&blocks, &edges, &sky, &water_levels, &biomes);
                 let _ = tx.send(MeshReady { position: pos, vertices });
             });
         }
