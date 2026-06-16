@@ -21,10 +21,10 @@ pub mod item;
 pub use item::{ItemType, ItemEntity};
 
 pub mod entity_def;
-pub use entity_def::EntityRegistry;
+pub use entity_def::{EntityRegistry, Behavior};
 
 pub mod entity;
-pub use entity::{Chicken, Pig, Penguin, Skeleton, Cat, Cow, nearest_entity_hit};
+pub use entity::{Entity, nearest_entity_hit};
 
 // ── Placed workbench prop ─────────────────────────────────────────────────────
 pub struct WorkbenchProp {

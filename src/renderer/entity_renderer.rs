@@ -728,7 +728,7 @@ impl EntityRenderer {
                 shadow_tex, light_space, texel_sizes, torch_pos, torch_strength);
             gl::BindVertexArray(self.vao);
 
-            for chicken in chickens {
+            for chicken in chickens.iter().filter(|e| e.def.identifier == "chicken") {
                 gl::Uniform1f(self.block_light_loc, chicken.block_light);
                 // Base model: translate to world position, rotate to face yaw
                 let rot_y = -(chicken.yaw.to_radians() + FRAC_PI_2);
@@ -769,7 +769,7 @@ impl EntityRenderer {
             gl::Enable(gl::CULL_FACE);
         }
 
-        for chicken in chickens {
+        for chicken in chickens.iter().filter(|e| e.def.identifier == "chicken") {
             let frac = chicken.health / chicken.def.max_health;
             if frac < 1.0 {
                 self.draw_health_bar(chicken.position, frac, 1.05, view, projection);
@@ -791,7 +791,7 @@ impl EntityRenderer {
                 shadow_tex, light_space, texel_sizes, torch_pos, torch_strength);
             gl::BindVertexArray(self.pig_vao);
 
-            for pig in pigs {
+            for pig in pigs.iter().filter(|e| e.def.identifier == "pig") {
                 gl::Uniform1f(self.block_light_loc, pig.block_light);
                 let rot_y = -(pig.yaw.to_radians() + FRAC_PI_2);
                 let model = glam::Mat4::from_translation(glam::Vec3::from(pig.position))
@@ -849,7 +849,7 @@ impl EntityRenderer {
             gl::Enable(gl::CULL_FACE);
         }
 
-        for pig in pigs {
+        for pig in pigs.iter().filter(|e| e.def.identifier == "pig") {
             let frac = pig.health / pig.def.max_health;
             if frac < 1.0 {
                 self.draw_health_bar(pig.position, frac, 1.05, view, projection);
@@ -859,7 +859,7 @@ impl EntityRenderer {
 
     /// Render all chickens into the currently active shadow cascade.
     pub fn draw_shadows(&self, chickens: &[Chicken], shadow_pass: &ShadowPass) {
-        for chicken in chickens {
+        for chicken in chickens.iter().filter(|e| e.def.identifier == "chicken") {
             let rot_y = -(chicken.yaw.to_radians() + FRAC_PI_2);
             let model = glam::Mat4::from_translation(glam::Vec3::from(chicken.position))
                 * glam::Mat4::from_rotation_y(rot_y);
@@ -868,7 +868,7 @@ impl EntityRenderer {
     }
 
     pub fn draw_pig_shadows(&self, pigs: &[Pig], shadow_pass: &ShadowPass) {
-        for pig in pigs {
+        for pig in pigs.iter().filter(|e| e.def.identifier == "pig") {
             let rot_y = -(pig.yaw.to_radians() + FRAC_PI_2);
             let model = glam::Mat4::from_translation(glam::Vec3::from(pig.position))
                 * glam::Mat4::from_rotation_y(rot_y);
@@ -893,7 +893,7 @@ impl EntityRenderer {
                 shadow_tex, light_space, texel_sizes, torch_pos, torch_strength);
             gl::BindVertexArray(self.skel_vao);
 
-            for skel in skeletons {
+            for skel in skeletons.iter().filter(|e| e.def.identifier == "skeleton") {
                 gl::Uniform1f(self.block_light_loc, skel.block_light);
                 let rot_y = -(skel.yaw.to_radians() + FRAC_PI_2);
                 let model = glam::Mat4::from_translation(glam::Vec3::from(skel.position))
@@ -983,7 +983,7 @@ impl EntityRenderer {
             gl::Enable(gl::CULL_FACE);
         }
 
-        for skel in skeletons {
+        for skel in skeletons.iter().filter(|e| e.def.identifier == "skeleton") {
             let frac = skel.health / skel.def.max_health;
             if frac < 1.0 {
                 self.draw_health_bar(skel.position, frac, 1.95, view, projection);
@@ -992,7 +992,7 @@ impl EntityRenderer {
     }
 
     pub fn draw_skeleton_shadows(&self, skeletons: &[Skeleton], shadow_pass: &ShadowPass) {
-        for skel in skeletons {
+        for skel in skeletons.iter().filter(|e| e.def.identifier == "skeleton") {
             let rot_y = -(skel.yaw.to_radians() + FRAC_PI_2);
             let model = glam::Mat4::from_translation(glam::Vec3::from(skel.position))
                 * glam::Mat4::from_rotation_y(rot_y);
@@ -1019,7 +1019,7 @@ impl EntityRenderer {
                 shadow_tex, light_space, texel_sizes, torch_pos, torch_strength);
             gl::BindVertexArray(self.cat_vao);
 
-            for cat in cats {
+            for cat in cats.iter().filter(|e| e.def.identifier == "cat") {
                 gl::Uniform1f(self.block_light_loc, cat.block_light);
                 let rot_y = -(cat.yaw.to_radians() + FRAC_PI_2);
                 // When sitting, lower the model slightly so the cat crouches
@@ -1079,7 +1079,7 @@ impl EntityRenderer {
             gl::Enable(gl::CULL_FACE);
         }
 
-        for cat in cats {
+        for cat in cats.iter().filter(|e| e.def.identifier == "cat") {
             let frac = cat.health / cat.def.max_health;
             if frac < 1.0 {
                 self.draw_health_bar(cat.position, frac, 0.90, view, projection);
@@ -1088,7 +1088,7 @@ impl EntityRenderer {
     }
 
     pub fn draw_cat_shadows(&self, cats: &[Cat], shadow_pass: &ShadowPass) {
-        for cat in cats {
+        for cat in cats.iter().filter(|e| e.def.identifier == "cat") {
             let rot_y = -(cat.yaw.to_radians() + FRAC_PI_2);
             let sit_offset = if cat.sitting { -0.12 } else { 0.0 };
             let pos = glam::Vec3::new(cat.position[0], cat.position[1] + sit_offset, cat.position[2]);
@@ -1112,7 +1112,7 @@ impl EntityRenderer {
                 shadow_tex, light_space, texel_sizes, torch_pos, torch_strength);
             gl::BindVertexArray(self.cow_vao);
 
-            for cow in cows {
+            for cow in cows.iter().filter(|e| e.def.identifier == "cow") {
                 gl::Uniform1f(self.block_light_loc, cow.block_light);
                 let rot_y = -(cow.yaw.to_radians() + FRAC_PI_2);
                 let model = glam::Mat4::from_translation(glam::Vec3::from(cow.position))
@@ -1168,7 +1168,7 @@ impl EntityRenderer {
             gl::Enable(gl::CULL_FACE);
         }
 
-        for cow in cows {
+        for cow in cows.iter().filter(|e| e.def.identifier == "cow") {
             let frac = cow.health / cow.def.max_health;
             if frac < 1.0 {
                 self.draw_health_bar(cow.position, frac, 1.55, view, projection);
@@ -1177,7 +1177,7 @@ impl EntityRenderer {
     }
 
     pub fn draw_cow_shadows(&self, cows: &[Cow], shadow_pass: &ShadowPass) {
-        for cow in cows {
+        for cow in cows.iter().filter(|e| e.def.identifier == "cow") {
             let rot_y = -(cow.yaw.to_radians() + FRAC_PI_2);
             let model = glam::Mat4::from_translation(glam::Vec3::from(cow.position))
                 * glam::Mat4::from_rotation_y(rot_y);

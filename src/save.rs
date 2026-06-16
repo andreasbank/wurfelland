@@ -9,19 +9,26 @@ use crate::world::BlockType;
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct EntitySave {
+    /// Entity-def identifier (e.g. "chicken", "skeleton") — selects the species.
+    pub kind:     String,
     pub position: [f32; 3],
     pub yaw:      f32,
     pub health:   f32,
+    #[serde(default)]
+    pub sitting:  bool,
 }
 
 /// An entity serialized into a dormant (unloaded) chunk column.
 #[derive(Serialize, Deserialize, Clone)]
 pub struct DormantEntitySave {
+    pub kind:     String,
     pub chunk_x:  i32,
     pub chunk_z:  i32,
     pub position: [f32; 3],
     pub yaw:      f32,
     pub health:   f32,
+    #[serde(default)]
+    pub sitting:  bool,
 }
 
 // ── Per-item-entity snapshot ───────────────────────────────────────────────
@@ -91,12 +98,9 @@ pub struct SaveData {
     // Added in v2 — absent in old saves, defaults to empty / zero.
     #[serde(default)]
     pub block_changes: Vec<BlockChangeSave>,
+    /// All live entities, tagged by species `kind`.
     #[serde(default)]
-    pub chickens: Vec<EntitySave>,
-    #[serde(default)]
-    pub pigs: Vec<EntitySave>,
-    #[serde(default)]
-    pub penguins: Vec<EntitySave>,
+    pub entities: Vec<EntitySave>,
     #[serde(default)]
     pub items: Vec<ItemSave>,
     #[serde(default)]
@@ -105,16 +109,9 @@ pub struct SaveData {
     pub selected_slot: usize,
     #[serde(default)]
     pub hotbar: Vec<InventorySlotSave>,  // reuses same struct; index = hotbar slot 0–8
+    /// Entities parked in unloaded columns, tagged by species `kind`.
     #[serde(default)]
-    pub skeletons: Vec<EntitySave>,
-    #[serde(default)]
-    pub dormant_chickens: Vec<DormantEntitySave>,
-    #[serde(default)]
-    pub dormant_pigs:     Vec<DormantEntitySave>,
-    #[serde(default)]
-    pub dormant_penguins: Vec<DormantEntitySave>,
-    #[serde(default)]
-    pub dormant_skeletons: Vec<DormantEntitySave>,
+    pub dormant_entities: Vec<DormantEntitySave>,
     /// XZ chunk columns that have already had their initial entity spawn, so we
     /// don't re-populate them on reload.
     #[serde(default)]

@@ -19,8 +19,8 @@ pub struct GameServer {
     remote_players: HashMap<u64, RemotePlayer>,
     pending_block_breaks:   Vec<[i32; 3]>,
     pending_block_places:   Vec<[i32; 4]>,
-    pending_entity_attacks:   Vec<(u8, u32, f32, f32)>, // (kind, index, push_x, push_z)
-    pending_entity_interacts: Vec<(u8, u32)>,           // (kind, index)
+    pending_entity_attacks:   Vec<(u32, f32, f32)>, // (index, push_x, push_z)
+    pending_entity_interacts: Vec<u32>,             // index
     pending_item_pickups:     Vec<(u64, [f32; 3])>,     // (client_id, position)
     seed: u32,
 }
@@ -129,11 +129,11 @@ impl GameServer {
                                 );
                             }
                         }
-                        ClientMessage::AttackEntity { kind, index, push_x, push_z } => {
-                            self.pending_entity_attacks.push((kind, index, push_x, push_z));
+                        ClientMessage::AttackEntity { index, push_x, push_z } => {
+                            self.pending_entity_attacks.push((index, push_x, push_z));
                         }
-                        ClientMessage::InteractEntity { kind, index } => {
-                            self.pending_entity_interacts.push((kind, index));
+                        ClientMessage::InteractEntity { index } => {
+                            self.pending_entity_interacts.push(index);
                         }
                         ClientMessage::PickupItem { x, y, z } => {
                             self.pending_item_pickups.push((client_id, [x, y, z]));
@@ -175,11 +175,11 @@ impl GameServer {
         std::mem::take(&mut self.pending_block_places)
     }
 
-    pub fn drain_entity_attacks(&mut self) -> Vec<(u8, u32, f32, f32)> {
+    pub fn drain_entity_attacks(&mut self) -> Vec<(u32, f32, f32)> {
         std::mem::take(&mut self.pending_entity_attacks)
     }
 
-    pub fn drain_entity_interacts(&mut self) -> Vec<(u8, u32)> {
+    pub fn drain_entity_interacts(&mut self) -> Vec<u32> {
         std::mem::take(&mut self.pending_entity_interacts)
     }
 
@@ -201,16 +201,8 @@ impl GameServer {
         }
     }
 
-    pub fn broadcast_entity_update(
-        &mut self,
-        chickens: Vec<NetEntity>,
-        pigs: Vec<NetEntity>,
-        penguins: Vec<NetEntity>,
-        skeletons: Vec<NetEntity>,
-        cats: Vec<NetEntity>,
-        cows: Vec<NetEntity>,
-    ) {
-        let msg = ServerMessage::EntityUpdate { chickens, pigs, penguins, skeletons, cats, cows };
+    pub fn broadcast_entity_update(&mut self, entities: Vec<NetEntity>) {
+        let msg = ServerMessage::EntityUpdate { entities };
         if let Ok(bytes) = bincode::serialize(&msg) {
             self.server.broadcast_message(DefaultChannel::Unreliable, bytes);
         }

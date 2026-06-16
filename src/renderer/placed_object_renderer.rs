@@ -224,7 +224,7 @@ impl PlacedObjectRenderer {
 
             gl::BindVertexArray(model.vao);
 
-            for p in penguins {
+            for p in penguins.iter().filter(|e| e.def.identifier == "penguin") {
                 gl::Uniform1f(self.block_light_loc, p.block_light);
                 let roll = p.move_speed_norm() * (p.anim_time * 5.0).sin() * 0.12;
                 let model_mat =
@@ -248,7 +248,7 @@ impl PlacedObjectRenderer {
 
     pub fn draw_penguin_shadows(&self, penguins: &[Penguin], shadow_pass: &ShadowPass) {
         let Some(model) = &self.penguin else { return; };
-        for p in penguins {
+        for p in penguins.iter().filter(|e| e.def.identifier == "penguin") {
             let model_mat =
                 glam::Mat4::from_translation(glam::Vec3::from(p.position))
                 * glam::Mat4::from_rotation_y(p.yaw.to_radians())

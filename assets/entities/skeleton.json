@@ -10,7 +10,7 @@
       "jump_speed": 8.0,
       "hit_half_width": 0.35
     },
-    "movement": { "speed": 3.5 },
+    "movement": { "speed": 3.5, "turn_speed": 200, "knockback_h": 6.0, "knockback_v": 5.0 },
     "wander": {
       "idle_chance": 0.05,
       "idle_min_secs": 0.5,
@@ -20,6 +20,7 @@
     },
     "loot": [
       { "item": "bone", "chance": 0.80 }
-    ]
+    ],
+    "behavior": "hostile"
   }
 }

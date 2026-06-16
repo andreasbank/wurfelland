@@ -25,6 +25,18 @@ struct Components {
     /// Tameable mobs (e.g. cats) toggle a sitting state when interacted with.
     #[serde(default)]
     tameable: bool,
+    /// "passive" (wander/flee) or "hostile" (skeleton-style combat AI).
+    #[serde(default)]
+    behavior: Behavior,
+}
+
+/// Selects which AI drives a mob at runtime. Defaults to passive.
+#[derive(Deserialize, Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Behavior {
+    #[default]
+    Passive,
+    Hostile,
 }
 
 #[derive(Deserialize)]
@@ -98,6 +110,7 @@ pub struct EntityDef {
     pub knockback_v: f32,
     pub flee_speed_mult: f32,
     pub tameable: bool,
+    pub behavior: Behavior,
     pub idle_chance: f32,
     pub idle_range: (f32, f32),
     pub walk_range: (f32, f32),
@@ -126,6 +139,7 @@ impl EntityDef {
             knockback_v:   c.movement.knockback_v,
             flee_speed_mult: c.movement.flee_speed_mult,
             tameable:      c.tameable,
+            behavior:      c.behavior,
             idle_chance:   c.wander.idle_chance,
             idle_range:    (c.wander.idle_min_secs, c.wander.idle_max_secs),
             walk_range:    (c.wander.walk_min_secs, c.wander.walk_max_secs),

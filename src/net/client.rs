@@ -127,15 +127,15 @@ impl GameClient {
         }
     }
 
-    pub fn send_attack_entity(&mut self, kind: u8, index: u32, push_x: f32, push_z: f32) {
-        let msg = ClientMessage::AttackEntity { kind, index, push_x, push_z };
+    pub fn send_attack_entity(&mut self, index: u32, push_x: f32, push_z: f32) {
+        let msg = ClientMessage::AttackEntity { index, push_x, push_z };
         if let Ok(bytes) = bincode::serialize(&msg) {
             self.client.send_message(DefaultChannel::ReliableOrdered, bytes);
         }
     }
 
-    pub fn send_interact_entity(&mut self, kind: u8, index: u32) {
-        let msg = ClientMessage::InteractEntity { kind, index };
+    pub fn send_interact_entity(&mut self, index: u32) {
+        let msg = ClientMessage::InteractEntity { index };
         if let Ok(bytes) = bincode::serialize(&msg) {
             self.client.send_message(DefaultChannel::ReliableOrdered, bytes);
         }

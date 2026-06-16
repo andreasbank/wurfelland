@@ -8,13 +8,15 @@ pub enum ClientMessage {
     PlayerState { x: f32, y: f32, z: f32, yaw: f32, pitch: f32, health: u8 },
     BreakBlock  { x: i32, y: i32, z: i32 },
     PlaceBlock  { x: i32, y: i32, z: i32, block_id: u8 },
-    AttackEntity   { kind: u8, index: u32, push_x: f32, push_z: f32 },
-    InteractEntity { kind: u8, index: u32 },
+    AttackEntity   { index: u32, push_x: f32, push_z: f32 },
+    InteractEntity { index: u32 },
     PickupItem  { x: f32, y: f32, z: f32 },
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct NetEntity {
+    /// Entity-def identifier (species) so the client can build the right mob.
+    pub kind: String,
     pub x: f32, pub y: f32, pub z: f32,
     pub yaw: f32,
     pub health: f32,
@@ -34,7 +36,7 @@ pub enum ServerMessage {
     PeerLeft     { id: u64 },
     PeerState    { id: u64, x: f32, y: f32, z: f32, yaw: f32, pitch: f32, health: u8 },
     BlockChange  { x: i32, y: i32, z: i32, block_id: u8 },
-    EntityUpdate { chickens: Vec<NetEntity>, pigs: Vec<NetEntity>, penguins: Vec<NetEntity>, skeletons: Vec<NetEntity>, cats: Vec<NetEntity>, cows: Vec<NetEntity> },
+    EntityUpdate { entities: Vec<NetEntity> },
     TimeUpdate   { sun_angle: f32 },
     ItemUpdate   { items: Vec<NetItem> },
     InventoryAdd { item_id: u8 },

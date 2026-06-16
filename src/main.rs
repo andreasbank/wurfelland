@@ -16,7 +16,7 @@ mod camera;
 use camera::Camera;
 
 mod world;
-use world::{World, ItemEntity, ItemType, Chicken, Pig, Penguin, Skeleton, Cat, Cow, nearest_entity_hit, EntityRegistry, WorkbenchProp, BedProp, FurnaceProp};
+use world::{World, ItemEntity, ItemType, Entity, Behavior, nearest_entity_hit, EntityRegistry, WorkbenchProp, BedProp, FurnaceProp};
 use world::block::BlockType;
 
 mod renderer;
@@ -122,11 +122,7 @@ fn find_cave_spawn(world: &World, bx: i32, bz: i32) -> Option<i32> {
 fn spawn_column_entities(
     cx: i32, cz: i32,
     world: &World,
-    chickens:  &mut Vec<Chicken>,
-    pigs:      &mut Vec<Pig>,
-    penguins:  &mut Vec<Penguin>,
-    skeletons: &mut Vec<Skeleton>,
-    cows:      &mut Vec<Cow>,
+    entities:  &mut Vec<Entity>,
     registry:  &EntityRegistry,
     sun_angle: f32,
 ) {
@@ -145,7 +141,7 @@ fn spawn_column_entities(
             let sy = world.surface_height(bx, bz);
             if sy > 63 {
                 if let Some(def) = registry.get("chicken") {
-                    chickens.push(Chicken::new(bx as f32 + 0.5, sy as f32, bz as f32 + 0.5, def));
+                    entities.push(Entity::new(bx as f32 + 0.5, sy as f32, bz as f32 + 0.5, def));
                 }
             }
         }
@@ -162,7 +158,7 @@ fn spawn_column_entities(
             let sy = world.surface_height(bx, bz);
             if sy > 63 {
                 if let Some(def) = registry.get("pig") {
-                    pigs.push(Pig::new(bx as f32 + 0.5, sy as f32, bz as f32 + 0.5, def));
+                    entities.push(Entity::new(bx as f32 + 0.5, sy as f32, bz as f32 + 0.5, def));
                 }
             }
         }
@@ -179,7 +175,7 @@ fn spawn_column_entities(
             let sy = world.surface_height(bx, bz);
             if sy > 63 {
                 if let Some(def) = registry.get("penguin") {
-                    penguins.push(Penguin::new(bx as f32 + 0.5, sy as f32, bz as f32 + 0.5, def));
+                    entities.push(Entity::new(bx as f32 + 0.5, sy as f32, bz as f32 + 0.5, def));
                 }
             }
         }
@@ -197,7 +193,7 @@ fn spawn_column_entities(
             if let Some(cave_y) = find_cave_spawn(world, bx, bz) {
                 if let Some(def) = registry.get("skeleton") {
                     println!("[spawn] cave skeleton at ({}, {}, {})", bx, cave_y, bz);
-                    skeletons.push(Skeleton::new(bx as f32 + 0.5, cave_y as f32, bz as f32 + 0.5, def));
+                    entities.push(Entity::new(bx as f32 + 0.5, cave_y as f32, bz as f32 + 0.5, def));
                 }
             }
         }
@@ -216,7 +212,7 @@ fn spawn_column_entities(
                 let sy = world.surface_height(bx, bz);
                 if sy > 63 && world.get_block(bx, sy, bz) != world::BlockType::Water {
                     if let Some(def) = registry.get("skeleton") {
-                        skeletons.push(Skeleton::new(bx as f32 + 0.5, sy as f32, bz as f32 + 0.5, def));
+                        entities.push(Entity::new(bx as f32 + 0.5, sy as f32, bz as f32 + 0.5, def));
                     }
                 }
             }
@@ -234,7 +230,7 @@ fn spawn_column_entities(
             let sy = world.surface_height(bx, bz);
             if sy > 63 {
                 if let Some(def) = registry.get("cow") {
-                    cows.push(Cow::new(bx as f32 + 0.5, sy as f32, bz as f32 + 0.5, def));
+                    entities.push(Entity::new(bx as f32 + 0.5, sy as f32, bz as f32 + 0.5, def));
                 }
             }
         }
@@ -326,12 +322,8 @@ fn main() {
 
         let entity_registry = EntityRegistry::load("assets/entities");
 
-        let mut chickens: Vec<Chicken> = Vec::new();
-        let mut pigs: Vec<Pig> = Vec::new();
-        let mut penguins: Vec<Penguin> = Vec::new();
-        let mut skeletons: Vec<Skeleton> = Vec::new();
-        let mut cats: Vec<Cat> = Vec::new();
-        let mut cows: Vec<Cow> = Vec::new();
+        // All mobs live in one list; species is carried by each entity's def.
+        let mut entities: Vec<Entity> = Vec::new();
         let mut item_entities: Vec<ItemEntity> = Vec::new();
         let mut workbenches: Vec<WorkbenchProp> = Vec::new();
         let mut beds: Vec<BedProp> = Vec::new();
@@ -340,11 +332,7 @@ fn main() {
 
         #[derive(Default)]
         struct DormantColumn {
-            chickens:  Vec<save::EntitySave>,
-            pigs:      Vec<save::EntitySave>,
-            penguins:  Vec<save::EntitySave>,
-            skeletons: Vec<save::EntitySave>,
-            cows:      Vec<save::EntitySave>,
+            entities: Vec<save::EntitySave>,
         }
         let mut dormant: HashMap<[i32; 2], DormantColumn> = HashMap::new();
         let mut spawned_columns: std::collections::HashSet<[i32; 2]> = std::collections::HashSet::new();
@@ -584,9 +572,7 @@ fn main() {
                                             .unwrap_or_default().subsec_nanos();
                                         world = World::new(8, seed);
                                         world.update([8.5, 0.0, 8.5]);
-                                        chickens.clear();
-                                        pigs.clear();
-                                        penguins.clear();
+                                        entities.clear();
                                         item_entities.clear();
                                         dormant.clear();
                                         spawned_columns.clear();
@@ -637,9 +623,7 @@ fn main() {
                                             Ok(data) => {
                                                 world = World::new(8, data.seed);
                                                 world.update([8.5, 0.0, 8.5]);
-                                                chickens.clear();
-                                                pigs.clear();
-                                                penguins.clear();
+                                                entities.clear();
                                                 item_entities.clear();
                                                 dormant.clear();
                                                 spawned_columns.clear();
@@ -667,8 +651,7 @@ fn main() {
                                                 net_server = Some(server);
                                                 world = World::new(8, seed);
                                                 world.update([8.5, 0.0, 8.5]);
-                                                chickens.clear();
-                                                penguins.clear();
+                                                entities.clear();
                                                 item_entities.clear();
                                                 dormant.clear();
                                                 spawned_columns.clear();
@@ -726,9 +709,7 @@ fn main() {
                                             build_expanded = false;
                                             console_open   = false;
                                             cursor_item  = None;
-                                            chickens.clear();
-                                            pigs.clear();
-                                            penguins.clear();
+                                            entities.clear();
                                             item_entities.clear();
                                             workbenches.clear();
                                             dormant.clear();
@@ -758,18 +739,13 @@ fn main() {
                                                     x, y, z, block_id: b.to_net_id(),
                                                 })
                                                 .collect();
-                                            let chicken_saves = chickens.iter()
-                                                .map(|c| save::EntitySave {
-                                                    position: c.position,
-                                                    yaw:      c.yaw,
-                                                    health:   c.health,
-                                                })
-                                                .collect();
-                                            let pig_saves = pigs.iter()
-                                                .map(|p| save::EntitySave {
-                                                    position: p.position,
-                                                    yaw:      p.yaw,
-                                                    health:   p.health,
+                                            let entity_saves: Vec<save::EntitySave> = entities.iter()
+                                                .map(|e| save::EntitySave {
+                                                    kind:     e.def.identifier.clone(),
+                                                    position: e.position,
+                                                    yaw:      e.yaw,
+                                                    health:   e.health,
+                                                    sitting:  e.sitting,
                                                 })
                                                 .collect();
                                             let item_saves = item_entities.iter()
@@ -798,29 +774,14 @@ fn main() {
                                                     })
                                                 })
                                                 .collect();
-                                            let penguin_saves: Vec<save::EntitySave> = penguins.iter()
-                                                .map(|p| save::EntitySave {
-                                                    position: p.position,
-                                                    yaw:      p.yaw,
-                                                    health:   p.health,
-                                                })
-                                                .collect();
-                                            let skeleton_saves: Vec<save::EntitySave> = skeletons.iter()
-                                                .map(|s| save::EntitySave {
-                                                    position: s.position,
-                                                    yaw:      s.yaw,
-                                                    health:   s.health,
-                                                })
-                                                .collect();
-                                            let mut dormant_chicken_saves:  Vec<save::DormantEntitySave> = Vec::new();
-                                            let mut dormant_pig_saves:      Vec<save::DormantEntitySave> = Vec::new();
-                                            let mut dormant_penguin_saves:  Vec<save::DormantEntitySave> = Vec::new();
-                                            let mut dormant_skeleton_saves: Vec<save::DormantEntitySave> = Vec::new();
+                                            let mut dormant_entity_saves: Vec<save::DormantEntitySave> = Vec::new();
                                             for (&[cx, cz], col) in &dormant {
-                                                for e in &col.chickens  { dormant_chicken_saves .push(save::DormantEntitySave { chunk_x: cx, chunk_z: cz, position: e.position, yaw: e.yaw, health: e.health }); }
-                                                for e in &col.pigs      { dormant_pig_saves     .push(save::DormantEntitySave { chunk_x: cx, chunk_z: cz, position: e.position, yaw: e.yaw, health: e.health }); }
-                                                for e in &col.penguins  { dormant_penguin_saves .push(save::DormantEntitySave { chunk_x: cx, chunk_z: cz, position: e.position, yaw: e.yaw, health: e.health }); }
-                                                for e in &col.skeletons { dormant_skeleton_saves.push(save::DormantEntitySave { chunk_x: cx, chunk_z: cz, position: e.position, yaw: e.yaw, health: e.health }); }
+                                                for e in &col.entities {
+                                                    dormant_entity_saves.push(save::DormantEntitySave {
+                                                        kind: e.kind.clone(), chunk_x: cx, chunk_z: cz,
+                                                        position: e.position, yaw: e.yaw, health: e.health, sitting: e.sitting,
+                                                    });
+                                                }
                                             }
                                             let data = save::SaveData {
                                                 seed: world.seed(),
@@ -829,18 +790,12 @@ fn main() {
                                                 player_yaw: player.yaw,
                                                 player_pitch: player.pitch,
                                                 block_changes,
-                                                chickens: chicken_saves,
-                                                pigs: pig_saves,
-                                                penguins: penguin_saves,
-                                                skeletons: skeleton_saves,
+                                                entities: entity_saves,
                                                 items: item_saves,
                                                 inventory: inventory_saves,
                                                 selected_slot,
                                                 hotbar: hotbar_saves,
-                                                dormant_chickens:  dormant_chicken_saves,
-                                                dormant_pigs:      dormant_pig_saves,
-                                                dormant_penguins:  dormant_penguin_saves,
-                                                dormant_skeletons: dormant_skeleton_saves,
+                                                dormant_entities: dormant_entity_saves,
                                                 visited_columns:   spawned_columns.iter().copied().collect(),
                                                 workbenches: workbenches.iter().map(|wb| save::WorkbenchSave {
                                                     pos: wb.pos, dx: wb.dx, dz: wb.dz,
@@ -1094,7 +1049,7 @@ fn main() {
                             } else if hotbar[selected_slot].map_or(false, |(item, _)| item == ItemType::CatItem) && net_client.is_none() {
                                 if let Some((_hit, adj)) = world.raycast_face(ro, rd, 5.0) {
                                     if let Some(def) = entity_registry.get("cat") {
-                                        cats.push(Cat::new(adj[0] as f32 + 0.5, adj[1] as f32, adj[2] as f32 + 0.5, def));
+                                        entities.push(Entity::new(adj[0] as f32 + 0.5, adj[1] as f32, adj[2] as f32 + 0.5, def));
                                         if !god_mode {
                                             if let Some((_, count)) = &mut hotbar[selected_slot] {
                                                 if *count > 1 { *count -= 1; } else { hotbar[selected_slot] = None; }
@@ -1120,14 +1075,13 @@ fn main() {
                                         }
                                     }
                                 }
-                            } else if let Some((idx, _)) = nearest_entity_hit(&cats, ro, rd, 5.0) {
+                            } else if let Some((idx, _)) = nearest_entity_hit(&entities, ro, rd, 5.0) {
+                                // interact() is a no-op for non-tameable species.
                                 if net_client.is_none() {
-                                    cats[idx].interact();
+                                    entities[idx].interact();
                                 } else if let Some(ref mut client) = net_client {
-                                    client.send_interact_entity(4, idx as u32);
+                                    client.send_interact_entity(idx as u32);
                                 }
-                            } else if let Some((idx, _)) = nearest_entity_hit(&chickens, ro, rd, 5.0) {
-                                chickens[idx].interact();
                             } else if let Some((hit, _)) = world.raycast_face(ro, rd, 5.0) {
                                 if world.get_block(hit[0], hit[1], hit[2]) == BlockType::Workbench {
                                     build_open = true;
@@ -1434,9 +1388,7 @@ fn main() {
                             mp_world_ready = false;
                             world = World::new(8, 0); // placeholder; real seed arrives as WorldInfo
                             world.update([8.5, 0.0, 8.5]);
-                            chickens.clear();
-                            pigs.clear();
-                            penguins.clear();
+                            entities.clear();
                             item_entities.clear();
                             dormant.clear();
                             spawned_columns.clear();
@@ -1496,64 +1448,20 @@ fn main() {
                             // Re-apply player block modifications
                             world.load_block_changes(data.block_changes_as_map());
 
-                            // Restore entities
-                            for es in &data.chickens {
-                                if let Some(def) = entity_registry.get("chicken") {
-                                    let mut c = Chicken::new(
-                                        es.position[0], es.position[1], es.position[2], def,
-                                    );
-                                    c.yaw    = es.yaw;
-                                    c.health = es.health;
-                                    chickens.push(c);
-                                }
-                            }
-                            for es in &data.pigs {
-                                if let Some(def) = entity_registry.get("pig") {
-                                    let mut p = Pig::new(
-                                        es.position[0], es.position[1], es.position[2], def,
-                                    );
-                                    p.yaw    = es.yaw;
-                                    p.health = es.health;
-                                    pigs.push(p);
-                                }
-                            }
-                            for es in &data.penguins {
-                                if let Some(def) = entity_registry.get("penguin") {
-                                    let mut p = Penguin::new(
-                                        es.position[0], es.position[1], es.position[2], def,
-                                    );
-                                    p.yaw    = es.yaw;
-                                    p.health = es.health;
-                                    penguins.push(p);
-                                }
-                            }
-                            // Restore saved skeletons.
-                            for es in &data.skeletons {
-                                if let Some(def) = entity_registry.get("skeleton") {
-                                    let mut s = Skeleton::new(
-                                        es.position[0], es.position[1], es.position[2], def,
-                                    );
-                                    s.yaw    = es.yaw;
-                                    s.health = es.health;
-                                    skeletons.push(s);
+                            // Restore live entities (each tagged with its species `kind`).
+                            for es in &data.entities {
+                                if let Some(def) = entity_registry.get(&es.kind) {
+                                    let mut e = Entity::new(es.position[0], es.position[1], es.position[2], def);
+                                    e.yaw     = es.yaw;
+                                    e.health  = es.health;
+                                    e.sitting = es.sitting;
+                                    entities.push(e);
                                 }
                             }
                             // Restore dormant entities (those in unloaded columns at save time).
-                            for d in &data.dormant_chickens {
-                                dormant.entry([d.chunk_x, d.chunk_z]).or_default().chickens
-                                    .push(save::EntitySave { position: d.position, yaw: d.yaw, health: d.health });
-                            }
-                            for d in &data.dormant_pigs {
-                                dormant.entry([d.chunk_x, d.chunk_z]).or_default().pigs
-                                    .push(save::EntitySave { position: d.position, yaw: d.yaw, health: d.health });
-                            }
-                            for d in &data.dormant_penguins {
-                                dormant.entry([d.chunk_x, d.chunk_z]).or_default().penguins
-                                    .push(save::EntitySave { position: d.position, yaw: d.yaw, health: d.health });
-                            }
-                            for d in &data.dormant_skeletons {
-                                dormant.entry([d.chunk_x, d.chunk_z]).or_default().skeletons
-                                    .push(save::EntitySave { position: d.position, yaw: d.yaw, health: d.health });
+                            for d in &data.dormant_entities {
+                                dormant.entry([d.chunk_x, d.chunk_z]).or_default().entities
+                                    .push(save::EntitySave { kind: d.kind.clone(), position: d.position, yaw: d.yaw, health: d.health, sitting: d.sitting });
                             }
                             // Restore visited-column set so we don't re-spawn entities in explored areas.
                             for col in &data.visited_columns {
@@ -1600,7 +1508,7 @@ fn main() {
                         // Spawn entities in every column that finished loading during startup.
                         for [cx, cz] in world.all_loaded_columns() {
                             if spawned_columns.insert([cx, cz]) {
-                                spawn_column_entities(cx, cz, &world, &mut chickens, &mut pigs, &mut penguins, &mut skeletons, &mut cows, &entity_registry, sun_angle);
+                                spawn_column_entities(cx, cz, &world, &mut entities, &entity_registry, sun_angle);
                             }
                         }
                         let _ = world.take_loaded_columns(); // clear backlog already handled above
@@ -1691,35 +1599,11 @@ fn main() {
                         }
 
                         if lmb_held {
-                            let chk_hit  = nearest_entity_hit(&chickens,  cam_pos, cam_dir, 5.0);
-                            let pig_hit  = nearest_entity_hit(&pigs,      cam_pos, cam_dir, 5.0);
-                            let pen_hit  = nearest_entity_hit(&penguins,  cam_pos, cam_dir, 5.0);
-                            let skel_hit = nearest_entity_hit(&skeletons, cam_pos, cam_dir, 5.0);
-                            let cat_hit  = nearest_entity_hit(&cats,      cam_pos, cam_dir, 5.0);
-                            let cow_hit  = nearest_entity_hit(&cows,      cam_pos, cam_dir, 5.0);
-                            // Pick the closest entity across all types
-                            let candidates = [
-                                chk_hit .map(|(i, t)| (0u8, i, t)),
-                                pig_hit .map(|(i, t)| (1u8, i, t)),
-                                pen_hit .map(|(i, t)| (2u8, i, t)),
-                                skel_hit.map(|(i, t)| (3u8, i, t)),
-                                cat_hit .map(|(i, t)| (4u8, i, t)),
-                                cow_hit .map(|(i, t)| (5u8, i, t)),
-                            ];
-                            let best = candidates.iter().flatten()
-                                .min_by(|a, b| a.2.partial_cmp(&b.2).unwrap());
-                            let (ent_hit_t, hit_chicken, hit_pig_idx, hit_penguin_idx, hit_skeleton_idx, hit_cat_idx, hit_cow_idx) = match best {
-                                Some(&(0, i, t)) => (t, Some(i), None,    None,    None,    None,    None),
-                                Some(&(1, i, t)) => (t, None,    Some(i), None,    None,    None,    None),
-                                Some(&(2, i, t)) => (t, None,    None,    Some(i), None,    None,    None),
-                                Some(&(3, i, t)) => (t, None,    None,    None,    Some(i), None,    None),
-                                Some(&(4, i, t)) => (t, None,    None,    None,    None,    Some(i), None),
-                                Some(&(5, i, t)) => (t, None,    None,    None,    None,    None,    Some(i)),
-                                _                => (f32::MAX, None, None, None, None, None, None),
-                            };
+                            let ent_hit = nearest_entity_hit(&entities, cam_pos, cam_dir, 5.0);
+                            let ent_hit_t = ent_hit.map_or(f32::MAX, |(_, t)| t);
                             let blk_hit = world.raycast(cam_pos, cam_dir, 5.0);
 
-                            let hit_entity = if hit_chicken.is_some() || hit_pig_idx.is_some() || hit_penguin_idx.is_some() || hit_skeleton_idx.is_some() || hit_cat_idx.is_some() || hit_cow_idx.is_some() {
+                            let hit_entity = if ent_hit.is_some() {
                                 match blk_hit {
                                     Some(b) => {
                                         let dx = b[0] as f32 + 0.5 - cam_pos[0];
@@ -1736,20 +1620,12 @@ fn main() {
                                     let len = (cam_dir[0]*cam_dir[0] + cam_dir[2]*cam_dir[2])
                                         .sqrt().max(0.001);
                                     let push = [cam_dir[0]/len, 0.0, cam_dir[2]/len];
-                                    if net_client.is_none() {
-                                        if let Some(ci) = hit_chicken      { chickens[ci].take_hit(push); }
-                                        if let Some(pi) = hit_pig_idx      { pigs[pi].take_hit(push); }
-                                        if let Some(pi) = hit_penguin_idx  { penguins[pi].take_hit(push); }
-                                        if let Some(si) = hit_skeleton_idx { skeletons[si].take_hit(push); }
-                                        if let Some(ki) = hit_cat_idx      { cats[ki].take_hit(push); }
-                                        if let Some(wi) = hit_cow_idx      { cows[wi].take_hit(push); }
-                                    } else if let Some(ref mut client) = net_client {
-                                        if let Some(ci) = hit_chicken     { client.send_attack_entity(0, ci as u32, push[0], push[2]); }
-                                        if let Some(pi) = hit_pig_idx     { client.send_attack_entity(1, pi as u32, push[0], push[2]); }
-                                        if let Some(pi) = hit_penguin_idx { client.send_attack_entity(2, pi as u32, push[0], push[2]); }
-                                        if let Some(si) = hit_skeleton_idx { client.send_attack_entity(3, si as u32, push[0], push[2]); }
-                                        if let Some(ki) = hit_cat_idx      { client.send_attack_entity(4, ki as u32, push[0], push[2]); }
-                                        if let Some(wi) = hit_cow_idx      { client.send_attack_entity(5, wi as u32, push[0], push[2]); }
+                                    if let Some((idx, _)) = ent_hit {
+                                        if net_client.is_none() {
+                                            entities[idx].take_hit(push);
+                                        } else if let Some(ref mut client) = net_client {
+                                            client.send_attack_entity(idx as u32, push[0], push[2]);
+                                        }
                                     }
                                     entity_hit_cooldown = 0.4;
                                 }
@@ -1861,31 +1737,7 @@ fn main() {
                         let sim_r2 = if sim_r == 0 { i32::MAX } else { sim_r * sim_r };
                         let pc_x = (player.position[0] / 16.0).floor() as i32;
                         let pc_z = (player.position[2] / 16.0).floor() as i32;
-                        for chicken in &mut chickens {
-                            let ecx = (chicken.position[0] / 16.0).floor() as i32;
-                            let ecz = (chicken.position[2] / 16.0).floor() as i32;
-                            let dx = ecx - pc_x; let dz = ecz - pc_z;
-                            if dx*dx + dz*dz <= sim_r2 {
-                                chicken.update(delta_time, |x, y, z| world.get_block(x, y, z));
-                            }
-                        }
-                        for pig in &mut pigs {
-                            let ecx = (pig.position[0] / 16.0).floor() as i32;
-                            let ecz = (pig.position[2] / 16.0).floor() as i32;
-                            let dx = ecx - pc_x; let dz = ecz - pc_z;
-                            if dx*dx + dz*dz <= sim_r2 {
-                                pig.update(delta_time, |x, y, z| world.get_block(x, y, z));
-                            }
-                        }
-                        for penguin in &mut penguins {
-                            let ecx = (penguin.position[0] / 16.0).floor() as i32;
-                            let ecz = (penguin.position[2] / 16.0).floor() as i32;
-                            let dx = ecx - pc_x; let dz = ecz - pc_z;
-                            if dx*dx + dz*dz <= sim_r2 {
-                                penguin.update(delta_time, |x, y, z| world.get_block(x, y, z));
-                            }
-                        }
-                        // Collect all player positions: local player first, then remote clients.
+                        // Player positions for hostile AI: local player first, then remotes.
                         let skel_targets: Vec<[f32; 3]> = {
                             let mut v = vec![player.position];
                             if let Some(ref srv) = net_server {
@@ -1893,126 +1745,49 @@ fn main() {
                             }
                             v
                         };
-                        if !god_mode {
-                            for skeleton in &mut skeletons {
-                                let ecx = (skeleton.position[0] / 16.0).floor() as i32;
-                                let ecz = (skeleton.position[2] / 16.0).floor() as i32;
-                                let dx = ecx - pc_x; let dz = ecz - pc_z;
-                                if dx*dx + dz*dz <= sim_r2 {
-                                    if let Some((pidx, dmg)) = skeleton.update(
-                                        delta_time,
-                                        |x, y, z| world.get_block(x, y, z),
-                                        |x, y, z| world.get_sky_light(x, y, z),
-                                        &skel_targets,
-                                        sun_angle,
-                                    ) {
-                                        if pidx == 0 {
-                                            player.health = player.health.saturating_sub(dmg as u32);
-                                        }
-                                        // Remote-player damage (pidx >= 1) would be forwarded here.
-                                    }
-                                }
-                            }
-                        } else {
-                            for skeleton in &mut skeletons {
-                                let ecx = (skeleton.position[0] / 16.0).floor() as i32;
-                                let ecz = (skeleton.position[2] / 16.0).floor() as i32;
-                                let dx = ecx - pc_x; let dz = ecz - pc_z;
-                                if dx*dx + dz*dz <= sim_r2 {
-                                    skeleton.update(
+                        for e in &mut entities {
+                            let ecx = (e.position[0] / 16.0).floor() as i32;
+                            let ecz = (e.position[2] / 16.0).floor() as i32;
+                            let dx = ecx - pc_x; let dz = ecz - pc_z;
+                            if dx*dx + dz*dz > sim_r2 { continue; }
+                            match e.def.behavior {
+                                Behavior::Hostile => {
+                                    let attack = e.update_hostile(
                                         delta_time,
                                         |x, y, z| world.get_block(x, y, z),
                                         |x, y, z| world.get_sky_light(x, y, z),
                                         &skel_targets,
                                         sun_angle,
                                     );
+                                    if !god_mode {
+                                        if let Some((pidx, dmg)) = attack {
+                                            if pidx == 0 {
+                                                player.health = player.health.saturating_sub(dmg as u32);
+                                            }
+                                            // Remote-player damage (pidx >= 1) would be forwarded here.
+                                        }
+                                    }
+                                }
+                                Behavior::Passive => {
+                                    e.update(delta_time, |x, y, z| world.get_block(x, y, z));
                                 }
                             }
                         }
-                        for cat in &mut cats {
-                            let ecx = (cat.position[0] / 16.0).floor() as i32;
-                            let ecz = (cat.position[2] / 16.0).floor() as i32;
-                            let dx = ecx - pc_x; let dz = ecz - pc_z;
-                            if dx*dx + dz*dz <= sim_r2 {
-                                cat.update(delta_time, |x, y, z| world.get_block(x, y, z));
-                            }
-                        }
-                        for cow in &mut cows {
-                            let ecx = (cow.position[0] / 16.0).floor() as i32;
-                            let ecz = (cow.position[2] / 16.0).floor() as i32;
-                            let dx = ecx - pc_x; let dz = ecz - pc_z;
-                            if dx*dx + dz*dz <= sim_r2 {
-                                cow.update(delta_time, |x, y, z| world.get_block(x, y, z));
-                            }
-                        }
-                        for chicken in chickens.iter().filter(|c| c.is_dead()) {
-                            for item_type in chicken.drops() {
+                        // Death drops, then remove dead entities.
+                        for e in entities.iter().filter(|e| e.is_dead()) {
+                            for item_type in e.drops() {
                                 item_entities.push(ItemEntity::new(
-                                    chicken.position[0], chicken.position[1] + 0.5,
-                                    chicken.position[2], item_type,
+                                    e.position[0], e.position[1] + 0.5, e.position[2], item_type,
                                 ));
                             }
                         }
-                        chickens.retain(|c| !c.is_dead());
-                        for pig in pigs.iter().filter(|p| p.is_dead()) {
-                            for item_type in pig.drops() {
-                                item_entities.push(ItemEntity::new(
-                                    pig.position[0], pig.position[1] + 0.5,
-                                    pig.position[2], item_type,
-                                ));
-                            }
-                        }
-                        pigs.retain(|p| !p.is_dead());
-                        for penguin in penguins.iter().filter(|p| p.is_dead()) {
-                            for item_type in penguin.drops() {
-                                item_entities.push(ItemEntity::new(
-                                    penguin.position[0], penguin.position[1] + 0.5,
-                                    penguin.position[2], item_type,
-                                ));
-                            }
-                        }
-                        penguins.retain(|p| !p.is_dead());
-                        for skeleton in skeletons.iter().filter(|s| s.is_dead()) {
-                            for item_type in skeleton.drops() {
-                                item_entities.push(ItemEntity::new(
-                                    skeleton.position[0], skeleton.position[1] + 0.5,
-                                    skeleton.position[2], item_type,
-                                ));
-                            }
-                        }
-                        skeletons.retain(|s| !s.is_dead());
-                        cats.retain(|c| !c.is_dead());
-                        for cow in cows.iter().filter(|c| c.is_dead()) {
-                            for item_type in cow.drops() {
-                                item_entities.push(ItemEntity::new(
-                                    cow.position[0], cow.position[1] + 0.5,
-                                    cow.position[2], item_type,
-                                ));
-                            }
-                        }
-                        cows.retain(|c| !c.is_dead());
+                        entities.retain(|e| !e.is_dead());
                         } // end net_client.is_none() guard
 
                         // Sample sky light for rendering: 0..15 → 0..1
-                        for chicken in &mut chickens {
-                            let [x, y, z] = chicken.position;
-                            chicken.block_light = world.get_sky_light(x.floor() as i32, y.ceil() as i32, z.floor() as i32) as f32 / 15.0;
-                        }
-                        for pig in &mut pigs {
-                            let [x, y, z] = pig.position;
-                            pig.block_light = world.get_sky_light(x.floor() as i32, y.ceil() as i32, z.floor() as i32) as f32 / 15.0;
-                        }
-                        for skeleton in &mut skeletons {
-                            let [x, y, z] = skeleton.position;
-                            skeleton.block_light = world.get_sky_light(x.floor() as i32, y.ceil() as i32, z.floor() as i32) as f32 / 15.0;
-                        }
-                        for cat in &mut cats {
-                            let [x, y, z] = cat.position;
-                            cat.block_light = world.get_sky_light(x.floor() as i32, y.ceil() as i32, z.floor() as i32) as f32 / 15.0;
-                        }
-                        for cow in &mut cows {
-                            let [x, y, z] = cow.position;
-                            cow.block_light = world.get_sky_light(x.floor() as i32, y.ceil() as i32, z.floor() as i32) as f32 / 15.0;
+                        for e in &mut entities {
+                            let [x, y, z] = e.position;
+                            e.block_light = world.get_sky_light(x.floor() as i32, y.ceil() as i32, z.floor() as i32) as f32 / 15.0;
                         }
 
                         item_pickup_cooldown = (item_pickup_cooldown - delta_time).max(0.0);
@@ -2049,47 +1824,19 @@ fn main() {
                         for col in world.take_unloaded_columns() {
                             let [ucx, ucz] = col;
                             let entry = dormant.entry(col).or_default();
-                            chickens.retain(|c| {
-                                let ccx = (c.position[0] / 16.0).floor() as i32;
-                                let ccz = (c.position[2] / 16.0).floor() as i32;
-                                if ccx == ucx && ccz == ucz {
-                                    entry.chickens.push(save::EntitySave { position: c.position, yaw: c.yaw, health: c.health });
+                            // Park non-tameable mobs from this column; tameable pets (cats) stay loaded.
+                            entities.retain(|e| {
+                                let ccx = (e.position[0] / 16.0).floor() as i32;
+                                let ccz = (e.position[2] / 16.0).floor() as i32;
+                                if ccx == ucx && ccz == ucz && !e.def.tameable {
+                                    entry.entities.push(save::EntitySave {
+                                        kind: e.def.identifier.clone(), position: e.position,
+                                        yaw: e.yaw, health: e.health, sitting: e.sitting,
+                                    });
                                     false
                                 } else { true }
                             });
-                            pigs.retain(|p| {
-                                let ccx = (p.position[0] / 16.0).floor() as i32;
-                                let ccz = (p.position[2] / 16.0).floor() as i32;
-                                if ccx == ucx && ccz == ucz {
-                                    entry.pigs.push(save::EntitySave { position: p.position, yaw: p.yaw, health: p.health });
-                                    false
-                                } else { true }
-                            });
-                            penguins.retain(|p| {
-                                let ccx = (p.position[0] / 16.0).floor() as i32;
-                                let ccz = (p.position[2] / 16.0).floor() as i32;
-                                if ccx == ucx && ccz == ucz {
-                                    entry.penguins.push(save::EntitySave { position: p.position, yaw: p.yaw, health: p.health });
-                                    false
-                                } else { true }
-                            });
-                            skeletons.retain(|s| {
-                                let ccx = (s.position[0] / 16.0).floor() as i32;
-                                let ccz = (s.position[2] / 16.0).floor() as i32;
-                                if ccx == ucx && ccz == ucz {
-                                    entry.skeletons.push(save::EntitySave { position: s.position, yaw: s.yaw, health: s.health });
-                                    false
-                                } else { true }
-                            });
-                            cows.retain(|c| {
-                                let ccx = (c.position[0] / 16.0).floor() as i32;
-                                let ccz = (c.position[2] / 16.0).floor() as i32;
-                                if ccx == ucx && ccz == ucz {
-                                    entry.cows.push(save::EntitySave { position: c.position, yaw: c.yaw, health: c.health });
-                                    false
-                                } else { true }
-                            });
-                            if entry.chickens.is_empty() && entry.pigs.is_empty() && entry.penguins.is_empty() && entry.skeletons.is_empty() && entry.cows.is_empty() {
+                            if entry.entities.is_empty() {
                                 dormant.remove(&col);
                             }
                         }
@@ -2100,65 +1847,25 @@ fn main() {
                             let [col_cx, col_cz] = col;
                             if let Some(entry) = dormant.remove(&col) {
                                 let mut leftover = DormantColumn::default();
-                                for es in entry.chickens {
+                                for es in entry.entities {
                                     let cy = (es.position[1] as i32).div_euclid(16);
                                     if world.is_chunk_loaded(col_cx, cy, col_cz) {
-                                        if let Some(def) = entity_registry.get("chicken") {
-                                            let mut c = Chicken::new(es.position[0], es.position[1], es.position[2], def);
-                                            c.yaw = es.yaw; c.health = es.health;
-                                            chickens.push(c);
+                                        if let Some(def) = entity_registry.get(&es.kind) {
+                                            let mut e = Entity::new(es.position[0], es.position[1], es.position[2], def);
+                                            e.yaw = es.yaw; e.health = es.health; e.sitting = es.sitting;
+                                            entities.push(e);
                                         }
-                                    } else { leftover.chickens.push(es); }
-                                }
-                                for es in entry.pigs {
-                                    let cy = (es.position[1] as i32).div_euclid(16);
-                                    if world.is_chunk_loaded(col_cx, cy, col_cz) {
-                                        if let Some(def) = entity_registry.get("pig") {
-                                            let mut p = Pig::new(es.position[0], es.position[1], es.position[2], def);
-                                            p.yaw = es.yaw; p.health = es.health;
-                                            pigs.push(p);
-                                        }
-                                    } else { leftover.pigs.push(es); }
-                                }
-                                for es in entry.penguins {
-                                    let cy = (es.position[1] as i32).div_euclid(16);
-                                    if world.is_chunk_loaded(col_cx, cy, col_cz) {
-                                        if let Some(def) = entity_registry.get("penguin") {
-                                            let mut p = Penguin::new(es.position[0], es.position[1], es.position[2], def);
-                                            p.yaw = es.yaw; p.health = es.health;
-                                            penguins.push(p);
-                                        }
-                                    } else { leftover.penguins.push(es); }
-                                }
-                                for es in entry.skeletons {
-                                    let cy = (es.position[1] as i32).div_euclid(16);
-                                    if world.is_chunk_loaded(col_cx, cy, col_cz) {
-                                        if let Some(def) = entity_registry.get("skeleton") {
-                                            let mut s = Skeleton::new(es.position[0], es.position[1], es.position[2], def);
-                                            s.yaw = es.yaw; s.health = es.health;
-                                            skeletons.push(s);
-                                        }
-                                    } else { leftover.skeletons.push(es); }
-                                }
-                                for es in entry.cows {
-                                    let cy = (es.position[1] as i32).div_euclid(16);
-                                    if world.is_chunk_loaded(col_cx, cy, col_cz) {
-                                        if let Some(def) = entity_registry.get("cow") {
-                                            let mut c = Cow::new(es.position[0], es.position[1], es.position[2], def);
-                                            c.yaw = es.yaw; c.health = es.health;
-                                            cows.push(c);
-                                        }
-                                    } else { leftover.cows.push(es); }
+                                    } else { leftover.entities.push(es); }
                                 }
                                 // Re-queue any entities whose specific chunk didn't arrive yet,
                                 // and reset the notification so finalize_blocks re-fires when it does.
-                                if !leftover.chickens.is_empty() || !leftover.pigs.is_empty() || !leftover.penguins.is_empty() || !leftover.skeletons.is_empty() || !leftover.cows.is_empty() {
+                                if !leftover.entities.is_empty() {
                                     world.reset_column_notification(col_cx, col_cz);
                                     dormant.insert(col, leftover);
                                 }
                             } else if spawned_columns.insert(col) && net_client.is_none() {
                                 // First time visiting this column — seed it with entities.
-                                spawn_column_entities(col_cx, col_cz, &world, &mut chickens, &mut pigs, &mut penguins, &mut skeletons, &mut cows, &entity_registry, sun_angle);
+                                spawn_column_entities(col_cx, col_cz, &world, &mut entities, &entity_registry, sun_angle);
                             }
                         }
                         } // end net_client.is_none() dormancy guard
@@ -2194,17 +1901,14 @@ fn main() {
                         entity_broadcast_timer += delta_time;
                         if entity_broadcast_timer >= 0.05 {
                             entity_broadcast_timer = 0.0;
-                            let to_net = |pos: [f32;3], yaw: f32, health: f32, sitting: bool| {
-                                net::messages::NetEntity { x: pos[0], y: pos[1], z: pos[2], yaw, health, sitting }
-                            };
-                            server.broadcast_entity_update(
-                                chickens .iter().map(|e| to_net(e.position, e.yaw, e.health, false)).collect(),
-                                pigs     .iter().map(|e| to_net(e.position, e.yaw, e.health, false)).collect(),
-                                penguins .iter().map(|e| to_net(e.position, e.yaw, e.health, false)).collect(),
-                                skeletons.iter().map(|e| to_net(e.position, e.yaw, e.health, false)).collect(),
-                                cats     .iter().map(|e| to_net(e.position, e.yaw, e.health, e.sitting)).collect(),
-                                cows     .iter().map(|e| to_net(e.position, e.yaw, e.health, false)).collect(),
-                            );
+                            let net_entities: Vec<net::messages::NetEntity> = entities.iter().map(|e| {
+                                net::messages::NetEntity {
+                                    kind: e.def.identifier.clone(),
+                                    x: e.position[0], y: e.position[1], z: e.position[2],
+                                    yaw: e.yaw, health: e.health, sitting: e.sitting,
+                                }
+                            }).collect();
+                            server.broadcast_entity_update(net_entities);
                         }
                         server.broadcast_time(sun_angle);
                         server.broadcast_item_update(
@@ -2213,23 +1917,11 @@ fn main() {
                                 item_id: e.item.tile_index() as u8,
                             }).collect(),
                         );
-                        for (kind, index, push_x, push_z) in server.drain_entity_attacks() {
-                            let push = [push_x, 0.0, push_z];
-                            match kind {
-                                0 => { if let Some(e) = chickens .get_mut(index as usize) { e.take_hit(push); } }
-                                1 => { if let Some(e) = pigs     .get_mut(index as usize) { e.take_hit(push); } }
-                                2 => { if let Some(e) = penguins .get_mut(index as usize) { e.take_hit(push); } }
-                                3 => { if let Some(e) = skeletons.get_mut(index as usize) { e.take_hit(push); } }
-                                4 => { if let Some(e) = cats     .get_mut(index as usize) { e.take_hit(push); } }
-                                5 => { if let Some(e) = cows     .get_mut(index as usize) { e.take_hit(push); } }
-                                _ => {}
-                            }
+                        for (index, push_x, push_z) in server.drain_entity_attacks() {
+                            if let Some(e) = entities.get_mut(index as usize) { e.take_hit([push_x, 0.0, push_z]); }
                         }
-                        for (kind, index) in server.drain_entity_interacts() {
-                            match kind {
-                                4 => { if let Some(e) = cats.get_mut(index as usize) { e.interact(); } }
-                                _ => {}
-                            }
+                        for index in server.drain_entity_interacts() {
+                            if let Some(e) = entities.get_mut(index as usize) { e.interact(); }
                         }
                         for (client_id, pos) in server.drain_item_pickups() {
                             // Find the nearest item entity within pickup range
@@ -2254,93 +1946,22 @@ fn main() {
                                 ServerMessage::BlockChange { x, y, z, block_id } => {
                                     world.set_block(x, y, z, world::BlockType::from_net_id(block_id));
                                 }
-                                ServerMessage::EntityUpdate { chickens: c_net, pigs: p_net, penguins: pen_net, skeletons: skel_net, cats: cat_net, cows: cow_net } => {
-                                    // If count matches, update interpolation targets in-place.
-                                    // On count change (spawn/death), snap immediately.
-                                    if c_net.len() == chickens.len() {
-                                        for (e, ne) in chickens.iter_mut().zip(&c_net) {
-                                            e.net_target_pos = [ne.x, ne.y, ne.z];
-                                            e.net_target_yaw = ne.yaw;
-                                            e.health = ne.health;
-                                        }
-                                    } else {
-                                        chickens.clear();
-                                        for ne in c_net {
-                                            if let Some(def) = entity_registry.get("chicken") {
-                                                chickens.push(Chicken::new(ne.x, ne.y, ne.z, def));
-                                            }
-                                        }
-                                    }
-                                    if p_net.len() == pigs.len() {
-                                        for (e, ne) in pigs.iter_mut().zip(&p_net) {
-                                            e.net_target_pos = [ne.x, ne.y, ne.z];
-                                            e.net_target_yaw = ne.yaw;
-                                            e.health = ne.health;
-                                        }
-                                    } else {
-                                        pigs.clear();
-                                        for ne in p_net {
-                                            if let Some(def) = entity_registry.get("pig") {
-                                                pigs.push(Pig::new(ne.x, ne.y, ne.z, def));
-                                            }
-                                        }
-                                    }
-                                    if pen_net.len() == penguins.len() {
-                                        for (e, ne) in penguins.iter_mut().zip(&pen_net) {
-                                            e.net_target_pos = [ne.x, ne.y, ne.z];
-                                            e.net_target_yaw = ne.yaw;
-                                            e.health = ne.health;
-                                        }
-                                    } else {
-                                        penguins.clear();
-                                        for ne in pen_net {
-                                            if let Some(def) = entity_registry.get("penguin") {
-                                                penguins.push(Penguin::new(ne.x, ne.y, ne.z, def));
-                                            }
-                                        }
-                                    }
-                                    if skel_net.len() == skeletons.len() {
-                                        for (e, ne) in skeletons.iter_mut().zip(&skel_net) {
-                                            e.net_target_pos = [ne.x, ne.y, ne.z];
-                                            e.net_target_yaw = ne.yaw;
-                                            e.health = ne.health;
-                                        }
-                                    } else {
-                                        skeletons.clear();
-                                        for ne in skel_net {
-                                            if let Some(def) = entity_registry.get("skeleton") {
-                                                skeletons.push(Skeleton::new(ne.x, ne.y, ne.z, def));
-                                            }
-                                        }
-                                    }
-                                    if cat_net.len() == cats.len() {
-                                        for (e, ne) in cats.iter_mut().zip(&cat_net) {
+                                ServerMessage::EntityUpdate { entities: net_entities } => {
+                                    // Counts match → retarget for interpolation; else rebuild.
+                                    if net_entities.len() == entities.len() {
+                                        for (e, ne) in entities.iter_mut().zip(&net_entities) {
                                             e.net_target_pos = [ne.x, ne.y, ne.z];
                                             e.net_target_yaw = ne.yaw;
                                             e.health = ne.health;
                                             e.sitting = ne.sitting;
                                         }
                                     } else {
-                                        cats.clear();
-                                        for ne in cat_net {
-                                            if let Some(def) = entity_registry.get("cat") {
-                                                let mut cat = Cat::new(ne.x, ne.y, ne.z, def);
-                                                cat.sitting = ne.sitting;
-                                                cats.push(cat);
-                                            }
-                                        }
-                                    }
-                                    if cow_net.len() == cows.len() {
-                                        for (e, ne) in cows.iter_mut().zip(&cow_net) {
-                                            e.net_target_pos = [ne.x, ne.y, ne.z];
-                                            e.net_target_yaw = ne.yaw;
-                                            e.health = ne.health;
-                                        }
-                                    } else {
-                                        cows.clear();
-                                        for ne in cow_net {
-                                            if let Some(def) = entity_registry.get("cow") {
-                                                cows.push(Cow::new(ne.x, ne.y, ne.z, def));
+                                        entities.clear();
+                                        for ne in net_entities {
+                                            if let Some(def) = entity_registry.get(&ne.kind) {
+                                                let mut e = Entity::new(ne.x, ne.y, ne.z, def);
+                                                e.sitting = ne.sitting;
+                                                entities.push(e);
                                             }
                                         }
                                     }
@@ -2375,22 +1996,7 @@ fn main() {
                         // Factor of 8 means an entity closes ~98% of its gap in ~0.5s,
                         // smoothing over the 50ms gap between 20Hz server updates.
                         let t = (delta_time * 8.0).min(1.0);
-                        for e in &mut chickens {
-                            e.anim_time += delta_time;
-                            for i in 0..3 { e.position[i] += (e.net_target_pos[i] - e.position[i]) * t; }
-                            e.yaw += world::entity::angle_diff(e.net_target_yaw, e.yaw) * t;
-                        }
-                        for e in &mut pigs {
-                            e.anim_time += delta_time;
-                            for i in 0..3 { e.position[i] += (e.net_target_pos[i] - e.position[i]) * t; }
-                            e.yaw += world::entity::angle_diff(e.net_target_yaw, e.yaw) * t;
-                        }
-                        for e in &mut penguins {
-                            e.anim_time += delta_time;
-                            for i in 0..3 { e.position[i] += (e.net_target_pos[i] - e.position[i]) * t; }
-                            e.yaw += world::entity::angle_diff(e.net_target_yaw, e.yaw) * t;
-                        }
-                        for e in &mut skeletons {
+                        for e in &mut entities {
                             e.anim_time += delta_time;
                             for i in 0..3 { e.position[i] += (e.net_target_pos[i] - e.position[i]) * t; }
                             e.yaw += world::entity::angle_diff(e.net_target_yaw, e.yaw) * t;
@@ -2526,15 +2132,15 @@ fn main() {
                     shadow_pass.begin_cascade(i);
                     world.draw_shadow(&shadow_pass);
                     if game_state == GameState::Playing {
-                        entity_renderer.draw_shadows(&chickens, &shadow_pass);
-                        entity_renderer.draw_pig_shadows(&pigs, &shadow_pass);
-                        entity_renderer.draw_skeleton_shadows(&skeletons, &shadow_pass);
-                        entity_renderer.draw_cat_shadows(&cats, &shadow_pass);
-                        entity_renderer.draw_cow_shadows(&cows, &shadow_pass);
+                        entity_renderer.draw_shadows(&entities, &shadow_pass);
+                        entity_renderer.draw_pig_shadows(&entities, &shadow_pass);
+                        entity_renderer.draw_skeleton_shadows(&entities, &shadow_pass);
+                        entity_renderer.draw_cat_shadows(&entities, &shadow_pass);
+                        entity_renderer.draw_cow_shadows(&entities, &shadow_pass);
                         entity_renderer.draw_workbench_shadows(&workbenches, &shadow_pass);
                         entity_renderer.draw_bed_shadows(&beds, &shadow_pass);
                         entity_renderer.draw_furnace_shadows(&furnaces, &shadow_pass);
-                        placed_object_renderer.draw_penguin_shadows(&penguins, &shadow_pass);
+                        placed_object_renderer.draw_penguin_shadows(&entities, &shadow_pass);
                     }
                 }
                 shadow_pass.end(fb_w, fb_h);
@@ -2576,7 +2182,7 @@ fn main() {
                 if game_state == GameState::Playing {
                     let sky_tex = chunk_renderer.sky_texture();
                     item_renderer.draw(&item_entities, &view, &projection);
-                    entity_renderer.draw_chickens(&chickens, &view, &projection,
+                    entity_renderer.draw_chickens(&entities, &view, &projection,
                         fog_start, fog_end, fb_w as f32, fb_h as f32, sky_tex,
                         fog_override, fog_override_color,
                         ambient_light, directional_light, sun_dir,
@@ -2584,7 +2190,7 @@ fn main() {
                         shadow_pass.light_space_matrices(),
                         shadow_pass.texel_world_sizes(),
                         torch_pos, torch_strength);
-                    entity_renderer.draw_pigs(&pigs, &view, &projection,
+                    entity_renderer.draw_pigs(&entities, &view, &projection,
                         fog_start, fog_end, fb_w as f32, fb_h as f32, sky_tex,
                         fog_override, fog_override_color,
                         ambient_light, directional_light, sun_dir,
@@ -2592,7 +2198,7 @@ fn main() {
                         shadow_pass.light_space_matrices(),
                         shadow_pass.texel_world_sizes(),
                         torch_pos, torch_strength);
-                    entity_renderer.draw_skeletons(&skeletons, &view, &projection,
+                    entity_renderer.draw_skeletons(&entities, &view, &projection,
                         fog_start, fog_end, fb_w as f32, fb_h as f32, sky_tex,
                         fog_override, fog_override_color,
                         ambient_light, directional_light, sun_dir,
@@ -2600,7 +2206,7 @@ fn main() {
                         shadow_pass.light_space_matrices(),
                         shadow_pass.texel_world_sizes(),
                         torch_pos, torch_strength);
-                    entity_renderer.draw_cats(&cats, &view, &projection,
+                    entity_renderer.draw_cats(&entities, &view, &projection,
                         fog_start, fog_end, fb_w as f32, fb_h as f32, sky_tex,
                         fog_override, fog_override_color,
                         ambient_light, directional_light, sun_dir,
@@ -2608,7 +2214,7 @@ fn main() {
                         shadow_pass.light_space_matrices(),
                         shadow_pass.texel_world_sizes(),
                         torch_pos, torch_strength);
-                    entity_renderer.draw_cows(&cows, &view, &projection,
+                    entity_renderer.draw_cows(&entities, &view, &projection,
                         fog_start, fog_end, fb_w as f32, fb_h as f32, sky_tex,
                         fog_override, fog_override_color,
                         ambient_light, directional_light, sun_dir,
@@ -2640,7 +2246,7 @@ fn main() {
                         shadow_pass.light_space_matrices(),
                         shadow_pass.texel_world_sizes(),
                         torch_pos, torch_strength);
-                    placed_object_renderer.draw_penguins(&penguins, &view, &projection,
+                    placed_object_renderer.draw_penguins(&entities, &view, &projection,
                         fog_start, fog_end, fb_w as f32, fb_h as f32, sky_tex,
                         fog_override, fog_override_color,
                         ambient_light, directional_light, sun_dir,
@@ -2673,30 +2279,16 @@ fn main() {
                 if entity_outlines && game_state == GameState::Playing {
                     use std::f32::consts::FRAC_PI_2;
                     let mut boxes: Vec<([f32; 3], f32, f32, f32, f32, f32)> = Vec::new();
-                    for c in &chickens {
-                        let hw = c.def.hit_half_width * 2.0;
-                        let yr = c.yaw.to_radians();
-                        boxes.push((c.position, hw, c.def.height, hw, -(yr + FRAC_PI_2), FRAC_PI_2 - yr));
-                    }
-                    for p in &pigs {
-                        let hw = p.def.hit_half_width * 2.0;
-                        let yr = p.yaw.to_radians();
-                        boxes.push((p.position, hw, p.def.height, hw, -(yr + FRAC_PI_2), FRAC_PI_2 - yr));
-                    }
-                    for p in &penguins {
-                        let hw = p.def.hit_half_width * 2.0;
-                        let yr = p.yaw.to_radians();
-                        boxes.push((p.position, hw, p.def.height, hw, yr, yr + std::f32::consts::PI));
-                    }
-                    for s in &skeletons {
-                        let hw = s.def.hit_half_width * 2.0;
-                        let yr = s.yaw.to_radians();
-                        boxes.push((s.position, hw, s.def.height, hw, -(yr + FRAC_PI_2), FRAC_PI_2 - yr));
-                    }
-                    for c in &cows {
-                        let hw = c.def.hit_half_width * 2.0;
-                        let yr = c.yaw.to_radians();
-                        boxes.push((c.position, hw, c.def.height, hw, -(yr + FRAC_PI_2), FRAC_PI_2 - yr));
+                    for e in &entities {
+                        let hw = e.def.hit_half_width * 2.0;
+                        let yr = e.yaw.to_radians();
+                        // Penguins use a different facing convention (placed-object renderer).
+                        let (a, b) = if e.def.identifier == "penguin" {
+                            (yr, yr + std::f32::consts::PI)
+                        } else {
+                            (-(yr + FRAC_PI_2), FRAC_PI_2 - yr)
+                        };
+                        boxes.push((e.position, hw, e.def.height, hw, a, b));
                     }
                     chunk_outline_renderer.draw_entity_boxes(&boxes, &camera.view_matrix(), &projection);
                 }
@@ -2727,14 +2319,7 @@ fn main() {
                 if outline_enabled && !paused && !bag_open && !build_open {
                     let ro  = [camera.position.x, camera.position.y, camera.position.z];
                     let rd  = [camera.front.x,    camera.front.y,    camera.front.z];
-                    let chk_dist  = nearest_entity_hit(&chickens,  ro, rd, 5.0).map(|(_, t)| t);
-                    let pig_dist  = nearest_entity_hit(&pigs,      ro, rd, 5.0).map(|(_, t)| t);
-                    let skel_dist = nearest_entity_hit(&skeletons, ro, rd, 5.0).map(|(_, t)| t);
-                    let cow_dist  = nearest_entity_hit(&cows,      ro, rd, 5.0).map(|(_, t)| t);
-                    let ent_dist = [chk_dist, pig_dist, skel_dist, cow_dist]
-                        .into_iter()
-                        .flatten()
-                        .reduce(f32::min);
+                    let ent_dist = nearest_entity_hit(&entities, ro, rd, 5.0).map(|(_, t)| t);
                     if let Some(block) = world.raycast(ro, rd, 5.0) {
                         let dx = block[0] as f32 + 0.5 - ro[0];
                         let dy = block[1] as f32 + 0.5 - ro[1];
@@ -2795,9 +2380,9 @@ fn main() {
                 let tod_seconds = (time_of_day.fract() * 3600.0) as u32 % 60;
                 clock_renderer.draw(tod_hours, tod_minutes, tod_seconds, win_w, win_h);
 
-                let minimap_ent_pos: Vec<(f32, f32)> = chickens.iter()
+                let minimap_ent_pos: Vec<(f32, f32)> = entities.iter()
                     .map(|c| (c.position[0], c.position[2])).collect();
-                let minimap_ent_col: Vec<(f32, f32, f32)> = chickens.iter()
+                let minimap_ent_col: Vec<(f32, f32, f32)> = entities.iter()
                     .map(|_| (1.0f32, 0.55, 0.0)).collect();
                 minimap.draw(player.position[0], player.position[2],
                     camera.front.x, camera.front.z,
