@@ -22,12 +22,19 @@ struct Components {
     movement: MovementComp,
     wander: WanderComp,
     loot: Vec<LootEntryRaw>,
+    /// Tameable mobs (e.g. cats) toggle a sitting state when interacted with.
+    #[serde(default)]
+    tameable: bool,
 }
 
 #[derive(Deserialize)]
 struct HealthComp   { max: f32 }
 
 fn default_render_scale() -> f32 { 1.0 }
+fn default_turn_speed() -> f32 { 90.0 }
+fn default_knockback_h() -> f32 { 5.0 }
+fn default_knockback_v() -> f32 { 4.5 }
+fn default_flee_mult() -> f32 { 1.5 }
 
 #[derive(Deserialize)]
 struct PhysicsComp {
@@ -37,7 +44,21 @@ struct PhysicsComp {
 }
 
 #[derive(Deserialize)]
-struct MovementComp { speed: f32 }
+struct MovementComp {
+    speed: f32,
+    /// Degrees/second the mob rotates toward its target heading.
+    #[serde(default = "default_turn_speed")]
+    turn_speed: f32,
+    /// Horizontal velocity multiplier applied to the push direction when hit.
+    #[serde(default = "default_knockback_h")]
+    knockback_h: f32,
+    /// Upward velocity imparted when hit.
+    #[serde(default = "default_knockback_v")]
+    knockback_v: f32,
+    /// Speed multiplier while fleeing after being hit.
+    #[serde(default = "default_flee_mult")]
+    flee_speed_mult: f32,
+}
 
 #[derive(Deserialize)]
 struct WanderComp {
@@ -72,6 +93,11 @@ pub struct EntityDef {
     pub hit_half_width: f32,
     pub render_scale: f32,
     pub speed: f32,
+    pub turn_speed: f32,
+    pub knockback_h: f32,
+    pub knockback_v: f32,
+    pub flee_speed_mult: f32,
+    pub tameable: bool,
     pub idle_chance: f32,
     pub idle_range: (f32, f32),
     pub walk_range: (f32, f32),
@@ -95,6 +121,11 @@ impl EntityDef {
             hit_half_width: c.physics.hit_half_width,
             render_scale:  c.physics.render_scale,
             speed:         c.movement.speed,
+            turn_speed:    c.movement.turn_speed,
+            knockback_h:   c.movement.knockback_h,
+            knockback_v:   c.movement.knockback_v,
+            flee_speed_mult: c.movement.flee_speed_mult,
+            tameable:      c.tameable,
             idle_chance:   c.wander.idle_chance,
             idle_range:    (c.wander.idle_min_secs, c.wander.idle_max_secs),
             walk_range:    (c.wander.walk_min_secs, c.wander.walk_max_secs),

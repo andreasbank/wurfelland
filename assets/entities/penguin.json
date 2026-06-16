@@ -11,7 +11,7 @@
       "hit_half_width": 0.20,
       "render_scale": 0.55
     },
-    "movement": { "speed": 0.8 },
+    "movement": { "speed": 0.8, "turn_speed": 80 },
     "wander": {
       "idle_chance": 0.50,
       "idle_min_secs": 3.0,
