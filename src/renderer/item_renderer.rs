@@ -5,8 +5,10 @@ use crate::renderer::geo_model::GeoModel;
 use crate::world::item::ItemType;
 use crate::world::ItemEntity;
 
-// Vertex format for atlas items: [x, y, z, u, v] — 5 floats.
-const STRIDE: usize = 5;
+// Vertex format for atlas items: [x, y, z, u, v, shade] — 6 floats.
+// `shade` is a per-face brightness (1.0 = unlit) so cube faces get the same
+// directional shading as in-world blocks instead of rendering full-bright.
+const STRIDE: usize = 6;
 
 // Returns (u_min, u_max, v_top, v_bot) for a tile in the 256×256 item atlas.
 // The atlas stores pixel data top-to-bottom, but OpenGL treats row 0 of TexImage2D
@@ -21,16 +23,17 @@ fn tile_uv(tile_idx: usize) -> (f32, f32, f32, f32) {
     (u_min, u_max, v_top, v_bot)
 }
 
-fn push_vert(v: &mut Vec<f32>, x: f32, y: f32, z: f32, u: f32, vt: f32) {
-    v.extend_from_slice(&[x, y, z, u, vt]);
+fn push_vert(v: &mut Vec<f32>, x: f32, y: f32, z: f32, u: f32, vt: f32, shade: f32) {
+    v.extend_from_slice(&[x, y, z, u, vt, shade]);
 }
 
 // Emit a CCW quad as two triangles.
 // p: 4 corners [bottom-left, bottom-right, top-right, top-left]
 // uv: matching UV per corner
-fn push_quad(v: &mut Vec<f32>, p: [[f32; 3]; 4], uv: [[f32; 2]; 4]) {
+// shade: per-face brightness (1.0 = full bright)
+fn push_quad(v: &mut Vec<f32>, p: [[f32; 3]; 4], uv: [[f32; 2]; 4], shade: f32) {
     for &i in &[0usize, 1, 2, 0, 2, 3] {
-        push_vert(v, p[i][0], p[i][1], p[i][2], uv[i][0], uv[i][1]);
+        push_vert(v, p[i][0], p[i][1], p[i][2], uv[i][0], uv[i][1], shade);
     }
 }
 
@@ -41,11 +44,11 @@ fn build_stick_mesh() -> Vec<f32> {
     // Front face: bottom-left, bottom-right, top-right, top-left
     push_quad(&mut v,
         [[-0.15, 0.0, 0.0], [0.15, 0.0, 0.0], [0.15, 0.3, 0.0], [-0.15, 0.3, 0.0]],
-        [[u0, vb], [u1, vb], [u1, vt], [u0, vt]]);
+        [[u0, vb], [u1, vb], [u1, vt], [u0, vt]], 1.0);
     // Back face (reversed winding — same UV, mirrored will look fine for a stick)
     push_quad(&mut v,
         [[-0.15, 0.3, 0.0], [0.15, 0.3, 0.0], [0.15, 0.0, 0.0], [-0.15, 0.0, 0.0]],
-        [[u0, vt], [u1, vt], [u1, vb], [u0, vb]]);
+        [[u0, vt], [u1, vt], [u1, vb], [u0, vb]], 1.0);
     v
 }
 
@@ -57,11 +60,11 @@ fn build_sprite_mesh() -> Vec<f32> {
     // Front face
     push_quad(&mut v,
         [[-S, 0.0, 0.0], [S, 0.0, 0.0], [S, S * 2.0, 0.0], [-S, S * 2.0, 0.0]],
-        [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]]);
+        [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]], 1.0);
     // Back face
     push_quad(&mut v,
         [[-S, S * 2.0, 0.0], [S, S * 2.0, 0.0], [S, 0.0, 0.0], [-S, 0.0, 0.0]],
-        [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]);
+        [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]], 1.0);
     v
 }
 
@@ -74,12 +77,12 @@ fn build_bed_mesh() -> Vec<f32> {
     const H: f32 = 0.06;  // half-height (Y)
     const D: f32 = 0.25;  // half-depth  (Z)
     const CY: f32 = H;
-    push_quad(&mut v, [[-W,CY+H,-D],[W,CY+H,-D],[W,CY+H,D],[-W,CY+H,D]],   uv); // top
-    push_quad(&mut v, [[-W,CY-H,D],[W,CY-H,D],[W,CY-H,-D],[-W,CY-H,-D]],   uv); // bottom
-    push_quad(&mut v, [[-W,CY-H,D],[W,CY-H,D],[W,CY+H,D],[-W,CY+H,D]],     uv); // front
-    push_quad(&mut v, [[W,CY-H,-D],[-W,CY-H,-D],[-W,CY+H,-D],[W,CY+H,-D]], uv); // back
-    push_quad(&mut v, [[-W,CY-H,-D],[-W,CY-H,D],[-W,CY+H,D],[-W,CY+H,-D]], uv); // left
-    push_quad(&mut v, [[W,CY-H,D],[W,CY-H,-D],[W,CY+H,-D],[W,CY+H,D]],     uv); // right
+    push_quad(&mut v, [[-W,CY+H,-D],[W,CY+H,-D],[W,CY+H,D],[-W,CY+H,D]],   uv, 1.0);  // top
+    push_quad(&mut v, [[-W,CY-H,D],[W,CY-H,D],[W,CY-H,-D],[-W,CY-H,-D]],   uv, 0.5);  // bottom
+    push_quad(&mut v, [[-W,CY-H,D],[W,CY-H,D],[W,CY+H,D],[-W,CY+H,D]],     uv, 0.8);  // front
+    push_quad(&mut v, [[W,CY-H,-D],[-W,CY-H,-D],[-W,CY+H,-D],[W,CY+H,-D]], uv, 0.8);  // back
+    push_quad(&mut v, [[-W,CY-H,-D],[-W,CY-H,D],[-W,CY+H,D],[-W,CY+H,-D]], uv, 0.65); // left
+    push_quad(&mut v, [[W,CY-H,D],[W,CY-H,-D],[W,CY+H,-D],[W,CY+H,D]],     uv, 0.65); // right
     v
 }
 
@@ -96,10 +99,10 @@ fn build_grass_sprite_mesh() -> Vec<f32> {
     const H: f32 = 0.35;
     push_quad(&mut v,
         [[-W, 0.0, 0.0], [W, 0.0, 0.0], [W, H, 0.0], [-W, H, 0.0]],
-        [[u0, vb], [u1, vb], [u1, vt], [u0, vt]]);
+        [[u0, vb], [u1, vb], [u1, vt], [u0, vt]], 1.0);
     push_quad(&mut v,
         [[-W, H, 0.0], [W, H, 0.0], [W, 0.0, 0.0], [-W, 0.0, 0.0]],
-        [[u0, vt], [u1, vt], [u1, vb], [u0, vb]]);
+        [[u0, vt], [u1, vt], [u1, vb], [u0, vb]], 1.0);
     v
 }
 
@@ -111,12 +114,12 @@ fn build_cube_mesh(tile_idx: usize) -> Vec<f32> {
     let mut v = Vec::new();
     const H: f32 = 0.175;
     const CY: f32 = H;
-    push_quad(&mut v, [[-H,CY+H,-H],[H,CY+H,-H],[H,CY+H,H],[-H,CY+H,H]],   uv);
-    push_quad(&mut v, [[-H,CY-H,H],[H,CY-H,H],[H,CY-H,-H],[-H,CY-H,-H]],   uv);
-    push_quad(&mut v, [[-H,CY-H,H],[H,CY-H,H],[H,CY+H,H],[-H,CY+H,H]],     uv);
-    push_quad(&mut v, [[H,CY-H,-H],[-H,CY-H,-H],[-H,CY+H,-H],[H,CY+H,-H]], uv);
-    push_quad(&mut v, [[-H,CY-H,-H],[-H,CY-H,H],[-H,CY+H,H],[-H,CY+H,-H]], uv);
-    push_quad(&mut v, [[H,CY-H,H],[H,CY-H,-H],[H,CY+H,-H],[H,CY+H,H]],     uv);
+    push_quad(&mut v, [[-H,CY+H,-H],[H,CY+H,-H],[H,CY+H,H],[-H,CY+H,H]],   uv, 1.0);  // top
+    push_quad(&mut v, [[-H,CY-H,H],[H,CY-H,H],[H,CY-H,-H],[-H,CY-H,-H]],   uv, 0.5);  // bottom
+    push_quad(&mut v, [[-H,CY-H,H],[H,CY-H,H],[H,CY+H,H],[-H,CY+H,H]],     uv, 0.8);  // front
+    push_quad(&mut v, [[H,CY-H,-H],[-H,CY-H,-H],[-H,CY+H,-H],[H,CY+H,-H]], uv, 0.8);  // back
+    push_quad(&mut v, [[-H,CY-H,-H],[-H,CY-H,H],[-H,CY+H,H],[-H,CY+H,-H]], uv, 0.65); // left
+    push_quad(&mut v, [[H,CY-H,H],[H,CY-H,-H],[H,CY+H,-H],[H,CY+H,H]],     uv, 0.65); // right
     v
 }
 
@@ -142,6 +145,10 @@ fn upload_vao(mesh: &[f32]) -> u32 {
         gl::VertexAttribPointer(1, 2, gl::FLOAT, gl::FALSE, stride,
             (3 * mem::size_of::<f32>()) as *const c_void);
         gl::EnableVertexAttribArray(1);
+        // attrib 2: shade (float)
+        gl::VertexAttribPointer(2, 1, gl::FLOAT, gl::FALSE, stride,
+            (5 * mem::size_of::<f32>()) as *const c_void);
+        gl::EnableVertexAttribArray(2);
         gl::BindBuffer(gl::ARRAY_BUFFER, 0);
         gl::BindVertexArray(0);
         let _ = vbo;
@@ -191,22 +198,26 @@ impl ItemRenderer {
         let vert = compile_shader(gl::VERTEX_SHADER, r#"#version 330 core
             layout(location = 0) in vec3 aPos;
             layout(location = 1) in vec2 aUV;
+            layout(location = 2) in float aShade;
             uniform mat4 mvp;
             out vec2 vUV;
+            out float vShade;
             void main() {
                 gl_Position = mvp * vec4(aPos, 1.0);
                 vUV = aUV;
+                vShade = aShade;
             }
         "#).unwrap();
 
         let frag = compile_shader(gl::FRAGMENT_SHADER, r#"#version 330 core
             in vec2 vUV;
+            in float vShade;
             uniform sampler2D u_atlas;
             out vec4 FragColor;
             void main() {
                 vec4 col = texture(u_atlas, vUV);
                 if (col.a < 0.1) discard;
-                FragColor = col;
+                FragColor = vec4(col.rgb * vShade, col.a);
             }
         "#).unwrap();
 
