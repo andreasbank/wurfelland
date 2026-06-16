@@ -104,6 +104,9 @@ const SKEL_LARM: i32 = VPB * 2;
 const SKEL_RARM: i32 = VPB * 3;
 const SKEL_LLEG: i32 = VPB * 4;
 const SKEL_RLEG: i32 = VPB * 5;
+// Static skin detail (eye sockets, nose, mouth, ribs, pelvis) appended after limbs.
+const SKEL_DETAIL_OFF: i32 = VPB * 6;
+const SKEL_DETAIL_CNT: i32 = VPB * 8;
 
 // Sword held in skeleton right arm (x≈0.15..0.27, arm centre x=0.21).
 // Grip overlaps the base of the arm; guard and blade hang below.
@@ -167,6 +170,8 @@ fn build_skeleton_mesh() -> Vec<f32> {
     let bn = [0.90f32, 0.88, 0.82]; // bone ivory
     let sk = [0.92f32, 0.90, 0.86]; // skull slightly lighter
 
+    // ── Base boxes [0..5] — order is load-bearing: the draw code animates the
+    //    limbs at fixed offsets SKEL_LARM..SKEL_RLEG.  Do not reorder. ──
     // Head (skull): y=1.50..1.80, centered ±0.15
     add_box(&mut v, -0.15, 1.50, -0.15,  0.15, 1.80,  0.15, sk[0], sk[1], sk[2]);
     // Body (ribcage): y=0.65..1.50, thin
@@ -179,6 +184,26 @@ fn build_skeleton_mesh() -> Vec<f32> {
     add_box(&mut v, -0.13, 0.00, -0.06, -0.03, 0.65,  0.06, bn[0], bn[1], bn[2]);
     // Right leg: y=0..0.65, right of centre
     add_box(&mut v,  0.03, 0.00, -0.06,  0.13, 0.65,  0.06, bn[0], bn[1], bn[2]);
+
+    // ── Skin detail [6..] — static decoration drawn with the body transform.
+    //    Appended after the animated limbs so limb offsets stay fixed.
+    //    The skeleton faces -Z, so facial/rib detail sits on the -Z faces. ──
+    let socket = [0.09f32, 0.08, 0.07]; // dark eye/nose/mouth hollows
+    let groove = [0.46f32, 0.44, 0.40]; // shadowed rib gaps
+
+    // Eye sockets (protrude slightly past the skull face at z=-0.15)
+    add_box(&mut v, -0.105, 1.62, -0.158, -0.025, 1.70, -0.149, socket[0], socket[1], socket[2]);
+    add_box(&mut v,  0.025, 1.62, -0.158,  0.105, 1.70, -0.149, socket[0], socket[1], socket[2]);
+    // Nasal cavity
+    add_box(&mut v, -0.022, 1.55, -0.158,  0.022, 1.61, -0.149, socket[0], socket[1], socket[2]);
+    // Mouth / teeth line
+    add_box(&mut v, -0.100, 1.51, -0.156,  0.100, 1.535, -0.149, socket[0], socket[1], socket[2]);
+    // Ribs (dark grooves across the ribcage front)
+    add_box(&mut v, -0.110, 1.30, -0.092,  0.110, 1.325, -0.082, groove[0], groove[1], groove[2]);
+    add_box(&mut v, -0.110, 1.16, -0.092,  0.110, 1.185, -0.082, groove[0], groove[1], groove[2]);
+    add_box(&mut v, -0.110, 1.02, -0.092,  0.110, 1.045, -0.082, groove[0], groove[1], groove[2]);
+    // Pelvis (hip bone) bridging the leg tops
+    add_box(&mut v, -0.135, 0.56, -0.075,  0.135, 0.70,  0.075, bn[0], bn[1], bn[2]);
 
     v
 }
@@ -948,6 +973,10 @@ impl EntityRenderer {
                 gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE,
                     (*projection * *view * model * rl_m).to_cols_array().as_ptr());
                 gl::DrawArrays(gl::TRIANGLES, SKEL_RLEG, VPB);
+
+                // Static skin detail (skull face, ribs, pelvis) — body transform.
+                gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE, mvp.to_cols_array().as_ptr());
+                gl::DrawArrays(gl::TRIANGLES, SKEL_DETAIL_OFF, SKEL_DETAIL_CNT);
             }
 
             gl::BindVertexArray(0);
