@@ -82,56 +82,15 @@ fn build_geo_mob(bones: &[crate::renderer::geo_model::GeoBoneData], scale: f32)
     (mesh, ranges)
 }
 
-// Chicken mesh layout (36 verts per box, 6 faces × 6 verts):
-//   [0]   Body
-//   [1]   Head
-//   [2]   Beak
-//   [3]   Wattle
-//   [4]   Left wing   ← animated
-//   [5]   Right wing  ← animated
-//   [6]   Left leg
-//   [7]   Right leg
-const VPB: i32 = 36; // verts per box
+/// Diagonal quadruped gait: front-left & back-right swing together, the other
+/// diagonal opposite. Bone names follow `front_left_leg` / `back_right_leg` etc.
+fn diagonal_leg_phase(name: &str) -> f32 {
+    if name.starts_with("front_left") || name.starts_with("back_right") { 1.0 } else { -1.0 }
+}
 
-// Pig mesh layout:
-//   [0]   Body
-//   [1]   Head
-//   [2]   Snout
-//   [3]   Front-left leg   ← animated
-//   [4]   Front-right leg  ← animated (opposite phase)
-//   [5]   Back-left leg    ← animated (opposite to front-left)
-//   [6]   Back-right leg   ← animated (opposite to front-right)
-
-// Cat mesh layout:
-//   [0]   Body
-//   [1]   Head
-//   [2]   Left ear
-//   [3]   Right ear
-//   [4]   Tail
-//   [5]   Front-left leg   ← animated
-//   [6]   Front-right leg  ← animated (opposite phase)
-//   [7]   Back-left leg    ← animated (opposite to front-left)
-//   [8]   Back-right leg   ← animated (opposite to front-right)
-
-// Cow mesh layout:
-//   [0]   Body             — static
-//   [1]   Head             — static
-//   [2]   Snout            — static
-//   [3]   Left horn        — static
-//   [4]   Right horn       — static
-//   [5]   Front-left leg   ← animated
-//   [6]   Front-right leg  ← animated (opposite phase)
-//   [7]   Back-left leg    ← animated (opposite to front-left)
-//   [8]   Back-right leg   ← animated (opposite to front-right)
-
-// Skeleton mesh layout:
-//   [0]   Head  (skull)       — static
-//   [1]   Body  (ribcage)     — static
-//   [2]   Left arm            ← animated (swings on X around shoulder)
-//   [3]   Right arm           ← animated (opposite phase)
-//   [4]   Left leg            ← animated (swings on X around hip)
-//   [5]   Right leg           ← animated (opposite to left arm)
-// Static skin detail (eye sockets, nose, mouth, ribs, pelvis) appended after limbs.
+// Mob bodies are loaded from .geo.json via `build_geo_mob`; only attachments
+// (weapons) and placed props are still hand-built below. One box = VPB verts.
+const VPB: i32 = 36; // verts per box (6 faces × 6 verts)
 
 // Sword held in skeleton right arm (x≈0.15..0.27, arm centre x=0.21).
 // Grip overlaps the base of the arm; guard and blade hang below.
@@ -161,131 +120,6 @@ fn build_axe_weapon_mesh() -> Vec<f32> {
     v
 }
 
-fn build_skeleton_mesh() -> Vec<f32> {
-    let mut v = Vec::new();
-    let bn = [0.90f32, 0.88, 0.82]; // bone ivory
-    let sk = [0.92f32, 0.90, 0.86]; // skull slightly lighter
-
-    // ── Base boxes [0..5] — order is load-bearing: the draw code animates the
-    //    limbs at fixed offsets SKEL_LARM..SKEL_RLEG.  Do not reorder. ──
-    // Head (skull): y=1.50..1.80, centered ±0.15
-    add_box(&mut v, -0.15, 1.50, -0.15,  0.15, 1.80,  0.15, sk[0], sk[1], sk[2]);
-    // Body (ribcage): y=0.65..1.50, thin
-    add_box(&mut v, -0.12, 0.65, -0.08,  0.12, 1.50,  0.08, bn[0], bn[1], bn[2]);
-    // Left arm: y=0.65..1.45, outside left
-    add_box(&mut v, -0.27, 0.65, -0.06, -0.15, 1.45,  0.06, bn[0], bn[1], bn[2]);
-    // Right arm: y=0.65..1.45, outside right
-    add_box(&mut v,  0.15, 0.65, -0.06,  0.27, 1.45,  0.06, bn[0], bn[1], bn[2]);
-    // Left leg: y=0..0.65, left of centre
-    add_box(&mut v, -0.13, 0.00, -0.06, -0.03, 0.65,  0.06, bn[0], bn[1], bn[2]);
-    // Right leg: y=0..0.65, right of centre
-    add_box(&mut v,  0.03, 0.00, -0.06,  0.13, 0.65,  0.06, bn[0], bn[1], bn[2]);
-
-    // ── Skin detail [6..] — static decoration drawn with the body transform.
-    //    Appended after the animated limbs so limb offsets stay fixed.
-    //    The skeleton faces -Z, so facial/rib detail sits on the -Z faces. ──
-    let socket = [0.09f32, 0.08, 0.07]; // dark eye/nose/mouth hollows
-    let groove = [0.46f32, 0.44, 0.40]; // shadowed rib gaps
-
-    // Eye sockets (protrude slightly past the skull face at z=-0.15)
-    add_box(&mut v, -0.105, 1.62, -0.158, -0.025, 1.70, -0.149, socket[0], socket[1], socket[2]);
-    add_box(&mut v,  0.025, 1.62, -0.158,  0.105, 1.70, -0.149, socket[0], socket[1], socket[2]);
-    // Nasal cavity
-    add_box(&mut v, -0.022, 1.55, -0.158,  0.022, 1.61, -0.149, socket[0], socket[1], socket[2]);
-    // Mouth / teeth line
-    add_box(&mut v, -0.100, 1.51, -0.156,  0.100, 1.535, -0.149, socket[0], socket[1], socket[2]);
-    // Ribs (dark grooves across the ribcage front)
-    add_box(&mut v, -0.110, 1.30, -0.092,  0.110, 1.325, -0.082, groove[0], groove[1], groove[2]);
-    add_box(&mut v, -0.110, 1.16, -0.092,  0.110, 1.185, -0.082, groove[0], groove[1], groove[2]);
-    add_box(&mut v, -0.110, 1.02, -0.092,  0.110, 1.045, -0.082, groove[0], groove[1], groove[2]);
-    // Pelvis (hip bone) bridging the leg tops
-    add_box(&mut v, -0.135, 0.56, -0.075,  0.135, 0.70,  0.075, bn[0], bn[1], bn[2]);
-
-    v
-}
-
-fn build_pig_mesh() -> Vec<f32> {
-    let mut v = Vec::new();
-    let pk = [0.90f32, 0.65, 0.60]; // body / head pink
-    let sn = [0.95f32, 0.73, 0.70]; // snout lighter pink
-
-    // Body
-    add_box(&mut v, -0.25, 0.35, -0.35,  0.25, 0.85,  0.35, pk[0], pk[1], pk[2]);
-    // Head (juts forward)
-    add_box(&mut v, -0.22, 0.52, -0.58,  0.22, 0.90, -0.35, pk[0], pk[1], pk[2]);
-    // Snout
-    add_box(&mut v, -0.11, 0.58, -0.66,  0.11, 0.74, -0.58, sn[0], sn[1], sn[2]);
-    // Front-left leg
-    add_box(&mut v, -0.20, 0.00, -0.27, -0.07, 0.35, -0.14, pk[0], pk[1], pk[2]);
-    // Front-right leg
-    add_box(&mut v,  0.07, 0.00, -0.27,  0.20, 0.35, -0.14, pk[0], pk[1], pk[2]);
-    // Back-left leg
-    add_box(&mut v, -0.20, 0.00,  0.14, -0.07, 0.35,  0.27, pk[0], pk[1], pk[2]);
-    // Back-right leg
-    add_box(&mut v,  0.07, 0.00,  0.14,  0.20, 0.35,  0.27, pk[0], pk[1], pk[2]);
-
-    v
-}
-
-fn build_cow_mesh() -> Vec<f32> {
-    let mut v = Vec::new();
-    let body = [0.45f32, 0.30, 0.15]; // warm dark brown body
-    let head = [0.50f32, 0.34, 0.18]; // slightly lighter head
-    let snout = [0.78f32, 0.58, 0.44]; // pinkish muzzle
-    let horn = [0.88f32, 0.82, 0.60]; // cream horns
-    let leg  = [0.40f32, 0.26, 0.12]; // darker brown legs
-
-    // Body
-    add_box(&mut v, -0.41, 0.54, -0.57,  0.41, 1.35,  0.57, body[0], body[1], body[2]);
-    // Head (juts forward -Z)
-    add_box(&mut v, -0.34, 0.84, -0.97,  0.34, 1.49, -0.57, head[0], head[1], head[2]);
-    // Snout
-    add_box(&mut v, -0.19, 0.88, -1.11,  0.19, 1.14, -0.97, snout[0], snout[1], snout[2]);
-    // Left horn
-    add_box(&mut v, -0.43, 1.43, -0.84, -0.32, 1.65, -0.70, horn[0], horn[1], horn[2]);
-    // Right horn
-    add_box(&mut v,  0.32, 1.43, -0.84,  0.43, 1.65, -0.70, horn[0], horn[1], horn[2]);
-    // Front-left leg
-    add_box(&mut v, -0.31, 0.00, -0.41, -0.12, 0.54, -0.22, leg[0], leg[1], leg[2]);
-    // Front-right leg
-    add_box(&mut v,  0.12, 0.00, -0.41,  0.31, 0.54, -0.22, leg[0], leg[1], leg[2]);
-    // Back-left leg
-    add_box(&mut v, -0.31, 0.00,  0.22, -0.12, 0.54,  0.41, leg[0], leg[1], leg[2]);
-    // Back-right leg
-    add_box(&mut v,  0.12, 0.00,  0.22,  0.31, 0.54,  0.41, leg[0], leg[1], leg[2]);
-
-    v
-}
-
-fn build_chicken_mesh() -> Vec<f32> {
-    let mut v = Vec::new();
-    let wh = [0.95f32, 0.95, 0.85]; // feather white
-    let or = [1.00f32, 0.60, 0.10]; // beak / legs orange
-    let rd = [0.85f32, 0.10, 0.10]; // wattle red
-    let lg = [0.78f32, 0.78, 0.75]; // wing light gray
-
-    // Body: feet at y=0, body runs y 0.25–0.70
-    add_box(&mut v, -0.20, 0.25, -0.22,  0.20, 0.70,  0.22, wh[0], wh[1], wh[2]);
-    // Head: slightly forward (-Z from body center)
-    add_box(&mut v, -0.15, 0.65, -0.38,  0.15, 0.90, -0.10, wh[0], wh[1], wh[2]);
-    // Beak
-    add_box(&mut v, -0.05, 0.73, -0.50,  0.05, 0.82, -0.38, or[0], or[1], or[2]);
-    // Wattle (red flap under beak)
-    add_box(&mut v, -0.03, 0.64, -0.46,  0.03, 0.74, -0.38, rd[0], rd[1], rd[2]);
-    // Left wing (thin panel, hinge at x=-0.20)
-    add_box(&mut v, -0.22, 0.28, -0.20, -0.20, 0.68,  0.20, lg[0], lg[1], lg[2]);
-    // Right wing (hinge at x=+0.20)
-    add_box(&mut v,  0.20, 0.28, -0.20,  0.22, 0.68,  0.20, lg[0], lg[1], lg[2]);
-    // Left leg
-    add_box(&mut v, -0.10, 0.00, -0.06, -0.03, 0.25,  0.06, or[0], or[1], or[2]);
-    // Right leg
-    add_box(&mut v,  0.03, 0.00, -0.06,  0.10, 0.25,  0.06, or[0], or[1], or[2]);
-
-    v
-}
-
-// Workbench mesh: 2-block wide table centred at origin, long axis = X.
-// Spans x:[-1,+1], z:[-0.5,+0.5], y:[0,0.82].
 fn build_workbench_mesh() -> Vec<f32> {
     let mut v = Vec::new();
     let leg   = [0.38f32, 0.24, 0.11]; // dark wood legs
@@ -414,13 +248,8 @@ struct MobModel {
     lower_when_sitting: bool,
 }
 
-// Shorthand constructors for the model table.
+/// A static (unanimated) part for box `box_idx`.
 fn stat(box_idx: i32) -> Part { Part { box_idx, anim: PartAnim::Static } }
-fn leg(box_idx: i32, pivot: [f32; 3], speed: f32, amp: f32, phase: f32, freeze: bool) -> Part {
-    Part { box_idx, anim: PartAnim::Swing {
-        pivot, axis: Axis::X, speed, amp, phase, scale_by_move: true, freeze_when_sitting: freeze,
-    } }
-}
 
 pub struct EntityRenderer {
     mob_models: Vec<MobModel>,
@@ -500,45 +329,75 @@ impl EntityRenderer {
         }
     }
 
-    pub fn new() -> Self {
-        let (vao, vbo) = Self::upload_mesh(&build_chicken_mesh());
-        let (pig_vao, pig_vbo) = Self::upload_mesh(&build_pig_mesh());
-        let (skel_vao, skel_vbo) = Self::upload_mesh(&build_skeleton_mesh());
-        // Cat: data-driven from cat.geo.json (legs split into pivoted bones so the
-        // walk gait survives). Falls back to no cat if the model fails to load.
-        const CAT_GEO_SCALE: f32 = 0.034; // MC units → blocks (~0.85 tall, like the box cat)
-        let (cat_vao, cat_vbo, cat_model): (u32, u32, Option<MobModel>) =
-            match crate::renderer::geo_model::load_bones("assets/models/cat/cat.geo.json") {
-                Ok(bones) => {
-                    let (mesh, ranges) = build_geo_mob(&bones, CAT_GEO_SCALE);
-                    let (vao, vbo) = Self::upload_mesh(&mesh);
-                    let total_boxes = (mesh.len() / STRIDE) as i32 / VPB;
-                    let mut parts = Vec::new();
-                    for r in &ranges {
-                        if r.name.contains("leg") {
-                            // Diagonal gait: FL & BR together, FR & BL opposite.
-                            let phase = match r.name.as_str() {
-                                "front_left_leg" | "back_right_leg" => 1.0,
-                                _ => -1.0,
-                            };
-                            parts.push(Part { box_idx: r.first_box, anim: PartAnim::Swing {
-                                pivot: r.pivot, axis: Axis::X, speed: 7.0, amp: 0.50, phase,
-                                scale_by_move: true, freeze_when_sitting: true,
-                            } });
-                        } else {
-                            for i in 0..r.box_count { parts.push(stat(r.first_box + i)); }
-                        }
+    /// Load a `.geo.json` mob and assemble its `MobModel`. `anim(bone_name, pivot)`
+    /// returns the animation for an animated bone, or `None` to draw it static.
+    /// Returns `(vao, vbo, model)`, or `None` if the model fails to load.
+    fn load_geo_mob(
+        identifier: &'static str, path: &str, scale: f32,
+        health_bar_y: f32, lower_when_sitting: bool,
+        anim: impl Fn(&str, [f32; 3]) -> Option<PartAnim>,
+    ) -> Option<(u32, u32, MobModel)> {
+        match crate::renderer::geo_model::load_bones(path) {
+            Ok(bones) => {
+                let (mesh, ranges) = build_geo_mob(&bones, scale);
+                let (vao, vbo) = Self::upload_mesh(&mesh);
+                let total_boxes = (mesh.len() / STRIDE) as i32 / VPB;
+                let mut parts = Vec::new();
+                for r in &ranges {
+                    match anim(&r.name, r.pivot) {
+                        Some(a) => parts.push(Part { box_idx: r.first_box, anim: a }),
+                        None => for i in 0..r.box_count { parts.push(stat(r.first_box + i)); },
                     }
-                    let model = MobModel {
-                        identifier: "cat", vao, parts,
-                        shadow_verts: total_boxes * VPB,
-                        health_bar_y: 0.90, lower_when_sitting: true,
-                    };
-                    (vao, vbo, Some(model))
                 }
-                Err(e) => { eprintln!("[entity_renderer] cat.geo.json: {e}"); (0, 0, None) }
-            };
-        let (cow_vao, cow_vbo) = Self::upload_mesh(&build_cow_mesh());
+                Some((vao, vbo, MobModel {
+                    identifier, vao, parts,
+                    shadow_verts: total_boxes * VPB, health_bar_y, lower_when_sitting,
+                }))
+            }
+            Err(e) => { eprintln!("[entity_renderer] {}: {}", path, e); None }
+        }
+    }
+
+    pub fn new() -> Self {
+        // ── Mobs are all data-driven from .geo.json (limbs split into pivoted
+        //    bones). The closure maps a bone name → its animation; bones with no
+        //    match are drawn static. Block-unit models load at scale 1.0; the
+        //    cat/cow geo files are in MC units, hence the small scale factor.
+        let leg = |name: &str, pivot: [f32; 3], speed: f32, amp: f32, freeze: bool| {
+            PartAnim::Swing { pivot, axis: Axis::X, speed, amp,
+                phase: diagonal_leg_phase(name), scale_by_move: true, freeze_when_sitting: freeze }
+        };
+        let chicken_m = Self::load_geo_mob("chicken", "assets/models/chicken/chicken.geo.json", 1.0, 1.05, false,
+            |name, pivot| match name {
+                "left_wing"  => Some(PartAnim::Swing { pivot, axis: Axis::Z, speed: 9.0, amp: 0.45, phase:  1.0, scale_by_move: false, freeze_when_sitting: false }),
+                "right_wing" => Some(PartAnim::Swing { pivot, axis: Axis::Z, speed: 9.0, amp: 0.45, phase: -1.0, scale_by_move: false, freeze_when_sitting: false }),
+                _ => None,
+            });
+        let pig_m = Self::load_geo_mob("pig", "assets/models/pig/pig.geo.json", 1.0, 1.05, false,
+            |name, pivot| name.ends_with("leg").then(|| leg(name, pivot, 6.5, 0.55, false)));
+        let cat_m = Self::load_geo_mob("cat", "assets/models/cat/cat.geo.json", 0.034, 0.90, true,
+            |name, pivot| name.ends_with("leg").then(|| leg(name, pivot, 7.0, 0.50, true)));
+        let cow_m = Self::load_geo_mob("cow", "assets/models/cow/cow.geo.json", 0.034, 1.55, false,
+            |name, pivot| name.ends_with("leg").then(|| leg(name, pivot, 5.5, 0.55, false)));
+        let skel_m = Self::load_geo_mob("skeleton", "assets/models/skeleton/skeleton.geo.json", 1.0, 1.95, false,
+            |name, pivot| match name {
+                "left_arm"  => Some(PartAnim::Arm { pivot, speed: 7.0, amp: 0.60, phase:  1.0, holds_weapon: false }),
+                "right_arm" => Some(PartAnim::Arm { pivot, speed: 7.0, amp: 0.60, phase: -1.0, holds_weapon: true  }),
+                "left_leg"  => Some(PartAnim::Swing { pivot, axis: Axis::X, speed: 7.0, amp: 0.60, phase: -1.0, scale_by_move: true, freeze_when_sitting: false }),
+                "right_leg" => Some(PartAnim::Swing { pivot, axis: Axis::X, speed: 7.0, amp: 0.60, phase:  1.0, scale_by_move: true, freeze_when_sitting: false }),
+                _ => None,
+            });
+
+        // Per-species VAOs/VBOs are kept only for cleanup in Drop (0 = failed to load).
+        let getvao = |m: &Option<(u32, u32, MobModel)>| m.as_ref().map_or((0, 0), |(v, b, _)| (*v, *b));
+        let (vao, vbo)           = getvao(&chicken_m);
+        let (pig_vao, pig_vbo)   = getvao(&pig_m);
+        let (cat_vao, cat_vbo)   = getvao(&cat_m);
+        let (cow_vao, cow_vbo)   = getvao(&cow_m);
+        let (skel_vao, skel_vbo) = getvao(&skel_m);
+        let mob_models: Vec<MobModel> = [chicken_m, pig_m, cat_m, cow_m, skel_m]
+            .into_iter().filter_map(|m| m.map(|(_, _, model)| model)).collect();
+
         let (workbench_vao, workbench_vbo) = Self::upload_mesh(&build_workbench_mesh());
         let (bed_vao, bed_vbo) = Self::upload_mesh(&build_bed_mesh());
         let (furnace_vao, furnace_vbo) = Self::upload_mesh(&build_furnace_mesh());
@@ -678,56 +537,6 @@ impl EntityRenderer {
             let bar_shader    = link_program(bar_vert_src, bar_frag_src).unwrap();
             let bar_mvp_loc   = gl::GetUniformLocation(bar_shader, c"mvp".as_ptr());
             let bar_color_loc = gl::GetUniformLocation(bar_shader, c"u_color".as_ptr());
-
-            // ── Per-species render/animation tables ────────────────────────────
-            let mut mob_models = vec![
-                MobModel {
-                    identifier: "chicken", vao, shadow_verts: VPB * 8,
-                    health_bar_y: 1.05, lower_when_sitting: false,
-                    parts: vec![
-                        stat(0), stat(1), stat(2), stat(3), stat(6), stat(7),
-                        // Wings flap around their hinge edge (Z axis), independent of walking.
-                        Part { box_idx: 4, anim: PartAnim::Swing { pivot: [-0.20, 0.68, 0.0], axis: Axis::Z, speed: 9.0, amp: 0.45, phase:  1.0, scale_by_move: false, freeze_when_sitting: false } },
-                        Part { box_idx: 5, anim: PartAnim::Swing { pivot: [ 0.20, 0.68, 0.0], axis: Axis::Z, speed: 9.0, amp: 0.45, phase: -1.0, scale_by_move: false, freeze_when_sitting: false } },
-                    ],
-                },
-                MobModel {
-                    identifier: "pig", vao: pig_vao, shadow_verts: VPB * 7,
-                    health_bar_y: 1.05, lower_when_sitting: false,
-                    parts: vec![
-                        stat(0), stat(1), stat(2),
-                        leg(3, [-0.135, 0.35, -0.205], 6.5, 0.55,  1.0, false),
-                        leg(4, [ 0.135, 0.35, -0.205], 6.5, 0.55, -1.0, false),
-                        leg(5, [-0.135, 0.35,  0.205], 6.5, 0.55, -1.0, false),
-                        leg(6, [ 0.135, 0.35,  0.205], 6.5, 0.55,  1.0, false),
-                    ],
-                },
-                MobModel {
-                    identifier: "cow", vao: cow_vao, shadow_verts: VPB * 9,
-                    health_bar_y: 1.55, lower_when_sitting: false,
-                    parts: vec![
-                        stat(0), stat(1), stat(2), stat(3), stat(4),
-                        leg(5, [-0.16, 0.40, -0.23], 5.5, 0.55,  1.0, false),
-                        leg(6, [ 0.16, 0.40, -0.23], 5.5, 0.55, -1.0, false),
-                        leg(7, [-0.16, 0.40,  0.23], 5.5, 0.55, -1.0, false),
-                        leg(8, [ 0.16, 0.40,  0.23], 5.5, 0.55,  1.0, false),
-                    ],
-                },
-                MobModel {
-                    identifier: "skeleton", vao: skel_vao, shadow_verts: VPB * 6,
-                    health_bar_y: 1.95, lower_when_sitting: false,
-                    parts: vec![
-                        stat(0), stat(1),
-                        Part { box_idx: 2, anim: PartAnim::Arm { pivot: [-0.21, 1.45, 0.0], speed: 7.0, amp: 0.60, phase:  1.0, holds_weapon: false } },
-                        Part { box_idx: 3, anim: PartAnim::Arm { pivot: [ 0.21, 1.45, 0.0], speed: 7.0, amp: 0.60, phase: -1.0, holds_weapon: true  } },
-                        leg(4, [-0.08, 0.65, 0.0], 7.0, 0.60, -1.0, false),
-                        leg(5, [ 0.08, 0.65, 0.0], 7.0, 0.60,  1.0, false),
-                        stat(6), stat(7), stat(8), stat(9), stat(10), stat(11), stat(12), stat(13),
-                    ],
-                },
-            ];
-            // Cat is built from cat.geo.json (above); append it if it loaded.
-            if let Some(cat) = cat_model { mob_models.push(cat); }
 
             EntityRenderer {
                 mob_models,

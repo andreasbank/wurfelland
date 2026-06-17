@@ -1,0 +1,203 @@
+{
+  "format_version": "1.12.0",
+  "minecraft:geometry": [
+    {
+      "description": {
+        "identifier": "geometry.pig",
+        "texture_width": 16,
+        "texture_height": 16
+      },
+      "bones": [
+        {
+          "name": "body",
+          "pivot": [
+            0,
+            0,
+            0
+          ],
+          "cubes": [
+            {
+              "origin": [
+                -0.25,
+                0.35,
+                -0.35
+              ],
+              "size": [
+                0.5,
+                0.5,
+                0.7
+              ],
+              "uv": [
+                0,
+                0
+              ]
+            }
+          ],
+          "item_color": "#E6A699"
+        },
+        {
+          "name": "head",
+          "pivot": [
+            0,
+            0,
+            0
+          ],
+          "cubes": [
+            {
+              "origin": [
+                -0.22,
+                0.52,
+                -0.58
+              ],
+              "size": [
+                0.44,
+                0.38,
+                0.23
+              ],
+              "uv": [
+                0,
+                0
+              ]
+            }
+          ],
+          "item_color": "#E6A699"
+        },
+        {
+          "name": "snout",
+          "pivot": [
+            0,
+            0,
+            0
+          ],
+          "cubes": [
+            {
+              "origin": [
+                -0.11,
+                0.58,
+                -0.66
+              ],
+              "size": [
+                0.22,
+                0.16,
+                0.08
+              ],
+              "uv": [
+                0,
+                0
+              ]
+            }
+          ],
+          "item_color": "#F2BAB2"
+        },
+        {
+          "name": "front_left_leg",
+          "pivot": [
+            -0.135,
+            0.35,
+            -0.205
+          ],
+          "cubes": [
+            {
+              "origin": [
+                -0.2,
+                0,
+                -0.27
+              ],
+              "size": [
+                0.13,
+                0.35,
+                0.13
+              ],
+              "uv": [
+                0,
+                0
+              ]
+            }
+          ],
+          "item_color": "#E6A699"
+        },
+        {
+          "name": "front_right_leg",
+          "pivot": [
+            0.135,
+            0.35,
+            -0.205
+          ],
+          "cubes": [
+            {
+              "origin": [
+                0.07,
+                0,
+                -0.27
+              ],
+              "size": [
+                0.13,
+                0.35,
+                0.13
+              ],
+              "uv": [
+                0,
+                0
+              ]
+            }
+          ],
+          "item_color": "#E6A699"
+        },
+        {
+          "name": "back_left_leg",
+          "pivot": [
+            -0.135,
+            0.35,
+            0.205
+          ],
+          "cubes": [
+            {
+              "origin": [
+                -0.2,
+                0,
+                0.14
+              ],
+              "size": [
+                0.13,
+                0.35,
+                0.13
+              ],
+              "uv": [
+                0,
+                0
+              ]
+            }
+          ],
+          "item_color": "#E6A699"
+        },
+        {
+          "name": "back_right_leg",
+          "pivot": [
+            0.135,
+            0.35,
+            0.205
+          ],
+          "cubes": [
+            {
+              "origin": [
+                0.07,
+                0,
+                0.14
+              ],
+              "size": [
+                0.13,
+                0.35,
+                0.13
+              ],
+              "uv": [
+                0,
+                0
+              ]
+            }
+          ],
+          "item_color": "#E6A699"
+        }
+      ]
+    }
+  ]
+}
