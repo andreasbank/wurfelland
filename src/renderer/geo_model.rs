@@ -62,6 +62,10 @@ fn default_scale() -> f32 { 1.0 }
 #[derive(Deserialize)]
 struct GeoBone {
     #[serde(default)]
+    name: String,
+    #[serde(default)]
+    pivot: [f32; 3],
+    #[serde(default)]
     cubes: Vec<GeoCube>,
     // Custom field for solid color — Blockbench ignores it
     #[serde(default = "default_color")]
@@ -69,6 +73,32 @@ struct GeoBone {
 }
 
 fn default_color() -> String { "#AAAAAA".to_string() }
+
+// ── Raw bone data for animated models (per-bone, unscaled MC units) ──────────
+
+pub struct GeoCubeData { pub origin: [f32; 3], pub size: [f32; 3] }
+
+pub struct GeoBoneData {
+    pub name:  String,
+    pub pivot: [f32; 3],
+    pub color: (f32, f32, f32),
+    pub cubes: Vec<GeoCubeData>,
+}
+
+/// Parse a `.geo.json` into its bones (names, pivots, cubes, colours) without
+/// flattening or building a VAO. Callers (e.g. the entity renderer) keep the
+/// per-bone structure so individual limbs can be animated.
+pub fn load_bones(path: &str) -> Result<Vec<GeoBoneData>, String> {
+    let json = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let file: GeoFile = serde_json::from_str(&json).map_err(|e| e.to_string())?;
+    let entry = file.geometry.into_iter().next().ok_or("no geometry entry")?;
+    Ok(entry.bones.into_iter().map(|b| GeoBoneData {
+        name:  b.name,
+        pivot: b.pivot,
+        color: parse_hex_color(&b.item_color),
+        cubes: b.cubes.into_iter().map(|c| GeoCubeData { origin: c.origin, size: c.size }).collect(),
+    }).collect())
+}
 
 #[derive(Deserialize)]
 struct GeoCube {

@@ -31,6 +31,57 @@ fn add_box(verts: &mut Vec<f32>, x0: f32, y0: f32, z0: f32, x1: f32, y1: f32, z1
     add_face(verts, [[x1,y0,z1],[x1,y0,z0],[x1,y1,z0],[x1,y1,z1]], 0.65, r, g, b,  1., 0., 0.); // right +X
 }
 
+/// One bone of a geo-loaded mob: its box range in the built mesh and the pivot
+/// (in block-space model coordinates) to rotate it about.
+struct GeoBoneRange { name: String, first_box: i32, box_count: i32, pivot: [f32; 3] }
+
+/// Build an entity-format mesh (with normals, for the lit mob shader) from a
+/// `.geo.json`'s bones, scaled from MC units to block space, centred on XZ with
+/// its feet at y=0 — matching how the hand-built box mobs are authored. Returns
+/// the mesh plus, per bone, where its boxes live and its pivot, so limbs can be
+/// animated by `draw_one_mob`.
+fn build_geo_mob(bones: &[crate::renderer::geo_model::GeoBoneData], scale: f32)
+    -> (Vec<f32>, Vec<GeoBoneRange>)
+{
+    let (mut min_x, mut max_x) = (f32::MAX, f32::MIN);
+    let (mut min_z, mut max_z) = (f32::MAX, f32::MIN);
+    let mut min_y = f32::MAX;
+    for b in bones {
+        for c in &b.cubes {
+            min_x = min_x.min(c.origin[0]); max_x = max_x.max(c.origin[0] + c.size[0]);
+            min_z = min_z.min(c.origin[2]); max_z = max_z.max(c.origin[2] + c.size[2]);
+            min_y = min_y.min(c.origin[1]);
+        }
+    }
+    let cx = (min_x + max_x) * 0.5;
+    let cz = (min_z + max_z) * 0.5;
+    let tx = |x: f32| (x - cx) * scale;
+    let ty = |y: f32| (y - min_y) * scale;
+    let tz = |z: f32| (z - cz) * scale;
+
+    let mut mesh = Vec::new();
+    let mut ranges = Vec::new();
+    let mut box_idx = 0i32;
+    for b in bones {
+        let first = box_idx;
+        for c in &b.cubes {
+            let (o, s) = (c.origin, c.size);
+            add_box(&mut mesh,
+                tx(o[0]), ty(o[1]), tz(o[2]),
+                tx(o[0] + s[0]), ty(o[1] + s[1]), tz(o[2] + s[2]),
+                b.color.0, b.color.1, b.color.2);
+            box_idx += 1;
+        }
+        if box_idx > first {
+            ranges.push(GeoBoneRange {
+                name: b.name.clone(), first_box: first, box_count: box_idx - first,
+                pivot: [tx(b.pivot[0]), ty(b.pivot[1]), tz(b.pivot[2])],
+            });
+        }
+    }
+    (mesh, ranges)
+}
+
 // Chicken mesh layout (36 verts per box, 6 faces × 6 verts):
 //   [0]   Body
 //   [1]   Head
@@ -107,35 +158,6 @@ fn build_axe_weapon_mesh() -> Vec<f32> {
     add_box(&mut v,  0.185, 0.28, -0.022,  0.235, 0.65,  0.022, wood[0], wood[1], wood[2]);
     // Axe head (wider, slightly asymmetric — blade faces away from body)
     add_box(&mut v,  0.08,  0.44, -0.045,  0.34,  0.68,  0.045, iron[0], iron[1], iron[2]);
-    v
-}
-
-fn build_cat_mesh() -> Vec<f32> {
-    let mut v = Vec::new();
-    let fur  = [0.80f32, 0.50, 0.18]; // orange tabby body
-    let head = [0.83f32, 0.54, 0.22]; // slightly lighter head
-    let ear  = [0.90f32, 0.64, 0.50]; // pale inner ear
-    let leg  = [0.77f32, 0.47, 0.16]; // slightly darker legs
-
-    // Body
-    add_box(&mut v, -0.17, 0.22, -0.22,  0.17, 0.52,  0.22, fur[0], fur[1], fur[2]);
-    // Head (jutting forward -Z)
-    add_box(&mut v, -0.13, 0.45, -0.36,  0.13, 0.72, -0.18, head[0], head[1], head[2]);
-    // Left ear
-    add_box(&mut v, -0.13, 0.68, -0.34, -0.05, 0.82, -0.24, ear[0], ear[1], ear[2]);
-    // Right ear
-    add_box(&mut v,  0.05, 0.68, -0.34,  0.13, 0.82, -0.24, ear[0], ear[1], ear[2]);
-    // Tail (behind body)
-    add_box(&mut v, -0.04, 0.22,  0.22,  0.04, 0.58,  0.30, fur[0], fur[1], fur[2]);
-    // Front-left leg
-    add_box(&mut v, -0.14, 0.00, -0.16, -0.06, 0.22, -0.07, leg[0], leg[1], leg[2]);
-    // Front-right leg
-    add_box(&mut v,  0.06, 0.00, -0.16,  0.14, 0.22, -0.07, leg[0], leg[1], leg[2]);
-    // Back-left leg
-    add_box(&mut v, -0.14, 0.00,  0.07, -0.06, 0.22,  0.16, leg[0], leg[1], leg[2]);
-    // Back-right leg
-    add_box(&mut v,  0.06, 0.00,  0.07,  0.14, 0.22,  0.16, leg[0], leg[1], leg[2]);
-
     v
 }
 
@@ -482,7 +504,40 @@ impl EntityRenderer {
         let (vao, vbo) = Self::upload_mesh(&build_chicken_mesh());
         let (pig_vao, pig_vbo) = Self::upload_mesh(&build_pig_mesh());
         let (skel_vao, skel_vbo) = Self::upload_mesh(&build_skeleton_mesh());
-        let (cat_vao, cat_vbo) = Self::upload_mesh(&build_cat_mesh());
+        // Cat: data-driven from cat.geo.json (legs split into pivoted bones so the
+        // walk gait survives). Falls back to no cat if the model fails to load.
+        const CAT_GEO_SCALE: f32 = 0.034; // MC units → blocks (~0.85 tall, like the box cat)
+        let (cat_vao, cat_vbo, cat_model): (u32, u32, Option<MobModel>) =
+            match crate::renderer::geo_model::load_bones("assets/models/cat/cat.geo.json") {
+                Ok(bones) => {
+                    let (mesh, ranges) = build_geo_mob(&bones, CAT_GEO_SCALE);
+                    let (vao, vbo) = Self::upload_mesh(&mesh);
+                    let total_boxes = (mesh.len() / STRIDE) as i32 / VPB;
+                    let mut parts = Vec::new();
+                    for r in &ranges {
+                        if r.name.contains("leg") {
+                            // Diagonal gait: FL & BR together, FR & BL opposite.
+                            let phase = match r.name.as_str() {
+                                "front_left_leg" | "back_right_leg" => 1.0,
+                                _ => -1.0,
+                            };
+                            parts.push(Part { box_idx: r.first_box, anim: PartAnim::Swing {
+                                pivot: r.pivot, axis: Axis::X, speed: 7.0, amp: 0.50, phase,
+                                scale_by_move: true, freeze_when_sitting: true,
+                            } });
+                        } else {
+                            for i in 0..r.box_count { parts.push(stat(r.first_box + i)); }
+                        }
+                    }
+                    let model = MobModel {
+                        identifier: "cat", vao, parts,
+                        shadow_verts: total_boxes * VPB,
+                        health_bar_y: 0.90, lower_when_sitting: true,
+                    };
+                    (vao, vbo, Some(model))
+                }
+                Err(e) => { eprintln!("[entity_renderer] cat.geo.json: {e}"); (0, 0, None) }
+            };
         let (cow_vao, cow_vbo) = Self::upload_mesh(&build_cow_mesh());
         let (workbench_vao, workbench_vbo) = Self::upload_mesh(&build_workbench_mesh());
         let (bed_vao, bed_vbo) = Self::upload_mesh(&build_bed_mesh());
@@ -625,7 +680,7 @@ impl EntityRenderer {
             let bar_color_loc = gl::GetUniformLocation(bar_shader, c"u_color".as_ptr());
 
             // ── Per-species render/animation tables ────────────────────────────
-            let mob_models = vec![
+            let mut mob_models = vec![
                 MobModel {
                     identifier: "chicken", vao, shadow_verts: VPB * 8,
                     health_bar_y: 1.05, lower_when_sitting: false,
@@ -645,17 +700,6 @@ impl EntityRenderer {
                         leg(4, [ 0.135, 0.35, -0.205], 6.5, 0.55, -1.0, false),
                         leg(5, [-0.135, 0.35,  0.205], 6.5, 0.55, -1.0, false),
                         leg(6, [ 0.135, 0.35,  0.205], 6.5, 0.55,  1.0, false),
-                    ],
-                },
-                MobModel {
-                    identifier: "cat", vao: cat_vao, shadow_verts: VPB * 9,
-                    health_bar_y: 0.90, lower_when_sitting: true,
-                    parts: vec![
-                        stat(0), stat(1), stat(2), stat(3), stat(4),
-                        leg(5, [-0.10, 0.22, -0.115], 7.0, 0.50,  1.0, true),
-                        leg(6, [ 0.10, 0.22, -0.115], 7.0, 0.50, -1.0, true),
-                        leg(7, [-0.10, 0.22,  0.115], 7.0, 0.50, -1.0, true),
-                        leg(8, [ 0.10, 0.22,  0.115], 7.0, 0.50,  1.0, true),
                     ],
                 },
                 MobModel {
@@ -682,6 +726,8 @@ impl EntityRenderer {
                     ],
                 },
             ];
+            // Cat is built from cat.geo.json (above); append it if it loaded.
+            if let Some(cat) = cat_model { mob_models.push(cat); }
 
             EntityRenderer {
                 mob_models,
