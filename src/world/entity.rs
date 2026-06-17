@@ -145,8 +145,8 @@ struct HostileAi {
 }
 
 /// A mob. Kinematics, health and wander state are shared; species behaviour and
-/// all tuning come from `def`, and `brain` selects passive vs. hostile AI.
-/// The type aliases below pick a species purely by which `EntityDef` is supplied.
+/// all tuning come from `def`, and `brain` selects passive vs. hostile AI. The
+/// species is chosen entirely by which `EntityDef` is supplied to `new`.
 pub struct Entity {
     pub position: [f32; 3],
     pub yaw: f32,
@@ -628,11 +628,7 @@ impl HittableEntity for Entity {
 
 // Phase 1: every passive mob shares one implementation. The species is selected
 // entirely by the EntityDef passed to `Entity::new` (loaded from assets/entities).
-pub type Chicken = Entity;
-pub type Pig     = Entity;
 pub type Penguin = Entity;
-pub type Cat     = Entity;
-pub type Cow     = Entity;
 
 // ─── Skeleton ─────────────────────────────────────────────────────────────────
 
@@ -690,8 +686,6 @@ fn detect_from_idle(
     false
 }
 
-// The skeleton is a hostile Entity; see Brain::Hostile / update_hostile.
-pub type Skeleton = Entity;
 
 /// Slab-method ray vs AABB intersection. Returns entry distance if hit within max_dist.
 pub fn ray_aabb_intersect(

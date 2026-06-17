@@ -3,7 +3,7 @@ use std::os::raw::c_void;
 use std::f32::consts::FRAC_PI_2;
 use crate::renderer::utils::{compile_shader, link_program};
 use crate::renderer::shadow_pass::{ShadowPass, NUM_CASCADES, CASCADE_ENDS};
-use crate::world::entity::{Chicken, Pig, Skeleton, Cat, Cow, WeaponType};
+use crate::world::entity::{Entity, WeaponType};
 use crate::world::{WorkbenchProp, BedProp, FurnaceProp};
 
 // Vertex format: [x, y, z, r, g, b, nx, ny, nz] — 9 floats
@@ -41,10 +41,6 @@ fn add_box(verts: &mut Vec<f32>, x0: f32, y0: f32, z0: f32, x1: f32, y1: f32, z1
 //   [6]   Left leg
 //   [7]   Right leg
 const VPB: i32 = 36; // verts per box
-const BODY_OFF:   i32 = 0;
-const LWING_OFF:  i32 = VPB * 4;
-const RWING_OFF:  i32 = VPB * 5;
-const LLEG_OFF:   i32 = VPB * 6;
 
 // Pig mesh layout:
 //   [0]   Body
@@ -54,11 +50,6 @@ const LLEG_OFF:   i32 = VPB * 6;
 //   [4]   Front-right leg  ← animated (opposite phase)
 //   [5]   Back-left leg    ← animated (opposite to front-left)
 //   [6]   Back-right leg   ← animated (opposite to front-right)
-const PIG_STATIC_CNT: i32 = VPB * 3; // body + head + snout (drawn as one call)
-const PIG_FL_LEG: i32 = VPB * 3;
-const PIG_FR_LEG: i32 = VPB * 4;
-const PIG_BL_LEG: i32 = VPB * 5;
-const PIG_BR_LEG: i32 = VPB * 6;
 
 // Cat mesh layout:
 //   [0]   Body
@@ -70,11 +61,6 @@ const PIG_BR_LEG: i32 = VPB * 6;
 //   [6]   Front-right leg  ← animated (opposite phase)
 //   [7]   Back-left leg    ← animated (opposite to front-left)
 //   [8]   Back-right leg   ← animated (opposite to front-right)
-const CAT_STATIC_CNT: i32 = VPB * 5; // body + head + 2 ears + tail
-const CAT_FL_LEG: i32 = VPB * 5;
-const CAT_FR_LEG: i32 = VPB * 6;
-const CAT_BL_LEG: i32 = VPB * 7;
-const CAT_BR_LEG: i32 = VPB * 8;
 
 // Cow mesh layout:
 //   [0]   Body             — static
@@ -86,11 +72,6 @@ const CAT_BR_LEG: i32 = VPB * 8;
 //   [6]   Front-right leg  ← animated (opposite phase)
 //   [7]   Back-left leg    ← animated (opposite to front-left)
 //   [8]   Back-right leg   ← animated (opposite to front-right)
-const COW_STATIC_CNT: i32 = VPB * 5; // body + head + snout + 2 horns
-const COW_FL_LEG: i32 = VPB * 5;
-const COW_FR_LEG: i32 = VPB * 6;
-const COW_BL_LEG: i32 = VPB * 7;
-const COW_BR_LEG: i32 = VPB * 8;
 
 // Skeleton mesh layout:
 //   [0]   Head  (skull)       — static
@@ -99,14 +80,7 @@ const COW_BR_LEG: i32 = VPB * 8;
 //   [3]   Right arm           ← animated (opposite phase)
 //   [4]   Left leg            ← animated (swings on X around hip)
 //   [5]   Right leg           ← animated (opposite to left arm)
-const SKEL_STATIC_CNT: i32 = VPB * 2; // head + body
-const SKEL_LARM: i32 = VPB * 2;
-const SKEL_RARM: i32 = VPB * 3;
-const SKEL_LLEG: i32 = VPB * 4;
-const SKEL_RLEG: i32 = VPB * 5;
 // Static skin detail (eye sockets, nose, mouth, ribs, pelvis) appended after limbs.
-const SKEL_DETAIL_OFF: i32 = VPB * 6;
-const SKEL_DETAIL_CNT: i32 = VPB * 8;
 
 // Sword held in skeleton right arm (x≈0.15..0.27, arm centre x=0.21).
 // Grip overlaps the base of the arm; guard and blade hang below.
@@ -380,7 +354,54 @@ fn build_furnace_mesh() -> Vec<f32> {
 
 const FURNACE_VERT_COUNT: i32 = VPB * 6; // body + 2 door frames + 2 glows + chimney
 
+// ── Data-driven mob animation ──────────────────────────────────────────────
+// Every box-built mob (chicken/pig/cat/cow/skeleton) is described by a MobModel
+// table instead of a bespoke draw function. One generic `draw_one_mob` walks the
+// parts and applies each animation, so adding a species is data, not code.
+
+#[derive(Clone, Copy)]
+enum Axis { X, Z }
+
+/// How a single mesh box (VPB verts) animates.
+#[derive(Clone, Copy)]
+enum PartAnim {
+    /// Drawn with the body transform.
+    Static,
+    /// Limb swinging about `pivot`: angle = sin(anim·speed·move)·amp·phase.
+    /// `scale_by_move` ties the swing to walking speed; `freeze_when_sitting`
+    /// holds it at rest for tamed pets that are sitting.
+    Swing {
+        pivot: [f32; 3], axis: Axis, speed: f32, amp: f32, phase: f32,
+        scale_by_move: bool, freeze_when_sitting: bool,
+    },
+    /// Skeleton arm: walk-swings, lunges (both arms together) while attacking,
+    /// and optionally carries the held weapon under its transform.
+    Arm { pivot: [f32; 3], speed: f32, amp: f32, phase: f32, holds_weapon: bool },
+}
+
+#[derive(Clone, Copy)]
+struct Part { box_idx: i32, anim: PartAnim }
+
+/// Declarative render description for one species.
+struct MobModel {
+    identifier: &'static str,
+    vao: u32,
+    parts: Vec<Part>,
+    shadow_verts: i32,      // whole-mesh vertex count rendered into the shadow map
+    health_bar_y: f32,
+    lower_when_sitting: bool,
+}
+
+// Shorthand constructors for the model table.
+fn stat(box_idx: i32) -> Part { Part { box_idx, anim: PartAnim::Static } }
+fn leg(box_idx: i32, pivot: [f32; 3], speed: f32, amp: f32, phase: f32, freeze: bool) -> Part {
+    Part { box_idx, anim: PartAnim::Swing {
+        pivot, axis: Axis::X, speed, amp, phase, scale_by_move: true, freeze_when_sitting: freeze,
+    } }
+}
+
 pub struct EntityRenderer {
+    mob_models: Vec<MobModel>,
     vao: u32,
     vbo: u32,
     pig_vao: u32,
@@ -603,7 +624,67 @@ impl EntityRenderer {
             let bar_mvp_loc   = gl::GetUniformLocation(bar_shader, c"mvp".as_ptr());
             let bar_color_loc = gl::GetUniformLocation(bar_shader, c"u_color".as_ptr());
 
+            // ── Per-species render/animation tables ────────────────────────────
+            let mob_models = vec![
+                MobModel {
+                    identifier: "chicken", vao, shadow_verts: VPB * 8,
+                    health_bar_y: 1.05, lower_when_sitting: false,
+                    parts: vec![
+                        stat(0), stat(1), stat(2), stat(3), stat(6), stat(7),
+                        // Wings flap around their hinge edge (Z axis), independent of walking.
+                        Part { box_idx: 4, anim: PartAnim::Swing { pivot: [-0.20, 0.68, 0.0], axis: Axis::Z, speed: 9.0, amp: 0.45, phase:  1.0, scale_by_move: false, freeze_when_sitting: false } },
+                        Part { box_idx: 5, anim: PartAnim::Swing { pivot: [ 0.20, 0.68, 0.0], axis: Axis::Z, speed: 9.0, amp: 0.45, phase: -1.0, scale_by_move: false, freeze_when_sitting: false } },
+                    ],
+                },
+                MobModel {
+                    identifier: "pig", vao: pig_vao, shadow_verts: VPB * 7,
+                    health_bar_y: 1.05, lower_when_sitting: false,
+                    parts: vec![
+                        stat(0), stat(1), stat(2),
+                        leg(3, [-0.135, 0.35, -0.205], 6.5, 0.55,  1.0, false),
+                        leg(4, [ 0.135, 0.35, -0.205], 6.5, 0.55, -1.0, false),
+                        leg(5, [-0.135, 0.35,  0.205], 6.5, 0.55, -1.0, false),
+                        leg(6, [ 0.135, 0.35,  0.205], 6.5, 0.55,  1.0, false),
+                    ],
+                },
+                MobModel {
+                    identifier: "cat", vao: cat_vao, shadow_verts: VPB * 9,
+                    health_bar_y: 0.90, lower_when_sitting: true,
+                    parts: vec![
+                        stat(0), stat(1), stat(2), stat(3), stat(4),
+                        leg(5, [-0.10, 0.22, -0.115], 7.0, 0.50,  1.0, true),
+                        leg(6, [ 0.10, 0.22, -0.115], 7.0, 0.50, -1.0, true),
+                        leg(7, [-0.10, 0.22,  0.115], 7.0, 0.50, -1.0, true),
+                        leg(8, [ 0.10, 0.22,  0.115], 7.0, 0.50,  1.0, true),
+                    ],
+                },
+                MobModel {
+                    identifier: "cow", vao: cow_vao, shadow_verts: VPB * 9,
+                    health_bar_y: 1.55, lower_when_sitting: false,
+                    parts: vec![
+                        stat(0), stat(1), stat(2), stat(3), stat(4),
+                        leg(5, [-0.16, 0.40, -0.23], 5.5, 0.55,  1.0, false),
+                        leg(6, [ 0.16, 0.40, -0.23], 5.5, 0.55, -1.0, false),
+                        leg(7, [-0.16, 0.40,  0.23], 5.5, 0.55, -1.0, false),
+                        leg(8, [ 0.16, 0.40,  0.23], 5.5, 0.55,  1.0, false),
+                    ],
+                },
+                MobModel {
+                    identifier: "skeleton", vao: skel_vao, shadow_verts: VPB * 6,
+                    health_bar_y: 1.95, lower_when_sitting: false,
+                    parts: vec![
+                        stat(0), stat(1),
+                        Part { box_idx: 2, anim: PartAnim::Arm { pivot: [-0.21, 1.45, 0.0], speed: 7.0, amp: 0.60, phase:  1.0, holds_weapon: false } },
+                        Part { box_idx: 3, anim: PartAnim::Arm { pivot: [ 0.21, 1.45, 0.0], speed: 7.0, amp: 0.60, phase: -1.0, holds_weapon: true  } },
+                        leg(4, [-0.08, 0.65, 0.0], 7.0, 0.60, -1.0, false),
+                        leg(5, [ 0.08, 0.65, 0.0], 7.0, 0.60,  1.0, false),
+                        stat(6), stat(7), stat(8), stat(9), stat(10), stat(11), stat(12), stat(13),
+                    ],
+                },
+            ];
+
             EntityRenderer {
+                mob_models,
                 vao, vbo, pig_vao, pig_vbo, skel_vao, skel_vbo, cat_vao, cat_vbo, cow_vao, cow_vbo,
                 workbench_vao, workbench_vbo, bed_vao, bed_vbo, furnace_vao, furnace_vbo,
                 sword_vao, sword_vbo, axe_vao, axe_vbo,
@@ -714,7 +795,8 @@ impl EntityRenderer {
         }
     }
 
-    pub fn draw_chickens(&self, chickens: &[Chicken], view: &glam::Mat4, projection: &glam::Mat4,
+    /// Render every box-built mob in one pass, grouped by species VAO.
+    pub fn draw_entities(&self, entities: &[Entity], view: &glam::Mat4, projection: &glam::Mat4,
                          fog_start: f32, fog_end: f32, screen_w: f32, screen_h: f32, sky_tex: u32,
                          fog_override: f32, fog_color_override: glam::Vec3,
                          ambient_light: f32, directional_light: f32, sun_dir: glam::Vec3,
@@ -726,462 +808,105 @@ impl EntityRenderer {
             self.bind_frame_uniforms(fog_start, fog_end, screen_w, screen_h, sky_tex,
                 fog_override, fog_color_override, ambient_light, directional_light, sun_dir,
                 shadow_tex, light_space, texel_sizes, torch_pos, torch_strength);
-            gl::BindVertexArray(self.vao);
-
-            for chicken in chickens.iter().filter(|e| e.def.identifier == "chicken") {
-                gl::Uniform1f(self.block_light_loc, chicken.block_light);
-                // Base model: translate to world position, rotate to face yaw
-                let rot_y = -(chicken.yaw.to_radians() + FRAC_PI_2);
-                let model = glam::Mat4::from_translation(glam::Vec3::from(chicken.position))
-                    * glam::Mat4::from_rotation_y(rot_y);
-                let mvp = *projection * *view * model;
-
-                gl::UniformMatrix4fv(self.model_loc, 1, gl::FALSE, model.to_cols_array().as_ptr());
-                // Static parts: body + head + beak + wattle (4 boxes = 144 verts)
-                gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE, mvp.to_cols_array().as_ptr());
-                gl::DrawArrays(gl::TRIANGLES, BODY_OFF, VPB * 4);
-                // Legs (2 boxes)
-                gl::DrawArrays(gl::TRIANGLES, LLEG_OFF, VPB * 2);
-
-                // Wings: flap around the hinge edge (rotation_z at attachment x)
-                let flap = (chicken.anim_time * 9.0).sin() * 0.45;
-
-                // Left wing: hinge at top-left of wing attachment
-                let lp = glam::Vec3::new(-0.20, 0.68, 0.0);
-                let lw = glam::Mat4::from_translation(lp)
-                    * glam::Mat4::from_rotation_z(flap)
-                    * glam::Mat4::from_translation(-lp);
-                gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE,
-                    (*projection * *view * model * lw).to_cols_array().as_ptr());
-                gl::DrawArrays(gl::TRIANGLES, LWING_OFF, VPB);
-
-                // Right wing: mirror flap direction
-                let rp = glam::Vec3::new(0.20, 0.68, 0.0);
-                let rw = glam::Mat4::from_translation(rp)
-                    * glam::Mat4::from_rotation_z(-flap)
-                    * glam::Mat4::from_translation(-rp);
-                gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE,
-                    (*projection * *view * model * rw).to_cols_array().as_ptr());
-                gl::DrawArrays(gl::TRIANGLES, RWING_OFF, VPB);
+            for model in &self.mob_models {
+                gl::BindVertexArray(model.vao);
+                for e in entities.iter().filter(|e| e.def.identifier == model.identifier) {
+                    self.draw_one_mob(model, e, view, projection);
+                }
             }
-
             gl::BindVertexArray(0);
             gl::Enable(gl::CULL_FACE);
         }
 
-        for chicken in chickens.iter().filter(|e| e.def.identifier == "chicken") {
-            let frac = chicken.health / chicken.def.max_health;
-            if frac < 1.0 {
-                self.draw_health_bar(chicken.position, frac, 1.05, view, projection);
+        // Health bars (own shader / blending), above each hurt mob.
+        for e in entities {
+            if let Some(model) = self.mob_models.iter().find(|m| m.identifier == e.def.identifier) {
+                let frac = e.health / e.def.max_health;
+                if frac < 1.0 {
+                    self.draw_health_bar(e.position, frac, model.health_bar_y, view, projection);
+                }
             }
         }
     }
 
-    pub fn draw_pigs(&self, pigs: &[Pig], view: &glam::Mat4, projection: &glam::Mat4,
-                     fog_start: f32, fog_end: f32, screen_w: f32, screen_h: f32, sky_tex: u32,
-                     fog_override: f32, fog_color_override: glam::Vec3,
-                     ambient_light: f32, directional_light: f32, sun_dir: glam::Vec3,
-                     shadow_tex: u32, light_space: &[glam::Mat4; NUM_CASCADES],
-                     texel_sizes: &[f32; NUM_CASCADES],
-                     torch_pos: glam::Vec3, torch_strength: f32) {
+    /// Draw one mob: body transform, per-part animation, and any held weapon.
+    /// The caller must have already bound `model.vao`.
+    fn draw_one_mob(&self, model: &MobModel, e: &Entity, view: &glam::Mat4, projection: &glam::Mat4) {
         unsafe {
-            gl::Disable(gl::CULL_FACE);
-            self.bind_frame_uniforms(fog_start, fog_end, screen_w, screen_h, sky_tex,
-                fog_override, fog_color_override, ambient_light, directional_light, sun_dir,
-                shadow_tex, light_space, texel_sizes, torch_pos, torch_strength);
-            gl::BindVertexArray(self.pig_vao);
+            gl::Uniform1f(self.block_light_loc, e.block_light);
+            let rot_y = -(e.yaw.to_radians() + FRAC_PI_2);
+            let y_off = if model.lower_when_sitting && e.sitting { -0.12 } else { 0.0 };
+            let pos = glam::Vec3::new(e.position[0], e.position[1] + y_off, e.position[2]);
+            let base = glam::Mat4::from_translation(pos) * glam::Mat4::from_rotation_y(rot_y);
+            gl::UniformMatrix4fv(self.model_loc, 1, gl::FALSE, base.to_cols_array().as_ptr());
 
-            for pig in pigs.iter().filter(|e| e.def.identifier == "pig") {
-                gl::Uniform1f(self.block_light_loc, pig.block_light);
-                let rot_y = -(pig.yaw.to_radians() + FRAC_PI_2);
-                let model = glam::Mat4::from_translation(glam::Vec3::from(pig.position))
-                    * glam::Mat4::from_rotation_y(rot_y);
-                let mvp = *projection * *view * model;
-
-                gl::UniformMatrix4fv(self.model_loc, 1, gl::FALSE, model.to_cols_array().as_ptr());
-                // Static parts: body + head + snout
-                gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE, mvp.to_cols_array().as_ptr());
-                gl::DrawArrays(gl::TRIANGLES, 0, PIG_STATIC_CNT);
-
-                // Leg animation: front-left & back-right swing together, front-right & back-left opposite
-                let swing = (pig.anim_time * 6.5 * (pig.move_speed_norm())).sin() * 0.55;
-
-                let pivot_y = 0.35_f32;
-
-                // Front-left leg (pivot at top-center of leg: x=-0.135, y=0.35, z=-0.205)
-                let fl_p = glam::Vec3::new(-0.135, pivot_y, -0.205);
-                let fl_m = glam::Mat4::from_translation(fl_p)
-                    * glam::Mat4::from_rotation_x(swing)
-                    * glam::Mat4::from_translation(-fl_p);
-                gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE,
-                    (*projection * *view * model * fl_m).to_cols_array().as_ptr());
-                gl::DrawArrays(gl::TRIANGLES, PIG_FL_LEG, VPB);
-
-                // Front-right leg (opposite phase)
-                let fr_p = glam::Vec3::new(0.135, pivot_y, -0.205);
-                let fr_m = glam::Mat4::from_translation(fr_p)
-                    * glam::Mat4::from_rotation_x(-swing)
-                    * glam::Mat4::from_translation(-fr_p);
-                gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE,
-                    (*projection * *view * model * fr_m).to_cols_array().as_ptr());
-                gl::DrawArrays(gl::TRIANGLES, PIG_FR_LEG, VPB);
-
-                // Back-left leg (opposite to front-left)
-                let bl_p = glam::Vec3::new(-0.135, pivot_y, 0.205);
-                let bl_m = glam::Mat4::from_translation(bl_p)
-                    * glam::Mat4::from_rotation_x(-swing)
-                    * glam::Mat4::from_translation(-bl_p);
-                gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE,
-                    (*projection * *view * model * bl_m).to_cols_array().as_ptr());
-                gl::DrawArrays(gl::TRIANGLES, PIG_BL_LEG, VPB);
-
-                // Back-right leg (opposite to front-right)
-                let br_p = glam::Vec3::new(0.135, pivot_y, 0.205);
-                let br_m = glam::Mat4::from_translation(br_p)
-                    * glam::Mat4::from_rotation_x(swing)
-                    * glam::Mat4::from_translation(-br_p);
-                gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE,
-                    (*projection * *view * model * br_m).to_cols_array().as_ptr());
-                gl::DrawArrays(gl::TRIANGLES, PIG_BR_LEG, VPB);
-            }
-
-            gl::BindVertexArray(0);
-            gl::Enable(gl::CULL_FACE);
-        }
-
-        for pig in pigs.iter().filter(|e| e.def.identifier == "pig") {
-            let frac = pig.health / pig.def.max_health;
-            if frac < 1.0 {
-                self.draw_health_bar(pig.position, frac, 1.05, view, projection);
-            }
-        }
-    }
-
-    /// Render all chickens into the currently active shadow cascade.
-    pub fn draw_shadows(&self, chickens: &[Chicken], shadow_pass: &ShadowPass) {
-        for chicken in chickens.iter().filter(|e| e.def.identifier == "chicken") {
-            let rot_y = -(chicken.yaw.to_radians() + FRAC_PI_2);
-            let model = glam::Mat4::from_translation(glam::Vec3::from(chicken.position))
-                * glam::Mat4::from_rotation_y(rot_y);
-            shadow_pass.draw_solid_mesh(self.vao, 0, VPB * 8, &model);
-        }
-    }
-
-    pub fn draw_pig_shadows(&self, pigs: &[Pig], shadow_pass: &ShadowPass) {
-        for pig in pigs.iter().filter(|e| e.def.identifier == "pig") {
-            let rot_y = -(pig.yaw.to_radians() + FRAC_PI_2);
-            let model = glam::Mat4::from_translation(glam::Vec3::from(pig.position))
-                * glam::Mat4::from_rotation_y(rot_y);
-            shadow_pass.draw_solid_mesh(self.pig_vao, 0, VPB * 7, &model);
-        }
-    }
-
-    pub fn draw_skeletons(
-        &self, skeletons: &[Skeleton],
-        view: &glam::Mat4, projection: &glam::Mat4,
-        fog_start: f32, fog_end: f32, screen_w: f32, screen_h: f32, sky_tex: u32,
-        fog_override: f32, fog_color_override: glam::Vec3,
-        ambient_light: f32, directional_light: f32, sun_dir: glam::Vec3,
-        shadow_tex: u32, light_space: &[glam::Mat4; NUM_CASCADES],
-        texel_sizes: &[f32; NUM_CASCADES],
-        torch_pos: glam::Vec3, torch_strength: f32,
-    ) {
-        unsafe {
-            gl::Disable(gl::CULL_FACE);
-            self.bind_frame_uniforms(fog_start, fog_end, screen_w, screen_h, sky_tex,
-                fog_override, fog_color_override, ambient_light, directional_light, sun_dir,
-                shadow_tex, light_space, texel_sizes, torch_pos, torch_strength);
-            gl::BindVertexArray(self.skel_vao);
-
-            for skel in skeletons.iter().filter(|e| e.def.identifier == "skeleton") {
-                gl::Uniform1f(self.block_light_loc, skel.block_light);
-                let rot_y = -(skel.yaw.to_radians() + FRAC_PI_2);
-                let model = glam::Mat4::from_translation(glam::Vec3::from(skel.position))
-                    * glam::Mat4::from_rotation_y(rot_y);
-                let mvp = *projection * *view * model;
-
-                gl::UniformMatrix4fv(self.model_loc, 1, gl::FALSE, model.to_cols_array().as_ptr());
-                // Static: head + body
-                gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE, mvp.to_cols_array().as_ptr());
-                gl::DrawArrays(gl::TRIANGLES, 0, SKEL_STATIC_CNT);
-
-                // Limb animation
-                let walk_swing = (skel.anim_time * 7.0 * skel.move_speed_norm()).sin() * 0.60;
-                let pivot_arm_y = 1.45_f32;
-                let pivot_leg_y = 0.65_f32;
-
-                // Attack arm swing: both arms lunge forward together.
-                let (la_angle, ra_angle) = if skel.attack_anim > 0.0 {
-                    let t = 1.0 - skel.attack_anim / 0.5;
-                    let a = (std::f32::consts::PI * t).sin() * 1.4;
-                    (a, a)
-                } else {
-                    (walk_swing, -walk_swing)
+            let mut weapon_xform: Option<glam::Mat4> = None;
+            for part in &model.parts {
+                let m = match part.anim {
+                    PartAnim::Static => base,
+                    PartAnim::Swing { pivot, axis, speed, amp, phase, scale_by_move, freeze_when_sitting } => {
+                        let angle = if freeze_when_sitting && e.sitting {
+                            0.0
+                        } else {
+                            let mv = if scale_by_move { e.move_speed_norm() } else { 1.0 };
+                            (e.anim_time * speed * mv).sin() * amp * phase
+                        };
+                        let p = glam::Vec3::from(pivot);
+                        let rot = match axis {
+                            Axis::X => glam::Mat4::from_rotation_x(angle),
+                            Axis::Z => glam::Mat4::from_rotation_z(angle),
+                        };
+                        base * glam::Mat4::from_translation(p) * rot * glam::Mat4::from_translation(-p)
+                    }
+                    PartAnim::Arm { pivot, speed, amp, phase, holds_weapon } => {
+                        let angle = if e.attack_anim > 0.0 {
+                            // Both arms lunge forward together at the swing peak.
+                            let t = 1.0 - e.attack_anim / 0.5;
+                            (std::f32::consts::PI * t).sin() * 1.4
+                        } else {
+                            (e.anim_time * speed * e.move_speed_norm()).sin() * amp * phase
+                        };
+                        let p = glam::Vec3::from(pivot);
+                        let m = base * glam::Mat4::from_translation(p)
+                            * glam::Mat4::from_rotation_x(angle)
+                            * glam::Mat4::from_translation(-p);
+                        if holds_weapon { weapon_xform = Some(m); }
+                        m
+                    }
                 };
-
-                // Left arm
-                let la_p = glam::Vec3::new(-0.21, pivot_arm_y, 0.0);
-                let la_m = glam::Mat4::from_translation(la_p)
-                    * glam::Mat4::from_rotation_x(la_angle)
-                    * glam::Mat4::from_translation(-la_p);
-                gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE,
-                    (*projection * *view * model * la_m).to_cols_array().as_ptr());
-                gl::DrawArrays(gl::TRIANGLES, SKEL_LARM, VPB);
-
-                // Right arm
-                let ra_p = glam::Vec3::new(0.21, pivot_arm_y, 0.0);
-                let ra_m = glam::Mat4::from_translation(ra_p)
-                    * glam::Mat4::from_rotation_x(ra_angle)
-                    * glam::Mat4::from_translation(-ra_p);
-                gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE,
-                    (*projection * *view * model * ra_m).to_cols_array().as_ptr());
-                gl::DrawArrays(gl::TRIANGLES, SKEL_RARM, VPB);
-
-                // Weapon: drawn under the same right-arm transform
-                match skel.weapon {
-                    WeaponType::Sword => {
-                        gl::BindVertexArray(self.sword_vao);
-                        gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE,
-                            (*projection * *view * model * ra_m).to_cols_array().as_ptr());
-                        gl::DrawArrays(gl::TRIANGLES, 0, VPB * 3);
-                        gl::BindVertexArray(self.skel_vao);
-                    }
-                    WeaponType::Axe => {
-                        gl::BindVertexArray(self.axe_vao);
-                        gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE,
-                            (*projection * *view * model * ra_m).to_cols_array().as_ptr());
-                        gl::DrawArrays(gl::TRIANGLES, 0, VPB * 2);
-                        gl::BindVertexArray(self.skel_vao);
-                    }
-                    WeaponType::BareHands => {}
-                }
-
-                // Left leg (opposite to left arm → same as right arm)
-                let ll_p = glam::Vec3::new(-0.08, pivot_leg_y, 0.0);
-                let ll_m = glam::Mat4::from_translation(ll_p)
-                    * glam::Mat4::from_rotation_x(-walk_swing)
-                    * glam::Mat4::from_translation(-ll_p);
-                gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE,
-                    (*projection * *view * model * ll_m).to_cols_array().as_ptr());
-                gl::DrawArrays(gl::TRIANGLES, SKEL_LLEG, VPB);
-
-                // Right leg (opposite to right arm → same as left arm)
-                let rl_p = glam::Vec3::new(0.08, pivot_leg_y, 0.0);
-                let rl_m = glam::Mat4::from_translation(rl_p)
-                    * glam::Mat4::from_rotation_x(walk_swing)
-                    * glam::Mat4::from_translation(-rl_p);
-                gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE,
-                    (*projection * *view * model * rl_m).to_cols_array().as_ptr());
-                gl::DrawArrays(gl::TRIANGLES, SKEL_RLEG, VPB);
-
-                // Static skin detail (skull face, ribs, pelvis) — body transform.
+                let mvp = *projection * *view * m;
                 gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE, mvp.to_cols_array().as_ptr());
-                gl::DrawArrays(gl::TRIANGLES, SKEL_DETAIL_OFF, SKEL_DETAIL_CNT);
+                gl::DrawArrays(gl::TRIANGLES, part.box_idx * VPB, VPB);
             }
 
-            gl::BindVertexArray(0);
-            gl::Enable(gl::CULL_FACE);
-        }
-
-        for skel in skeletons.iter().filter(|e| e.def.identifier == "skeleton") {
-            let frac = skel.health / skel.def.max_health;
-            if frac < 1.0 {
-                self.draw_health_bar(skel.position, frac, 1.95, view, projection);
-            }
-        }
-    }
-
-    pub fn draw_skeleton_shadows(&self, skeletons: &[Skeleton], shadow_pass: &ShadowPass) {
-        for skel in skeletons.iter().filter(|e| e.def.identifier == "skeleton") {
-            let rot_y = -(skel.yaw.to_radians() + FRAC_PI_2);
-            let model = glam::Mat4::from_translation(glam::Vec3::from(skel.position))
-                * glam::Mat4::from_rotation_y(rot_y);
-            shadow_pass.draw_solid_mesh(self.skel_vao, 0, VPB * 6, &model);
-            match skel.weapon {
-                WeaponType::Sword => shadow_pass.draw_solid_mesh(self.sword_vao, 0, VPB * 3, &model),
-                WeaponType::Axe   => shadow_pass.draw_solid_mesh(self.axe_vao,  0, VPB * 2, &model),
-                WeaponType::BareHands => {}
-            }
-        }
-    }
-
-    pub fn draw_cats(&self, cats: &[Cat], view: &glam::Mat4, projection: &glam::Mat4,
-                     fog_start: f32, fog_end: f32, screen_w: f32, screen_h: f32, sky_tex: u32,
-                     fog_override: f32, fog_color_override: glam::Vec3,
-                     ambient_light: f32, directional_light: f32, sun_dir: glam::Vec3,
-                     shadow_tex: u32, light_space: &[glam::Mat4; NUM_CASCADES],
-                     texel_sizes: &[f32; NUM_CASCADES],
-                     torch_pos: glam::Vec3, torch_strength: f32) {
-        unsafe {
-            gl::Disable(gl::CULL_FACE);
-            self.bind_frame_uniforms(fog_start, fog_end, screen_w, screen_h, sky_tex,
-                fog_override, fog_color_override, ambient_light, directional_light, sun_dir,
-                shadow_tex, light_space, texel_sizes, torch_pos, torch_strength);
-            gl::BindVertexArray(self.cat_vao);
-
-            for cat in cats.iter().filter(|e| e.def.identifier == "cat") {
-                gl::Uniform1f(self.block_light_loc, cat.block_light);
-                let rot_y = -(cat.yaw.to_radians() + FRAC_PI_2);
-                // When sitting, lower the model slightly so the cat crouches
-                let sit_offset = if cat.sitting { -0.12 } else { 0.0 };
-                let pos = glam::Vec3::new(cat.position[0], cat.position[1] + sit_offset, cat.position[2]);
-                let model = glam::Mat4::from_translation(pos)
-                    * glam::Mat4::from_rotation_y(rot_y);
-                let mvp = *projection * *view * model;
-
-                gl::UniformMatrix4fv(self.model_loc, 1, gl::FALSE, model.to_cols_array().as_ptr());
-                // Static parts: body + head + ears + tail
-                gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE, mvp.to_cols_array().as_ptr());
-                gl::DrawArrays(gl::TRIANGLES, 0, CAT_STATIC_CNT);
-
-                if cat.sitting {
-                    // Draw legs as static when sitting
-                    gl::DrawArrays(gl::TRIANGLES, CAT_FL_LEG, VPB * 4);
-                } else {
-                    let swing = (cat.anim_time * 7.0 * cat.move_speed_norm()).sin() * 0.50;
-                    let pivot_y = 0.22_f32;
-
-                    let fl_p = glam::Vec3::new(-0.10, pivot_y, -0.115);
-                    let fl_m = glam::Mat4::from_translation(fl_p)
-                        * glam::Mat4::from_rotation_x(swing)
-                        * glam::Mat4::from_translation(-fl_p);
-                    gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE,
-                        (*projection * *view * model * fl_m).to_cols_array().as_ptr());
-                    gl::DrawArrays(gl::TRIANGLES, CAT_FL_LEG, VPB);
-
-                    let fr_p = glam::Vec3::new(0.10, pivot_y, -0.115);
-                    let fr_m = glam::Mat4::from_translation(fr_p)
-                        * glam::Mat4::from_rotation_x(-swing)
-                        * glam::Mat4::from_translation(-fr_p);
-                    gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE,
-                        (*projection * *view * model * fr_m).to_cols_array().as_ptr());
-                    gl::DrawArrays(gl::TRIANGLES, CAT_FR_LEG, VPB);
-
-                    let bl_p = glam::Vec3::new(-0.10, pivot_y,  0.115);
-                    let bl_m = glam::Mat4::from_translation(bl_p)
-                        * glam::Mat4::from_rotation_x(-swing)
-                        * glam::Mat4::from_translation(-bl_p);
-                    gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE,
-                        (*projection * *view * model * bl_m).to_cols_array().as_ptr());
-                    gl::DrawArrays(gl::TRIANGLES, CAT_BL_LEG, VPB);
-
-                    let br_p = glam::Vec3::new(0.10, pivot_y,  0.115);
-                    let br_m = glam::Mat4::from_translation(br_p)
-                        * glam::Mat4::from_rotation_x(swing)
-                        * glam::Mat4::from_translation(-br_p);
-                    gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE,
-                        (*projection * *view * model * br_m).to_cols_array().as_ptr());
-                    gl::DrawArrays(gl::TRIANGLES, CAT_BR_LEG, VPB);
+            // Weapon carried under the right-arm transform (skeletons).
+            if let Some(wm) = weapon_xform {
+                let (wvao, wverts) = match e.weapon {
+                    WeaponType::Sword     => (self.sword_vao, VPB * 3),
+                    WeaponType::Axe       => (self.axe_vao,   VPB * 2),
+                    WeaponType::BareHands => (0, 0),
+                };
+                if wverts > 0 {
+                    let mvp = *projection * *view * wm;
+                    gl::BindVertexArray(wvao);
+                    gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE, mvp.to_cols_array().as_ptr());
+                    gl::DrawArrays(gl::TRIANGLES, 0, wverts);
+                    gl::BindVertexArray(model.vao);
                 }
             }
-
-            gl::BindVertexArray(0);
-            gl::Enable(gl::CULL_FACE);
-        }
-
-        for cat in cats.iter().filter(|e| e.def.identifier == "cat") {
-            let frac = cat.health / cat.def.max_health;
-            if frac < 1.0 {
-                self.draw_health_bar(cat.position, frac, 0.90, view, projection);
-            }
         }
     }
 
-    pub fn draw_cat_shadows(&self, cats: &[Cat], shadow_pass: &ShadowPass) {
-        for cat in cats.iter().filter(|e| e.def.identifier == "cat") {
-            let rot_y = -(cat.yaw.to_radians() + FRAC_PI_2);
-            let sit_offset = if cat.sitting { -0.12 } else { 0.0 };
-            let pos = glam::Vec3::new(cat.position[0], cat.position[1] + sit_offset, cat.position[2]);
-            let model = glam::Mat4::from_translation(pos)
-                * glam::Mat4::from_rotation_y(rot_y);
-            shadow_pass.draw_solid_mesh(self.cat_vao, 0, VPB * 9, &model);
-        }
-    }
-
-    pub fn draw_cows(&self, cows: &[Cow], view: &glam::Mat4, projection: &glam::Mat4,
-                     fog_start: f32, fog_end: f32, screen_w: f32, screen_h: f32, sky_tex: u32,
-                     fog_override: f32, fog_color_override: glam::Vec3,
-                     ambient_light: f32, directional_light: f32, sun_dir: glam::Vec3,
-                     shadow_tex: u32, light_space: &[glam::Mat4; NUM_CASCADES],
-                     texel_sizes: &[f32; NUM_CASCADES],
-                     torch_pos: glam::Vec3, torch_strength: f32) {
-        unsafe {
-            gl::Disable(gl::CULL_FACE);
-            self.bind_frame_uniforms(fog_start, fog_end, screen_w, screen_h, sky_tex,
-                fog_override, fog_color_override, ambient_light, directional_light, sun_dir,
-                shadow_tex, light_space, texel_sizes, torch_pos, torch_strength);
-            gl::BindVertexArray(self.cow_vao);
-
-            for cow in cows.iter().filter(|e| e.def.identifier == "cow") {
-                gl::Uniform1f(self.block_light_loc, cow.block_light);
-                let rot_y = -(cow.yaw.to_radians() + FRAC_PI_2);
-                let model = glam::Mat4::from_translation(glam::Vec3::from(cow.position))
-                    * glam::Mat4::from_rotation_y(rot_y);
-                let mvp = *projection * *view * model;
-
-                gl::UniformMatrix4fv(self.model_loc, 1, gl::FALSE, model.to_cols_array().as_ptr());
-                // Static parts: body + head + snout + 2 horns
-                gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE, mvp.to_cols_array().as_ptr());
-                gl::DrawArrays(gl::TRIANGLES, 0, COW_STATIC_CNT);
-
-                let swing = (cow.anim_time * 5.5 * cow.move_speed_norm()).sin() * 0.55;
-                let pivot_y = 0.40_f32;
-
-                // Front-left leg (swings with back-right)
-                let fl_p = glam::Vec3::new(-0.16, pivot_y, -0.23);
-                let fl_m = glam::Mat4::from_translation(fl_p)
-                    * glam::Mat4::from_rotation_x(swing)
-                    * glam::Mat4::from_translation(-fl_p);
-                gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE,
-                    (*projection * *view * model * fl_m).to_cols_array().as_ptr());
-                gl::DrawArrays(gl::TRIANGLES, COW_FL_LEG, VPB);
-
-                // Front-right leg (opposite phase)
-                let fr_p = glam::Vec3::new(0.16, pivot_y, -0.23);
-                let fr_m = glam::Mat4::from_translation(fr_p)
-                    * glam::Mat4::from_rotation_x(-swing)
-                    * glam::Mat4::from_translation(-fr_p);
-                gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE,
-                    (*projection * *view * model * fr_m).to_cols_array().as_ptr());
-                gl::DrawArrays(gl::TRIANGLES, COW_FR_LEG, VPB);
-
-                // Back-left leg (opposite to front-left)
-                let bl_p = glam::Vec3::new(-0.16, pivot_y, 0.23);
-                let bl_m = glam::Mat4::from_translation(bl_p)
-                    * glam::Mat4::from_rotation_x(-swing)
-                    * glam::Mat4::from_translation(-bl_p);
-                gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE,
-                    (*projection * *view * model * bl_m).to_cols_array().as_ptr());
-                gl::DrawArrays(gl::TRIANGLES, COW_BL_LEG, VPB);
-
-                // Back-right leg (opposite to front-right)
-                let br_p = glam::Vec3::new(0.16, pivot_y, 0.23);
-                let br_m = glam::Mat4::from_translation(br_p)
-                    * glam::Mat4::from_rotation_x(swing)
-                    * glam::Mat4::from_translation(-br_p);
-                gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE,
-                    (*projection * *view * model * br_m).to_cols_array().as_ptr());
-                gl::DrawArrays(gl::TRIANGLES, COW_BR_LEG, VPB);
+    /// Shadow pass: whole mesh at the body transform (limbs unanimated).
+    pub fn draw_entity_shadows(&self, entities: &[Entity], shadow_pass: &ShadowPass) {
+        for model in &self.mob_models {
+            for e in entities.iter().filter(|e| e.def.identifier == model.identifier) {
+                let rot_y = -(e.yaw.to_radians() + FRAC_PI_2);
+                let y_off = if model.lower_when_sitting && e.sitting { -0.12 } else { 0.0 };
+                let pos = glam::Vec3::new(e.position[0], e.position[1] + y_off, e.position[2]);
+                let model_mat = glam::Mat4::from_translation(pos) * glam::Mat4::from_rotation_y(rot_y);
+                shadow_pass.draw_solid_mesh(model.vao, 0, model.shadow_verts, &model_mat);
             }
-
-            gl::BindVertexArray(0);
-            gl::Enable(gl::CULL_FACE);
-        }
-
-        for cow in cows.iter().filter(|e| e.def.identifier == "cow") {
-            let frac = cow.health / cow.def.max_health;
-            if frac < 1.0 {
-                self.draw_health_bar(cow.position, frac, 1.55, view, projection);
-            }
-        }
-    }
-
-    pub fn draw_cow_shadows(&self, cows: &[Cow], shadow_pass: &ShadowPass) {
-        for cow in cows.iter().filter(|e| e.def.identifier == "cow") {
-            let rot_y = -(cow.yaw.to_radians() + FRAC_PI_2);
-            let model = glam::Mat4::from_translation(glam::Vec3::from(cow.position))
-                * glam::Mat4::from_rotation_y(rot_y);
-            shadow_pass.draw_solid_mesh(self.cow_vao, 0, VPB * 9, &model);
         }
     }
 

@@ -2132,11 +2132,7 @@ fn main() {
                     shadow_pass.begin_cascade(i);
                     world.draw_shadow(&shadow_pass);
                     if game_state == GameState::Playing {
-                        entity_renderer.draw_shadows(&entities, &shadow_pass);
-                        entity_renderer.draw_pig_shadows(&entities, &shadow_pass);
-                        entity_renderer.draw_skeleton_shadows(&entities, &shadow_pass);
-                        entity_renderer.draw_cat_shadows(&entities, &shadow_pass);
-                        entity_renderer.draw_cow_shadows(&entities, &shadow_pass);
+                        entity_renderer.draw_entity_shadows(&entities, &shadow_pass);
                         entity_renderer.draw_workbench_shadows(&workbenches, &shadow_pass);
                         entity_renderer.draw_bed_shadows(&beds, &shadow_pass);
                         entity_renderer.draw_furnace_shadows(&furnaces, &shadow_pass);
@@ -2182,39 +2178,7 @@ fn main() {
                 if game_state == GameState::Playing {
                     let sky_tex = chunk_renderer.sky_texture();
                     item_renderer.draw(&item_entities, &view, &projection);
-                    entity_renderer.draw_chickens(&entities, &view, &projection,
-                        fog_start, fog_end, fb_w as f32, fb_h as f32, sky_tex,
-                        fog_override, fog_override_color,
-                        ambient_light, directional_light, sun_dir,
-                        shadow_pass.depth_texture_array(),
-                        shadow_pass.light_space_matrices(),
-                        shadow_pass.texel_world_sizes(),
-                        torch_pos, torch_strength);
-                    entity_renderer.draw_pigs(&entities, &view, &projection,
-                        fog_start, fog_end, fb_w as f32, fb_h as f32, sky_tex,
-                        fog_override, fog_override_color,
-                        ambient_light, directional_light, sun_dir,
-                        shadow_pass.depth_texture_array(),
-                        shadow_pass.light_space_matrices(),
-                        shadow_pass.texel_world_sizes(),
-                        torch_pos, torch_strength);
-                    entity_renderer.draw_skeletons(&entities, &view, &projection,
-                        fog_start, fog_end, fb_w as f32, fb_h as f32, sky_tex,
-                        fog_override, fog_override_color,
-                        ambient_light, directional_light, sun_dir,
-                        shadow_pass.depth_texture_array(),
-                        shadow_pass.light_space_matrices(),
-                        shadow_pass.texel_world_sizes(),
-                        torch_pos, torch_strength);
-                    entity_renderer.draw_cats(&entities, &view, &projection,
-                        fog_start, fog_end, fb_w as f32, fb_h as f32, sky_tex,
-                        fog_override, fog_override_color,
-                        ambient_light, directional_light, sun_dir,
-                        shadow_pass.depth_texture_array(),
-                        shadow_pass.light_space_matrices(),
-                        shadow_pass.texel_world_sizes(),
-                        torch_pos, torch_strength);
-                    entity_renderer.draw_cows(&entities, &view, &projection,
+                    entity_renderer.draw_entities(&entities, &view, &projection,
                         fog_start, fog_end, fb_w as f32, fb_h as f32, sky_tex,
                         fog_override, fog_override_color,
                         ambient_light, directional_light, sun_dir,
