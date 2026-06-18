@@ -161,6 +161,9 @@ pub struct Entity {
     pub weapon: WeaponType,
     /// Hostile mobs: remaining swing-animation time. 0 for passive species.
     pub attack_anim: f32,
+    /// Footstep loudness this frame (0 = silent). High while walking on the
+    /// ground; drives footstep sound and is what enemies can "hear".
+    pub noise: f32,
     pub def: Arc<EntityDef>,
     velocity: [f32; 3],
     on_ground: bool,
@@ -194,6 +197,7 @@ impl Entity {
             sitting: false,
             weapon: WeaponType::BareHands,
             attack_anim: 0.0,
+            noise: 0.0,
             def,
             velocity: [0.0; 3],
             on_ground: false,
@@ -225,6 +229,7 @@ impl Entity {
             sitting: false,
             weapon,
             attack_anim: 0.0,
+            noise: 0.0,
             def,
             velocity: [0.0; 3],
             on_ground: false,
@@ -385,7 +390,7 @@ impl Entity {
         dt: f32,
         get_block: impl Fn(i32, i32, i32) -> BlockType,
         get_sky_light: impl Fn(i32, i32, i32) -> u8,
-        player_positions: &[[f32; 3]],
+        targets: &[Target],
         sun_angle: f32,
     ) -> Option<(usize, f32)> {
         self.anim_time += dt;
@@ -410,14 +415,16 @@ impl Entity {
         // ── Target acquisition: nearest detectable player given aggro state ──
         let best_target: Option<(usize, f32)> = {
             let mut best: Option<(usize, f32)> = None;
-            for (i, &ppos) in player_positions.iter().enumerate() {
-                let dx = ppos[0] - self.position[0];
-                let dz = ppos[2] - self.position[2];
-                let dy = ppos[1] - self.position[1];
+            for (i, t) in targets.iter().enumerate() {
+                let dx = t.pos[0] - self.position[0];
+                let dz = t.pos[2] - self.position[2];
+                let dy = t.pos[1] - self.position[1];
                 let dist2 = dx*dx + dz*dz + dy*dy;
                 let detected = match h.aggro {
-                    AggroState::Idle =>
-                        detect_from_idle(self.position, self.yaw, ppos, &get_block),
+                    AggroState::Idle => detect_from_idle(
+                        self.position, self.yaw, t,
+                        self.def.hearing_radius, self.def.vision_radius, self.def.vision_angle,
+                        &get_block),
                     AggroState::Chasing | AggroState::InCombat =>
                         dist2 < LOSE_TARGET_R2,
                 };
@@ -437,8 +444,8 @@ impl Entity {
 
         // ── Aggro state transitions ──
         let target_pos = h.target_player
-            .and_then(|i| player_positions.get(i))
-            .copied();
+            .and_then(|i| targets.get(i))
+            .map(|t| t.pos);
 
         if h.target_lost_timer >= LOSE_TARGET_TIME {
             h.aggro = AggroState::Idle;
@@ -617,6 +624,9 @@ impl Entity {
             self.velocity[2] = 0.0;
             if self.on_ground { self.velocity[1] = js; self.on_ground = false; }
         }
+
+        // Noise: loud while actually walking on the ground, silent otherwise.
+        self.noise = if self.on_ground && self.move_speed > 0.0 { 1.0 } else { 0.0 };
     }
 }
 
@@ -639,10 +649,8 @@ pub enum WeaponType { BareHands, Axe, Sword }
 enum AggroState { Idle, Chasing, InCombat }
 
 const COMBAT_RANGE: f32 = 2.0;   // Metres: enter/attack range
-const PASSIVE_DETECT_R2: f32 = 36.0;   // 6² — always noticed
-const ACTIVE_DETECT_R2:  f32 = 196.0;  // 14² — frontal cone + LOS
-const LOSE_TARGET_R2:    f32 = 576.0;  // 24² — give up chase
-const LOSE_TARGET_TIME:  f32 = 4.0;    // seconds without target → Idle
+const LOSE_TARGET_R2:    f32 = 1024.0; // 32² — give up chase once aggroed
+const LOSE_TARGET_TIME:  f32 = 5.0;    // seconds without target → Idle
 
 /// DDA line-of-sight: returns false if any solid block sits between the two points.
 fn has_line_of_sight(
@@ -667,20 +675,33 @@ fn has_line_of_sight(
     true
 }
 
-/// Returns true when a player at `player_pos` should be noticed by an Idle skeleton.
+/// A potential target the hostile AI can notice (the local player, or remotes).
+pub struct Target {
+    pub pos: [f32; 3],
+    /// When sneaking, the target is silent and isn't heard at close range.
+    pub sneaking: bool,
+}
+
+/// Whether an Idle mob notices `target`, using its per-entity detection ranges:
+///   • within `hearing_r` blocks → noticed in any direction unless sneaking;
+///   • out to `vision_r` blocks  → noticed only inside the `vision_angle` cone
+///     with clear line of sight (sneaking does not hide you from sight here).
 fn detect_from_idle(
     skel_pos: [f32; 3], skel_yaw: f32,
-    player_pos: [f32; 3],
+    target: &Target,
+    hearing_r: f32, vision_r: f32, vision_angle: f32,
     get_block: &impl Fn(i32, i32, i32) -> BlockType,
 ) -> bool {
-    let dx = player_pos[0] - skel_pos[0];
-    let dz = player_pos[2] - skel_pos[2];
+    let dx = target.pos[0] - skel_pos[0];
+    let dz = target.pos[2] - skel_pos[2];
     let dist2_xz = dx * dx + dz * dz;
-    if dist2_xz < PASSIVE_DETECT_R2 { return true; }
-    if dist2_xz < ACTIVE_DETECT_R2 {
+    if dist2_xz < hearing_r * hearing_r {
+        return !target.sneaking;
+    }
+    if dist2_xz < vision_r * vision_r {
         let angle_to = dx.atan2(dz).to_degrees();
-        if angle_diff(angle_to, skel_yaw).abs() < 60.0 {
-            return has_line_of_sight(skel_pos, player_pos, get_block);
+        if angle_diff(angle_to, skel_yaw).abs() < vision_angle * 0.5 {
+            return has_line_of_sight(skel_pos, target.pos, get_block);
         }
     }
     false

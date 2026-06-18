@@ -9,6 +9,9 @@ const WATER_GRAVITY: f32 = -5.0;
 const JUMP_SPEED: f32 = 8.0;
 const MOVE_SPEED: f32 = 5.0;
 const RUN_SPEED: f32 = 10.0;
+const SNEAK_SPEED: f32 = 1.6;       // crouch-walk speed
+const EYE_HEIGHT: f32 = 1.6;        // standing camera height above feet
+const SNEAK_EYE_HEIGHT: f32 = 1.3;  // crouched camera height
 const WATER_SPEED: f32 = 2.2;
 const SWIM_UP_SPEED: f32 = 3.5;
 const MAX_WATER_FALL: f32 = -2.0;
@@ -25,6 +28,10 @@ pub struct Player {
     pub velocity: [f32; 3],
     pub on_ground: bool,
     pub flying: bool,
+    /// Crouch-sneak: slower, lower camera, no footstep noise.
+    pub sneaking: bool,
+    /// Footstep loudness this frame (0 = silent). Low while sneaking.
+    pub noise: f32,
     pub inventory: [Option<(ItemType, u32)>; INVENTORY_SIZE],
     mouse_sensitivity: f32,
     fall_peak_y: f32,
@@ -44,6 +51,8 @@ impl Player {
             velocity: [0.0; 3],
             on_ground: false,
             flying: false,
+            sneaking: false,
+            noise: 0.0,
             inventory,
             mouse_sensitivity: 0.1,
             fall_peak_y: 64.0,
@@ -108,8 +117,17 @@ impl Player {
         self.velocity[1] = 0.0;
     }
 
-    pub fn walk(&mut self, forward: bool, back: bool, left: bool, right: bool, running: bool, in_water: bool, flying: bool) {
-        let speed = if flying { FLY_MOVE_SPEED } else if in_water { WATER_SPEED } else if running { RUN_SPEED } else { MOVE_SPEED };
+    /// Camera height above the feet — lowered while sneaking (crouch).
+    pub fn eye_height(&self) -> f32 {
+        if self.sneaking && !self.flying { SNEAK_EYE_HEIGHT } else { EYE_HEIGHT }
+    }
+
+    pub fn walk(&mut self, forward: bool, back: bool, left: bool, right: bool, running: bool, sneaking: bool, in_water: bool, flying: bool) {
+        let speed = if flying { FLY_MOVE_SPEED }
+            else if in_water { WATER_SPEED }
+            else if sneaking { SNEAK_SPEED }
+            else if running { RUN_SPEED }
+            else { MOVE_SPEED };
         let mut vx = 0.0f32;
         let mut vz = 0.0f32;
 

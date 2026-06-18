@@ -28,6 +28,36 @@ struct Components {
     /// "passive" (wander/flee) or "hostile" (skeleton-style combat AI).
     #[serde(default)]
     behavior: Behavior,
+    /// How this mob detects targets (hearing/sight ranges + field of view).
+    #[serde(default)]
+    vision: VisionComp,
+}
+
+fn default_hearing_radius() -> f32 { 8.0 }
+fn default_vision_radius() -> f32 { 16.0 }
+fn default_vision_angle() -> f32 { 160.0 }
+
+#[derive(Deserialize)]
+struct VisionComp {
+    /// Blocks within which the mob always notices a non-sneaking target.
+    #[serde(default = "default_hearing_radius")]
+    hearing_radius: f32,
+    /// Blocks within which the mob notices a target inside its field of view.
+    #[serde(default = "default_vision_radius")]
+    vision_radius: f32,
+    /// Total field-of-view cone (degrees) used beyond the hearing radius.
+    #[serde(default = "default_vision_angle")]
+    vision_angle: f32,
+}
+
+impl Default for VisionComp {
+    fn default() -> Self {
+        VisionComp {
+            hearing_radius: default_hearing_radius(),
+            vision_radius:  default_vision_radius(),
+            vision_angle:   default_vision_angle(),
+        }
+    }
 }
 
 /// Selects which AI drives a mob at runtime. Defaults to passive.
@@ -111,6 +141,9 @@ pub struct EntityDef {
     pub flee_speed_mult: f32,
     pub tameable: bool,
     pub behavior: Behavior,
+    pub hearing_radius: f32,
+    pub vision_radius: f32,
+    pub vision_angle: f32,
     pub idle_chance: f32,
     pub idle_range: (f32, f32),
     pub walk_range: (f32, f32),
@@ -140,6 +173,9 @@ impl EntityDef {
             flee_speed_mult: c.movement.flee_speed_mult,
             tameable:      c.tameable,
             behavior:      c.behavior,
+            hearing_radius: c.vision.hearing_radius,
+            vision_radius:  c.vision.vision_radius,
+            vision_angle:   c.vision.vision_angle,
             idle_chance:   c.wander.idle_chance,
             idle_range:    (c.wander.idle_min_secs, c.wander.idle_max_secs),
             walk_range:    (c.wander.walk_min_secs, c.wander.walk_max_secs),

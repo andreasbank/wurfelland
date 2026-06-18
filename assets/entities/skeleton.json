@@ -21,6 +21,7 @@
     "loot": [
       { "item": "bone", "chance": 0.80 }
     ],
-    "behavior": "hostile"
+    "behavior": "hostile",
+    "vision": { "hearing_radius": 8, "vision_radius": 16, "vision_angle": 160 }
   }
 }

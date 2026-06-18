@@ -24,7 +24,7 @@ pub mod entity_def;
 pub use entity_def::{EntityRegistry, Behavior};
 
 pub mod entity;
-pub use entity::{Entity, nearest_entity_hit};
+pub use entity::{Entity, Target, nearest_entity_hit};
 
 // ── Placed workbench prop ─────────────────────────────────────────────────────
 pub struct WorkbenchProp {

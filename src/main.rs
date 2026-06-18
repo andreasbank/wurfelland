@@ -16,7 +16,7 @@ mod camera;
 use camera::Camera;
 
 mod world;
-use world::{World, ItemEntity, ItemType, Entity, Behavior, nearest_entity_hit, EntityRegistry, WorkbenchProp, BedProp, FurnaceProp};
+use world::{World, ItemEntity, ItemType, Entity, Behavior, Target, nearest_entity_hit, EntityRegistry, WorkbenchProp, BedProp, FurnaceProp};
 use world::block::BlockType;
 
 mod renderer;
@@ -336,6 +336,11 @@ fn main() {
         }
         let mut dormant: HashMap<[i32; 2], DormantColumn> = HashMap::new();
         let mut spawned_columns: std::collections::HashSet<[i32; 2]> = std::collections::HashSet::new();
+
+        // Footstep audio (file optional — added later; gate to avoid log spam).
+        const FOOTSTEP_SOUND: &str = "assets/sounds/footstep.mp3";
+        let has_footstep_sound = std::path::Path::new(FOOTSTEP_SOUND).exists();
+        let mut footstep_timer = 0.0f32;
 
         let mut hotbar: [Option<(ItemType, u32)>; 9] = [None; 9];
         let mut selected_slot: usize = 0;
@@ -1531,12 +1536,16 @@ fn main() {
                         };
 
                         // Player movement
+                        let move_fwd  = *keys_pressed.get(&Key::W).unwrap_or(&false);
+                        let move_back = *keys_pressed.get(&Key::S).unwrap_or(&false);
+                        let move_left = *keys_pressed.get(&Key::A).unwrap_or(&false);
+                        let move_right= *keys_pressed.get(&Key::D).unwrap_or(&false);
+                        // Sneak: crouch + slow + silent (Left Control). Not while flying.
+                        player.sneaking = *keys_pressed.get(&Key::LeftControl).unwrap_or(&false) && !player.flying;
                         player.walk(
-                            *keys_pressed.get(&Key::W).unwrap_or(&false),
-                            *keys_pressed.get(&Key::S).unwrap_or(&false),
-                            *keys_pressed.get(&Key::A).unwrap_or(&false),
-                            *keys_pressed.get(&Key::D).unwrap_or(&false),
+                            move_fwd, move_back, move_left, move_right,
                             *keys_pressed.get(&Key::LeftShift).unwrap_or(&false),
+                            player.sneaking,
                             in_water,
                             player.flying,
                         );
@@ -1571,10 +1580,25 @@ fn main() {
                             player.health = player.health.saturating_sub(fall_dmg);
                         }
 
-                        // Camera follows player
+                        // Noise: walking on the ground is loud; sneaking is silent.
+                        let moving = move_fwd || move_back || move_left || move_right;
+                        player.noise = if player.sneaking || player.flying || in_water { 0.0 }
+                            else if moving && player.on_ground { 1.0 } else { 0.0 };
+                        // Footstep sound on a cadence while making noise.
+                        if player.noise > 0.0 {
+                            footstep_timer -= delta_time;
+                            if footstep_timer <= 0.0 {
+                                if has_footstep_sound { audio.play_sound(FOOTSTEP_SOUND); }
+                                footstep_timer = 0.35;
+                            }
+                        } else {
+                            footstep_timer = 0.0; // next step plays immediately
+                        }
+
+                        // Camera follows player (lowered while crouch-sneaking)
                         camera.update_pitch_yaw(player.pitch, player.yaw);
                         camera.move_to_abs(
-                            player.position[0], player.position[1] + 1.6, player.position[2],
+                            player.position[0], player.position[1] + player.eye_height(), player.position[2],
                         );
 
                         let cam_pos = [camera.position.x, camera.position.y, camera.position.z];
@@ -1737,11 +1761,12 @@ fn main() {
                         let sim_r2 = if sim_r == 0 { i32::MAX } else { sim_r * sim_r };
                         let pc_x = (player.position[0] / 16.0).floor() as i32;
                         let pc_z = (player.position[2] / 16.0).floor() as i32;
-                        // Player positions for hostile AI: local player first, then remotes.
-                        let skel_targets: Vec<[f32; 3]> = {
-                            let mut v = vec![player.position];
+                        // Targets for hostile AI: local player first, then remotes.
+                        // Remote players' sneak state isn't networked yet → assume false.
+                        let skel_targets: Vec<Target> = {
+                            let mut v = vec![Target { pos: player.position, sneaking: player.sneaking }];
                             if let Some(ref srv) = net_server {
-                                for (pos, _, _) in srv.remote_players() { v.push(pos); }
+                                for (pos, _, _) in srv.remote_players() { v.push(Target { pos, sneaking: false }); }
                             }
                             v
                         };
