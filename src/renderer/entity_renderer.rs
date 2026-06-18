@@ -82,6 +82,24 @@ fn build_geo_mob(bones: &[crate::renderer::geo_model::GeoBoneData], scale: f32)
     (mesh, ranges)
 }
 
+/// Build a rigid entity-format mesh from a `.geo.json`'s bones at `scale`,
+/// keeping the model's authored origin (no centring) so e.g. a weapon's grip
+/// stays at the origin for hand attachment. Returns (mesh, vert_count).
+fn build_geo_static(bones: &[crate::renderer::geo_model::GeoBoneData], scale: f32) -> (Vec<f32>, i32) {
+    let mut mesh = Vec::new();
+    for b in bones {
+        for c in &b.cubes {
+            let (o, s) = (c.origin, c.size);
+            add_box(&mut mesh,
+                o[0] * scale, o[1] * scale, o[2] * scale,
+                (o[0] + s[0]) * scale, (o[1] + s[1]) * scale, (o[2] + s[2]) * scale,
+                b.color.0, b.color.1, b.color.2);
+        }
+    }
+    let n = (mesh.len() / STRIDE) as i32;
+    (mesh, n)
+}
+
 /// Diagonal quadruped gait: front-left & back-right swing together, the other
 /// diagonal opposite. Bone names follow `front_left_leg` / `back_right_leg` etc.
 fn diagonal_leg_phase(name: &str) -> f32 {
@@ -91,34 +109,6 @@ fn diagonal_leg_phase(name: &str) -> f32 {
 // Mob bodies are loaded from .geo.json via `build_geo_mob`; only attachments
 // (weapons) and placed props are still hand-built below. One box = VPB verts.
 const VPB: i32 = 36; // verts per box (6 faces × 6 verts)
-
-// Sword held in skeleton right arm (x≈0.15..0.27, arm centre x=0.21).
-// Grip overlaps the base of the arm; guard and blade hang below.
-fn build_sword_weapon_mesh() -> Vec<f32> {
-    let mut v = Vec::new();
-    let silver = [0.80f32, 0.82, 0.87]; // blade
-    let brown  = [0.35f32, 0.22, 0.10]; // grip
-    let gray   = [0.60f32, 0.62, 0.65]; // guard
-    // Grip (lower part of arm + a bit below)
-    add_box(&mut v,  0.185, 0.40, -0.022,  0.235, 0.65,  0.022, brown[0], brown[1], brown[2]);
-    // Guard (crosspiece)
-    add_box(&mut v,  0.10,  0.60, -0.025,  0.32,  0.67,  0.025, gray[0],  gray[1],  gray[2]);
-    // Blade (thin, long)
-    add_box(&mut v,  0.204, 0.00, -0.012,  0.216, 0.60,  0.012, silver[0], silver[1], silver[2]);
-    v
-}
-
-// Axe held in skeleton right arm.
-fn build_axe_weapon_mesh() -> Vec<f32> {
-    let mut v = Vec::new();
-    let wood = [0.38f32, 0.24, 0.11]; // handle
-    let iron = [0.52f32, 0.53, 0.57]; // axe head
-    // Handle
-    add_box(&mut v,  0.185, 0.28, -0.022,  0.235, 0.65,  0.022, wood[0], wood[1], wood[2]);
-    // Axe head (wider, slightly asymmetric — blade faces away from body)
-    add_box(&mut v,  0.08,  0.44, -0.045,  0.34,  0.68,  0.045, iron[0], iron[1], iron[2]);
-    v
-}
 
 fn build_workbench_mesh() -> Vec<f32> {
     let mut v = Vec::new();
@@ -271,8 +261,10 @@ pub struct EntityRenderer {
     furnace_vbo: u32,
     sword_vao: u32,
     sword_vbo: u32,
+    sword_vert_count: i32,
     axe_vao: u32,
     axe_vbo: u32,
+    axe_vert_count: i32,
     shader: u32,
     mvp_loc: i32,
     model_loc: i32,
@@ -358,6 +350,19 @@ impl EntityRenderer {
         }
     }
 
+    /// Load a `.geo.json` weapon into a rigid lit VAO for hand attachment.
+    /// Returns `(vao, vbo, vert_count)`, or zeros if it fails to load.
+    fn load_geo_weapon(path: &str, scale: f32) -> (u32, u32, i32) {
+        match crate::renderer::geo_model::load_bones(path) {
+            Ok(bones) => {
+                let (mesh, count) = build_geo_static(&bones, scale);
+                let (vao, vbo) = Self::upload_mesh(&mesh);
+                (vao, vbo, count)
+            }
+            Err(e) => { eprintln!("[entity_renderer] {}: {}", path, e); (0, 0, 0) }
+        }
+    }
+
     pub fn new() -> Self {
         // ── Mobs are all data-driven from .geo.json (limbs split into pivoted
         //    bones). The closure maps a bone name → its animation; bones with no
@@ -401,8 +406,13 @@ impl EntityRenderer {
         let (workbench_vao, workbench_vbo) = Self::upload_mesh(&build_workbench_mesh());
         let (bed_vao, bed_vbo) = Self::upload_mesh(&build_bed_mesh());
         let (furnace_vao, furnace_vbo) = Self::upload_mesh(&build_furnace_mesh());
-        let (sword_vao, sword_vbo) = Self::upload_mesh(&build_sword_weapon_mesh());
-        let (axe_vao, axe_vbo) = Self::upload_mesh(&build_axe_weapon_mesh());
+        // Weapons share the player's tool models (no duplicate axe): the skeleton
+        // wields stone_axe.geo.json and sword.geo.json, attached to its hand below.
+        const WEAPON_SCALE: f32 = 0.03; // MC units → blocks
+        let (sword_vao, sword_vbo, sword_vert_count) =
+            Self::load_geo_weapon("assets/models/sword/sword.geo.json", WEAPON_SCALE);
+        let (axe_vao, axe_vbo, axe_vert_count) =
+            Self::load_geo_weapon("assets/models/stone_axe/stone_axe.geo.json", WEAPON_SCALE);
 
         unsafe {
 
@@ -542,7 +552,7 @@ impl EntityRenderer {
                 mob_models,
                 vao, vbo, pig_vao, pig_vbo, skel_vao, skel_vbo, cat_vao, cat_vbo, cow_vao, cow_vbo,
                 workbench_vao, workbench_vbo, bed_vao, bed_vbo, furnace_vao, furnace_vbo,
-                sword_vao, sword_vbo, axe_vao, axe_vbo,
+                sword_vao, sword_vbo, sword_vert_count, axe_vao, axe_vbo, axe_vert_count,
                 shader,
                 mvp_loc, model_loc,
                 fog_start_loc, fog_end_loc, fog_override_loc, fog_color_override_loc,
@@ -734,15 +744,21 @@ impl EntityRenderer {
                 gl::DrawArrays(gl::TRIANGLES, part.box_idx * VPB, VPB);
             }
 
-            // Weapon carried under the right-arm transform (skeletons).
+            // Weapon carried under the right-arm transform (skeletons). The shared
+            // tool models are authored upright with the grip at the origin, so an
+            // attach transform flips them to hang from the hand and aim forward.
             if let Some(wm) = weapon_xform {
-                let (wvao, wverts) = match e.weapon {
-                    WeaponType::Sword     => (self.sword_vao, VPB * 3),
-                    WeaponType::Axe       => (self.axe_vao,   VPB * 2),
-                    WeaponType::BareHands => (0, 0),
+                use std::f32::consts::{PI, FRAC_PI_2};
+                let grip = glam::Mat4::from_translation(glam::Vec3::new(0.21, 0.66, -0.05));
+                let (wvao, wverts, attach) = match e.weapon {
+                    WeaponType::Sword => (self.sword_vao, self.sword_vert_count,
+                        grip * glam::Mat4::from_rotation_x(PI)),
+                    WeaponType::Axe => (self.axe_vao, self.axe_vert_count,
+                        grip * glam::Mat4::from_rotation_x(PI) * glam::Mat4::from_rotation_y(FRAC_PI_2)),
+                    WeaponType::BareHands => (0, 0, glam::Mat4::IDENTITY),
                 };
                 if wverts > 0 {
-                    let mvp = *projection * *view * wm;
+                    let mvp = *projection * *view * wm * attach;
                     gl::BindVertexArray(wvao);
                     gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE, mvp.to_cols_array().as_ptr());
                     gl::DrawArrays(gl::TRIANGLES, 0, wverts);
