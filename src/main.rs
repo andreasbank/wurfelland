@@ -237,6 +237,29 @@ fn spawn_column_entities(
     }
 }
 
+/// Camera viewpoint, cycled with F5.
+#[derive(Clone, Copy, PartialEq)]
+enum ViewMode {
+    FirstPerson,
+    ThirdBack,  // camera behind the player, looking forward
+    ThirdFront, // camera in front, looking back at the player
+}
+
+/// Distance the third-person camera can sit from the eye before a wall blocks it.
+/// Casts from `eye` along `dir`, pulling in short of the first solid block.
+fn third_person_distance(eye: glam::Vec3, dir: glam::Vec3, world: &World) -> f32 {
+    const MAX: f32 = 4.0;
+    let mut t = 0.4;
+    while t < MAX {
+        let p = eye + dir * t;
+        if world.get_block(p.x.floor() as i32, p.y.floor() as i32, p.z.floor() as i32).is_solid() {
+            return (t - 0.2).max(0.3);
+        }
+        t += 0.1;
+    }
+    MAX
+}
+
 fn main() {
     let mut glfw = glfw::init_no_callbacks().unwrap();
 
@@ -384,6 +407,15 @@ fn main() {
         let mut last_mouse_x = 800.0f32;
         let mut last_mouse_y = 600.0f32;
         let mut first_mouse  = true;
+        // View mode (F5) and the player's aim ray (eye + look), kept separate from the
+        // render camera so block targeting stays at the eyes in third person.
+        let mut view_mode = ViewMode::FirstPerson;
+        let mut aim_pos = glam::Vec3::ZERO;
+        let mut aim_dir = glam::Vec3::new(0.0, 0.0, -1.0);
+        // Local-player animation state for the third-person self-model.
+        let mut local_crouch_t = 0.0f32;
+        let mut local_anim_time = 0.0f32;
+        let mut local_move_amount = 0.0f32;
 
         use std::collections::HashMap;
         let mut keys_pressed: HashMap<Key, bool> = HashMap::new();
@@ -931,8 +963,8 @@ fn main() {
 
                     glfw::WindowEvent::MouseButton(glfw::MouseButton::Button2, Action::Press, _) => {
                         if game_state == GameState::Playing && !paused && !bag_open && !build_open {
-                            let ro = [camera.position.x, camera.position.y, camera.position.z];
-                            let rd = [camera.front.x,    camera.front.y,    camera.front.z];
+                            let ro = [aim_pos.x, aim_pos.y, aim_pos.z];
+                            let rd = [aim_dir.x, aim_dir.y, aim_dir.z];
                             let holding_furnace   = hotbar[selected_slot].map_or(false, |(item, _)| item == ItemType::Furnace);
                             let holding_bed       = hotbar[selected_slot].map_or(false, |(item, _)| item == ItemType::Bed);
                             let holding_workbench = hotbar[selected_slot].map_or(false, |(item, _)| item == ItemType::Workbench);
@@ -1100,6 +1132,15 @@ fn main() {
 
                     glfw::WindowEvent::Key(Key::F3, _, Action::Press, _) => {
                         chunk_outlines = !chunk_outlines;
+                    }
+
+                    glfw::WindowEvent::Key(Key::F5, _, Action::Press, _) => {
+                        // Cycle: first-person → third-person (back) → third-person (front).
+                        view_mode = match view_mode {
+                            ViewMode::FirstPerson => ViewMode::ThirdBack,
+                            ViewMode::ThirdBack   => ViewMode::ThirdFront,
+                            ViewMode::ThirdFront  => ViewMode::FirstPerson,
+                        };
                     }
 
                     glfw::WindowEvent::Key(Key::F12, _, Action::Press, _) => {
@@ -1540,8 +1581,10 @@ fn main() {
                         let move_back = *keys_pressed.get(&Key::S).unwrap_or(&false);
                         let move_left = *keys_pressed.get(&Key::A).unwrap_or(&false);
                         let move_right= *keys_pressed.get(&Key::D).unwrap_or(&false);
-                        // Sneak: crouch + slow + silent (Left Control). Not while flying.
-                        player.sneaking = *keys_pressed.get(&Key::LeftControl).unwrap_or(&false) && !player.flying;
+                        // Sneak: crouch + slow + silent (Left Control). Not while flying;
+                        // stays crouched if there's no headroom to stand back up.
+                        let wants_sneak = *keys_pressed.get(&Key::LeftControl).unwrap_or(&false);
+                        player.update_sneak(wants_sneak, |x, y, z| world.get_block(x, y, z).is_solid());
                         player.walk(
                             move_fwd, move_back, move_left, move_right,
                             *keys_pressed.get(&Key::LeftShift).unwrap_or(&false),
@@ -1595,14 +1638,38 @@ fn main() {
                             footstep_timer = 0.0; // next step plays immediately
                         }
 
-                        // Camera follows player (lowered while crouch-sneaking)
-                        camera.update_pitch_yaw(player.pitch, player.yaw);
-                        camera.move_to_abs(
+                        // Aim ray: the player's eye + look direction (lowered while sneaking).
+                        // All interaction raycasts use this, regardless of view mode.
+                        let eye = glam::Vec3::new(
                             player.position[0], player.position[1] + player.eye_height(), player.position[2],
                         );
+                        camera.update_pitch_yaw(player.pitch, player.yaw);
+                        let look = camera.front;
+                        aim_pos = eye;
+                        aim_dir = look;
 
-                        let cam_pos = [camera.position.x, camera.position.y, camera.position.z];
-                        let cam_dir = [camera.front.x,    camera.front.y,    camera.front.z];
+                        // Render camera: first-person sits at the eye; third-person orbits the
+                        // player, pulling in if a wall is between the camera and the eye.
+                        match view_mode {
+                            ViewMode::FirstPerson => { camera.position = eye; }
+                            ViewMode::ThirdBack => {
+                                let d = third_person_distance(eye, -look, &world);
+                                camera.position = eye - look * d;
+                            }
+                            ViewMode::ThirdFront => {
+                                let d = third_person_distance(eye, look, &world);
+                                camera.position = eye + look * d;
+                                camera.front = -look;
+                            }
+                        }
+
+                        // Drive the third-person self-model's walk + crouch (same eases as remotes).
+                        local_anim_time += delta_time;
+                        net::messages::ease(&mut local_crouch_t, if player.sneaking { 1.0 } else { 0.0 }, delta_time / 0.15);
+                        net::messages::ease(&mut local_move_amount, if moving { 1.0 } else { 0.0 }, delta_time / 0.12);
+
+                        let cam_pos = [aim_pos.x, aim_pos.y, aim_pos.z];
+                        let cam_dir = [aim_dir.x, aim_dir.y, aim_dir.z];
 
                         entity_hit_cooldown = (entity_hit_cooldown - delta_time).max(0.0);
 
@@ -1765,7 +1832,7 @@ fn main() {
                         let skel_targets: Vec<Target> = {
                             let mut v = vec![Target { pos: player.position, sneaking: player.sneaking }];
                             if let Some(ref srv) = net_server {
-                                for (pos, _, _, sneaking) in srv.remote_players() { v.push(Target { pos, sneaking }); }
+                                for p in srv.remote_players() { v.push(Target { pos: p.pos, sneaking: p.sneaking }); }
                             }
                             v
                         };
@@ -2243,17 +2310,18 @@ fn main() {
                         shadow_pass.depth_texture_array(),
                         shadow_pass.light_space_matrices(),
                         shadow_pass.texel_world_sizes());
-                    let remote_peers: Vec<([f32; 3], f32, u8, bool)> = if let Some(ref server) = net_server {
+                    let remote_peers: Vec<net::messages::PeerView> = if let Some(ref server) = net_server {
                         server.remote_players()
                     } else if let Some(ref client) = net_client {
                         client.remote_players()
                     } else { vec![] };
-                    for (pos, yaw, health, _sneaking) in remote_peers {
-                        player_renderer.draw(pos, yaw, &view, &projection, PlayerDrawMode::Full, 0.0,
+                    for p in remote_peers {
+                        player_renderer.draw(p.pos, p.yaw, &view, &projection, PlayerDrawMode::Full, 0.0,
+                            p.crouch_t, p.anim_time, p.move_amount, p.pitch,
                             fog_start, fog_end, fb_w as f32, fb_h as f32, sky_tex,
                             fog_override, fog_override_color);
-                        if health < 100 {
-                            player_renderer.draw_health_bar(pos, health as f32 / 100.0, &view, &projection);
+                        if p.health < 100 {
+                            player_renderer.draw_health_bar(p.pos, p.health as f32 / 100.0, p.crouch_t, &view, &projection);
                         }
                     }
                 }
@@ -2301,14 +2369,25 @@ fn main() {
                 } else { 0.0 };
                 let lift_angle = if hotbar[selected_slot].is_some() { -0.9f32 } else { 0.0 };
                 let arm_angle = swing_angle + lift_angle;
-                player_renderer.draw(player.position, player.yaw, &view, &projection,
-                    PlayerDrawMode::ArmsOnly, arm_angle,
-                    fog_start, fog_end, fb_w as f32, fb_h as f32, sky_tex,
-                    fog_override, fog_override_color);
+                if matches!(view_mode, ViewMode::FirstPerson) {
+                    // First-person: just the held arms (crouch/walk/pitch unused).
+                    player_renderer.draw(player.position, player.yaw, &view, &projection,
+                        PlayerDrawMode::ArmsOnly, arm_angle,
+                        0.0, 0.0, 0.0, 0.0,
+                        fog_start, fog_end, fb_w as f32, fb_h as f32, sky_tex,
+                        fog_override, fog_override_color);
+                } else {
+                    // Third-person: the full body, crouching and walk-animating like remotes.
+                    player_renderer.draw(player.position, player.yaw, &view, &projection,
+                        PlayerDrawMode::Full, swing_angle,
+                        local_crouch_t, local_anim_time, local_move_amount, player.pitch,
+                        fog_start, fog_end, fb_w as f32, fb_h as f32, sky_tex,
+                        fog_override, fog_override_color);
+                }
 
                 if outline_enabled && !paused && !bag_open && !build_open {
-                    let ro  = [camera.position.x, camera.position.y, camera.position.z];
-                    let rd  = [camera.front.x,    camera.front.y,    camera.front.z];
+                    let ro  = [aim_pos.x, aim_pos.y, aim_pos.z];
+                    let rd  = [aim_dir.x, aim_dir.y, aim_dir.z];
                     let ent_dist = nearest_entity_hit(&entities, ro, rd, 5.0).map(|(_, t)| t);
                     if let Some(block) = world.raycast(ro, rd, 5.0) {
                         let dx = block[0] as f32 + 0.5 - ro[0];
@@ -2331,9 +2410,9 @@ fn main() {
                     }
                 }
 
-                // FPV arm + held item — view/camera space, always visible.
+                // FPV arm + held item — view/camera space, first-person only.
                 // Depth clear so they render on top of world geometry.
-                if let Some((item, _)) = hotbar[selected_slot] {
+                if let (true, Some((item, _))) = (matches!(view_mode, ViewMode::FirstPerson), hotbar[selected_slot]) {
                     let cycle = (swing_time * 3.0_f32) % 1.0;
                     let swing_t = if lmb_held {
                         if cycle < 0.30 { (cycle / 0.30_f32).sqrt() }
@@ -2348,7 +2427,7 @@ fn main() {
                 // ── HUD ───────────────────────────────────────────────────────
                 minimap.update(&world, player.position[0], player.position[2]);
 
-                let eye = camera.position;
+                let eye = aim_pos;
                 if world.get_block(eye.x.floor() as i32, eye.y.floor() as i32, eye.z.floor() as i32)
                     == world::BlockType::Water
                 {
@@ -2375,7 +2454,7 @@ fn main() {
                 let minimap_ent_col: Vec<(f32, f32, f32)> = entities.iter()
                     .map(|_| (1.0f32, 0.55, 0.0)).collect();
                 minimap.draw(player.position[0], player.position[2],
-                    camera.front.x, camera.front.z,
+                    aim_dir.x, aim_dir.z,
                     &minimap_ent_pos, &minimap_ent_col, win_w, win_h);
 
                 if bag_open {

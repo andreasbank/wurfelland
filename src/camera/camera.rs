@@ -41,9 +41,6 @@ impl Camera {
         self.front = front.normalize();
     }
 
-    pub fn move_to_abs(&mut self, x: f32, y: f32, z: f32) {
-        self.position = Vec3::new(x, y, z);
-    }
 
     pub fn on_resize(&mut self, width: u32, height: u32) {
         self.aspect_ratio = width as f32 / height as f32;

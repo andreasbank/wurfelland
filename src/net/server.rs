@@ -5,13 +5,21 @@ use std::time::{Duration, SystemTime};
 use renet::{RenetServer, ServerEvent, DefaultChannel};
 use renet_netcode::{NetcodeServerTransport, ServerAuthentication, ServerConfig};
 
-use super::messages::{ClientMessage, ServerMessage, NetEntity, NetItem, PROTOCOL_ID};
+use super::messages::{ClientMessage, ServerMessage, NetEntity, NetItem, PeerView, ease, PROTOCOL_ID};
 
 struct RemotePlayer {
     position: [f32; 3],
     yaw: f32,
+    pitch: f32,
     health: u8,
     sneaking: bool,
+    /// Walk-cycle clock + whether the player moved on the last state update.
+    anim_time: f32,
+    moving: bool,
+    /// Smoothed walk amplitude (0..1), eased toward `moving`.
+    move_amount: f32,
+    /// Smoothed crouch amount (0..1), eased toward `sneaking`.
+    crouch_t: f32,
 }
 
 pub struct GameServer {
@@ -66,6 +74,13 @@ impl GameServer {
         self.transport.update(duration, &mut self.server).ok();
         self.server.update(duration);
 
+        // Advance each remote player's walk clock and ease crouch + walk amplitude.
+        for p in self.remote_players.values_mut() {
+            p.anim_time += dt;
+            ease(&mut p.crouch_t, if p.sneaking { 1.0 } else { 0.0 }, dt / 0.15);
+            ease(&mut p.move_amount, if p.moving { 1.0 } else { 0.0 }, dt / 0.12);
+        }
+
         // Handle server events (connect / disconnect)
         while let Some(event) = self.server.get_event() {
             match event {
@@ -73,8 +88,13 @@ impl GameServer {
                     self.remote_players.insert(client_id, RemotePlayer {
                         position: [0.0, 0.0, 0.0],
                         yaw: 0.0,
+                        pitch: 0.0,
                         health: 100,
                         sneaking: false,
+                        anim_time: 0.0,
+                        moving: false,
+                        move_amount: 0.0,
+                        crouch_t: 0.0,
                     });
                     let info = ServerMessage::WorldInfo { seed: self.seed };
                     if let Ok(bytes) = bincode::serialize(&info) {
@@ -149,8 +169,15 @@ impl GameServer {
                 if let Ok(msg) = bincode::deserialize::<ClientMessage>(&bytes) {
                     if let ClientMessage::PlayerState { x, y, z, yaw, pitch, health, sneaking } = msg {
                         if let Some(player) = self.remote_players.get_mut(&client_id) {
+                            // Moving = horizontal position changed since the last update.
+                            // A standing player's position is exactly constant, so a tiny
+                            // threshold is robust at any frame/update rate.
+                            let dx = x - player.position[0];
+                            let dz = z - player.position[2];
+                            player.moving = dx * dx + dz * dz > 1e-6;
                             player.position = [x, y, z];
                             player.yaw = yaw;
+                            player.pitch = pitch;
                             player.health = health;
                             player.sneaking = sneaking;
                         }
@@ -232,10 +259,14 @@ impl GameServer {
         }
     }
 
-    pub fn remote_players(&self) -> Vec<([f32; 3], f32, u8, bool)> {
+    pub fn remote_players(&self) -> Vec<PeerView> {
         self.remote_players
             .values()
-            .map(|p| (p.position, p.yaw, p.health, p.sneaking))
+            .map(|p| PeerView {
+                pos: p.position, yaw: p.yaw, health: p.health,
+                sneaking: p.sneaking, anim_time: p.anim_time, move_amount: p.move_amount,
+                crouch_t: p.crouch_t, pitch: p.pitch,
+            })
             .collect()
     }
 }

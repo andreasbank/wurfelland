@@ -141,7 +141,15 @@ pub enum PlayerDrawMode {
 const HEAD_VERTS:  i32 = 36;
 const TORSO_VERTS: i32 = 36;
 const ARM_VERTS:   i32 = 36; // per arm
-const ARMS_START:  i32 = HEAD_VERTS + TORSO_VERTS;
+const LEG_VERTS:   i32 = 36; // per leg
+const ARMS_START:  i32 = HEAD_VERTS + TORSO_VERTS;            // 72: left arm, then right arm
+const LEGS_START:  i32 = ARMS_START + ARM_VERTS * 2;          // 144: left leg, then right leg
+
+// Joint pivots in model space (feet at y=0).
+const HIP_Y:      f32 = 0.75;   // upper-body bend / leg swing pivot height
+const SHOULDER_Y: f32 = 1.45;   // arm swing pivot height
+const ARM_X:      f32 = 0.275;  // arm shoulder x (±)
+const LEG_X:      f32 = 0.075;  // leg hip x (±)
 
 pub struct PlayerRenderer {
     vao: u32,
@@ -366,15 +374,39 @@ impl PlayerRenderer {
 
     /// Draw a player model at `position` (feet coords) rotated by `yaw` (degrees).
     /// `swing_angle`: right-arm rotation in radians around the shoulder (negative = swing forward/down).
+    /// `crouch`: 0 = standing, 1 = fully crouched (bends the upper body forward).
+    /// `anim_time`/`move_amount`: drive the walk cycle. `move_amount` (0..1) scales the limb
+    /// swing so it eases in/out instead of snapping when starting/stopping.
+    /// `pitch`: head look angle in degrees (tilts the head up/down in third person).
     pub fn draw(&self, position: [f32; 3], yaw: f32,
                 view: &glam::Mat4, projection: &glam::Mat4,
                 mode: PlayerDrawMode, swing_angle: f32,
+                crouch: f32, anim_time: f32, move_amount: f32, pitch: f32,
                 fog_start: f32, fog_end: f32, screen_w: f32, screen_h: f32, sky_tex: u32,
                 fog_override: f32, fog_color_override: glam::Vec3) {
         let rot_angle = FRAC_PI_2 - yaw.to_radians();
         let model = glam::Mat4::from_translation(glam::Vec3::from(position))
             * glam::Mat4::from_rotation_y(rot_angle);
         let mvp = *projection * *view * model;
+
+        // ── Pose rig ───────────────────────────────────────────────────────────
+        // Rotate a limb about `pivot` on the X axis (fore/aft swing & body bend).
+        let joint = |pivot: glam::Vec3, angle: f32| {
+            glam::Mat4::from_translation(pivot)
+                * glam::Mat4::from_rotation_x(angle)
+                * glam::Mat4::from_translation(-pivot)
+        };
+        let crouch = crouch.clamp(0.0, 1.0);
+        // Upper body bends forward about the hips and sinks a little when crouching.
+        // (Identity at crouch = 0, so the standing pose is unchanged.)
+        let upper = glam::Mat4::from_translation(glam::Vec3::new(0.0, -0.22 * crouch, 0.0))
+            * joint(glam::Vec3::new(0.0, HIP_Y, 0.0), 0.50 * crouch);
+        // Walk cycle: legs swing fore/aft, arms swing opposite. `move_amount` eases the
+        // amplitude in/out so limbs blend to neutral instead of snapping at start/stop.
+        let walk = (anim_time * 8.0).sin() * 0.5 * move_amount.clamp(0.0, 1.0);
+        // Head follows the look pitch. Sign chosen so looking up tilts the head back;
+        // flip if it reads inverted in third person.
+        let head_pitch = (-pitch.to_radians()).clamp(-1.2, 1.2);
 
         unsafe {
             gl::Disable(gl::CULL_FACE);
@@ -393,22 +425,31 @@ impl PlayerRenderer {
 
             match mode {
                 PlayerDrawMode::Full => {
-                    // Head + torso + legs (all at base MVP)
-                    gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE, mvp.to_cols_array().as_ptr());
-                    gl::DrawArrays(gl::TRIANGLES, 0, HEAD_VERTS + TORSO_VERTS);
-                    // Legs (start at 4×36 = 144)
-                    gl::DrawArrays(gl::TRIANGLES, ARMS_START + ARM_VERTS * 2, ARM_VERTS * 2);
+                    let set_mvp = |m: glam::Mat4| {
+                        let mvp = *projection * *view * m;
+                        gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE, mvp.to_cols_array().as_ptr());
+                    };
 
-                    // Left arm — no swing
+                    // ── Upper body under the crouch bend: torso fixed, head pitches ──
+                    let upper_m = model * upper;
+                    set_mvp(upper_m * joint(glam::Vec3::new(0.0, SHOULDER_Y, 0.0), head_pitch));
+                    gl::DrawArrays(gl::TRIANGLES, 0, HEAD_VERTS);
+                    set_mvp(upper_m);
+                    gl::DrawArrays(gl::TRIANGLES, HEAD_VERTS, TORSO_VERTS);
+
+                    // ── Legs swing about the hips (opposite phases) ──
+                    set_mvp(model * joint(glam::Vec3::new(-LEG_X, HIP_Y, 0.0),  walk));
+                    gl::DrawArrays(gl::TRIANGLES, LEGS_START, LEG_VERTS);
+                    set_mvp(model * joint(glam::Vec3::new( LEG_X, HIP_Y, 0.0), -walk));
+                    gl::DrawArrays(gl::TRIANGLES, LEGS_START + LEG_VERTS, LEG_VERTS);
+
+                    // ── Arms: attached to the upper body, swing opposite the legs ──
+                    // Left arm swings with the walk cycle.
+                    set_mvp(upper_m * joint(glam::Vec3::new(-ARM_X, SHOULDER_Y, 0.0), -walk));
                     gl::DrawArrays(gl::TRIANGLES, ARMS_START, ARM_VERTS);
-
-                    // Right arm — pivot-rotate around shoulder joint
-                    let pivot = glam::Vec3::new(0.275, 1.45, 0.0);
-                    let arm_local = glam::Mat4::from_translation(pivot)
-                        * glam::Mat4::from_rotation_x(swing_angle)
-                        * glam::Mat4::from_translation(-pivot);
-                    let mvp_right = *projection * *view * model * arm_local;
-                    gl::UniformMatrix4fv(self.mvp_loc, 1, gl::FALSE, mvp_right.to_cols_array().as_ptr());
+                    // Right arm: the attack swing overrides the walk swing when active.
+                    let right_arm_angle = if swing_angle != 0.0 { swing_angle } else { walk };
+                    set_mvp(upper_m * joint(glam::Vec3::new(ARM_X, SHOULDER_Y, 0.0), right_arm_angle));
                     gl::DrawArrays(gl::TRIANGLES, ARMS_START + ARM_VERTS, ARM_VERTS);
                 }
                 PlayerDrawMode::ArmsOnly => {
@@ -434,11 +475,13 @@ impl PlayerRenderer {
 
     /// Draw a billboard health bar above a remote player's head.
     /// `health_frac`: 0.0 = dead, 1.0 = full health.
-    pub fn draw_health_bar(&self, position: [f32; 3], health_frac: f32,
+    pub fn draw_health_bar(&self, position: [f32; 3], health_frac: f32, crouch: f32,
                            view: &glam::Mat4, projection: &glam::Mat4) {
         const BAR_W: f32 = 0.5;
         const BAR_H: f32 = 0.05;
         const BAR_Y: f32 = 2.05; // above head top (head top = 1.85)
+        // Crouching lowers the head ~0.3, so drop the bar to match.
+        let bar_y = BAR_Y - 0.3 * crouch.clamp(0.0, 1.0);
 
         // Extract camera right/up/forward from the view matrix rows
         let cam_right = glam::Vec3::new(view.x_axis.x, view.y_axis.x, view.z_axis.x);
@@ -446,7 +489,7 @@ impl PlayerRenderer {
         let cam_fwd   = cam_right.cross(cam_up);
 
         // Bottom-left corner of the full bar, centered horizontally
-        let origin = glam::Vec3::new(position[0], position[1] + BAR_Y, position[2])
+        let origin = glam::Vec3::new(position[0], position[1] + bar_y, position[2])
             - cam_right * (BAR_W * 0.5)
             - cam_up    * (BAR_H * 0.5);
 

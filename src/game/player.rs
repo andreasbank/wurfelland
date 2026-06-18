@@ -17,6 +17,7 @@ const SWIM_UP_SPEED: f32 = 3.5;
 const MAX_WATER_FALL: f32 = -2.0;
 const HALF_WIDTH: f32 = 0.3; // Player is 0.6 wide
 const PLAYER_HEIGHT: f32 = 1.8;
+const SNEAK_HEIGHT: f32 = 1.5; // shorter collision box while crouched
 const FLY_SPEED: f32 = 21.0;
 const FLY_MOVE_SPEED: f32 = MOVE_SPEED * 6.3;
 
@@ -194,7 +195,44 @@ impl Player {
         }
     }
 
+    /// Current collision height — shorter while crouch-sneaking.
+    pub fn collision_height(&self) -> f32 {
+        if self.sneaking { SNEAK_HEIGHT } else { PLAYER_HEIGHT }
+    }
+
+    /// Update the crouch state from input. While airborne/flying you can't sneak;
+    /// when releasing sneak you stay crouched if there's no headroom to stand up.
+    pub fn update_sneak(&mut self, wants: bool, is_solid: impl Fn(i32, i32, i32) -> bool) {
+        self.sneaking = if self.flying {
+            false
+        } else if wants {
+            true
+        } else {
+            // Releasing: only stand if the full-height box is clear above.
+            self.aabb_collides_h(PLAYER_HEIGHT, &is_solid)
+        };
+    }
+
+    /// True if a solid block sits directly under the player's footprint — used by
+    /// the sneak edge-guard to stop you walking off a ledge while crouched.
+    fn supported(&self, is_solid: &impl Fn(i32, i32, i32) -> bool) -> bool {
+        let by = (self.position[1] - 0.5).floor() as i32;
+        let min_x = (self.position[0] - HALF_WIDTH).floor() as i32;
+        let max_x = (self.position[0] + HALF_WIDTH - 0.001).floor() as i32;
+        let min_z = (self.position[2] - HALF_WIDTH).floor() as i32;
+        let max_z = (self.position[2] + HALF_WIDTH - 0.001).floor() as i32;
+        for x in min_x..=max_x {
+            for z in min_z..=max_z {
+                if is_solid(x, by, z) { return true; }
+            }
+        }
+        false
+    }
+
     pub fn apply_physics(&mut self, delta_time: f32, in_water: bool, is_solid: impl Fn(i32, i32, i32) -> bool) {
+        // Sneak edge-guard: while crouched on the ground, don't let a horizontal
+        // move carry the player off a ledge (Minecraft-style).
+        let edge_guard = self.sneaking && self.on_ground && !self.flying && !in_water;
         if self.flying {
             // Gravity-free: vertical velocity comes entirely from fly_up/fly_down input.
             // Damp it so the player hovers when no key is held.
@@ -211,7 +249,8 @@ impl Player {
 
         // Move X, resolve X collisions
         self.position[0] += self.velocity[0] * delta_time;
-        if self.aabb_collides(&is_solid) {
+        if self.aabb_collides(&is_solid)
+            || (edge_guard && !self.supported(&is_solid)) {
             self.position[0] -= self.velocity[0] * delta_time;
             self.velocity[0] = 0.0;
         }
@@ -225,7 +264,8 @@ impl Player {
                 self.on_ground = true;
             } else {
                 // Hit ceiling — snap head to bottom of block above
-                self.position[1] = (self.position[1] + PLAYER_HEIGHT).floor() - PLAYER_HEIGHT;
+                let h = self.collision_height();
+                self.position[1] = (self.position[1] + h).floor() - h;
             }
             self.velocity[1] = 0.0;
         } else {
@@ -234,18 +274,24 @@ impl Player {
 
         // Move Z, resolve Z collisions
         self.position[2] += self.velocity[2] * delta_time;
-        if self.aabb_collides(&is_solid) {
+        if self.aabb_collides(&is_solid)
+            || (edge_guard && !self.supported(&is_solid)) {
             self.position[2] -= self.velocity[2] * delta_time;
             self.velocity[2] = 0.0;
         }
     }
 
-    // Returns true if the player's AABB overlaps any solid block
+    // Returns true if the player's AABB overlaps any solid block.
     fn aabb_collides(&self, is_solid: &impl Fn(i32, i32, i32) -> bool) -> bool {
+        self.aabb_collides_h(self.collision_height(), is_solid)
+    }
+
+    // AABB-vs-solid test at an arbitrary height (for crouch/stand-up checks).
+    fn aabb_collides_h(&self, height: f32, is_solid: &impl Fn(i32, i32, i32) -> bool) -> bool {
         let min_x = (self.position[0] - HALF_WIDTH).floor() as i32;
         let max_x = (self.position[0] + HALF_WIDTH - 0.001).floor() as i32;
         let min_y = self.position[1].floor() as i32;
-        let max_y = (self.position[1] + PLAYER_HEIGHT - 0.001).floor() as i32;
+        let max_y = (self.position[1] + height - 0.001).floor() as i32;
         let min_z = (self.position[2] - HALF_WIDTH).floor() as i32;
         let max_z = (self.position[2] + HALF_WIDTH - 0.001).floor() as i32;
 

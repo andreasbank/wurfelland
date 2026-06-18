@@ -5,13 +5,18 @@ use std::time::{Duration, SystemTime};
 use renet::{RenetClient, DefaultChannel};
 use renet_netcode::{NetcodeClientTransport, ClientAuthentication};
 
-use super::messages::{ClientMessage, ServerMessage, PROTOCOL_ID};
+use super::messages::{ClientMessage, ServerMessage, PeerView, ease, PROTOCOL_ID};
 
 struct RemotePlayer {
     position: [f32; 3],
     yaw: f32,
+    pitch: f32,
     health: u8,
     sneaking: bool,
+    anim_time: f32,
+    moving: bool,
+    move_amount: f32,
+    crouch_t: f32,
 }
 
 pub struct GameClient {
@@ -63,6 +68,13 @@ impl GameClient {
         self.transport.update(duration, &mut self.client).ok();
         self.client.update(duration);
 
+        // Advance each peer's walk clock and ease crouch + walk amplitude.
+        for p in self.remote_players.values_mut() {
+            p.anim_time += dt;
+            ease(&mut p.crouch_t, if p.sneaking { 1.0 } else { 0.0 }, dt / 0.15);
+            ease(&mut p.move_amount, if p.moving { 1.0 } else { 0.0 }, dt / 0.12);
+        }
+
         let mut received = Vec::new();
 
         // Process reliable messages
@@ -73,8 +85,13 @@ impl GameClient {
                         self.remote_players.insert(*id, RemotePlayer {
                             position: [0.0, 0.0, 0.0],
                             yaw: 0.0,
+                            pitch: 0.0,
                             health: 100,
                             sneaking: false,
+                            anim_time: 0.0,
+                            moving: false,
+                            move_amount: 0.0,
+                            crouch_t: 0.0,
                         });
                     }
                     ServerMessage::PeerLeft { id } => {
@@ -89,15 +106,24 @@ impl GameClient {
         // Process unreliable messages
         while let Some(bytes) = self.client.receive_message(DefaultChannel::Unreliable) {
             if let Ok(msg) = bincode::deserialize::<ServerMessage>(&bytes) {
-                if let ServerMessage::PeerState { id, x, y, z, yaw, health, sneaking, .. } = &msg {
+                if let ServerMessage::PeerState { id, x, y, z, yaw, pitch, health, sneaking } = &msg {
                     let player = self.remote_players.entry(*id).or_insert(RemotePlayer {
                         position: [0.0, 0.0, 0.0],
                         yaw: 0.0,
+                        pitch: 0.0,
                         health: 100,
                         sneaking: false,
+                        anim_time: 0.0,
+                        moving: false,
+                        move_amount: 0.0,
+                        crouch_t: 0.0,
                     });
+                    let dx = *x - player.position[0];
+                    let dz = *z - player.position[2];
+                    player.moving = dx * dx + dz * dz > 1e-6;
                     player.position = [*x, *y, *z];
                     player.yaw = *yaw;
+                    player.pitch = *pitch;
                     player.health = *health;
                     player.sneaking = *sneaking;
                 }
@@ -152,10 +178,14 @@ impl GameClient {
         }
     }
 
-    pub fn remote_players(&self) -> Vec<([f32; 3], f32, u8, bool)> {
+    pub fn remote_players(&self) -> Vec<PeerView> {
         self.remote_players
             .values()
-            .map(|p| (p.position, p.yaw, p.health, p.sneaking))
+            .map(|p| PeerView {
+                pos: p.position, yaw: p.yaw, health: p.health,
+                sneaking: p.sneaking, anim_time: p.anim_time, move_amount: p.move_amount,
+                crouch_t: p.crouch_t, pitch: p.pitch,
+            })
             .collect()
     }
 }
