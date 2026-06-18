@@ -5,7 +5,7 @@ pub const SERVER_PORT: u16 = 25565;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum ClientMessage {
-    PlayerState { x: f32, y: f32, z: f32, yaw: f32, pitch: f32, health: u8 },
+    PlayerState { x: f32, y: f32, z: f32, yaw: f32, pitch: f32, health: u8, sneaking: bool },
     BreakBlock  { x: i32, y: i32, z: i32 },
     PlaceBlock  { x: i32, y: i32, z: i32, block_id: u8 },
     AttackEntity   { index: u32, push_x: f32, push_z: f32 },
@@ -34,7 +34,7 @@ pub enum ServerMessage {
     WorldInfo    { seed: u32 },
     PeerJoined   { id: u64 },
     PeerLeft     { id: u64 },
-    PeerState    { id: u64, x: f32, y: f32, z: f32, yaw: f32, pitch: f32, health: u8 },
+    PeerState    { id: u64, x: f32, y: f32, z: f32, yaw: f32, pitch: f32, health: u8, sneaking: bool },
     BlockChange  { x: i32, y: i32, z: i32, block_id: u8 },
     EntityUpdate { entities: Vec<NetEntity> },
     TimeUpdate   { sun_angle: f32 },

@@ -11,6 +11,7 @@ struct RemotePlayer {
     position: [f32; 3],
     yaw: f32,
     health: u8,
+    sneaking: bool,
 }
 
 pub struct GameClient {
@@ -73,6 +74,7 @@ impl GameClient {
                             position: [0.0, 0.0, 0.0],
                             yaw: 0.0,
                             health: 100,
+                            sneaking: false,
                         });
                     }
                     ServerMessage::PeerLeft { id } => {
@@ -87,15 +89,17 @@ impl GameClient {
         // Process unreliable messages
         while let Some(bytes) = self.client.receive_message(DefaultChannel::Unreliable) {
             if let Ok(msg) = bincode::deserialize::<ServerMessage>(&bytes) {
-                if let ServerMessage::PeerState { id, x, y, z, yaw, health, .. } = &msg {
+                if let ServerMessage::PeerState { id, x, y, z, yaw, health, sneaking, .. } = &msg {
                     let player = self.remote_players.entry(*id).or_insert(RemotePlayer {
                         position: [0.0, 0.0, 0.0],
                         yaw: 0.0,
                         health: 100,
+                        sneaking: false,
                     });
                     player.position = [*x, *y, *z];
                     player.yaw = *yaw;
                     player.health = *health;
+                    player.sneaking = *sneaking;
                 }
                 received.push(msg);
             }
@@ -106,8 +110,8 @@ impl GameClient {
         received
     }
 
-    pub fn send_position(&mut self, x: f32, y: f32, z: f32, yaw: f32, pitch: f32, health: u8) {
-        let msg = ClientMessage::PlayerState { x, y, z, yaw, pitch, health };
+    pub fn send_position(&mut self, x: f32, y: f32, z: f32, yaw: f32, pitch: f32, health: u8, sneaking: bool) {
+        let msg = ClientMessage::PlayerState { x, y, z, yaw, pitch, health, sneaking };
         if let Ok(bytes) = bincode::serialize(&msg) {
             self.client.send_message(DefaultChannel::Unreliable, bytes);
         }
@@ -148,10 +152,10 @@ impl GameClient {
         }
     }
 
-    pub fn remote_players(&self) -> Vec<([f32; 3], f32, u8)> {
+    pub fn remote_players(&self) -> Vec<([f32; 3], f32, u8, bool)> {
         self.remote_players
             .values()
-            .map(|p| (p.position, p.yaw, p.health))
+            .map(|p| (p.position, p.yaw, p.health, p.sneaking))
             .collect()
     }
 }

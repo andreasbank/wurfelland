@@ -11,6 +11,7 @@ struct RemotePlayer {
     position: [f32; 3],
     yaw: f32,
     health: u8,
+    sneaking: bool,
 }
 
 pub struct GameServer {
@@ -73,6 +74,7 @@ impl GameServer {
                         position: [0.0, 0.0, 0.0],
                         yaw: 0.0,
                         health: 100,
+                        sneaking: false,
                     });
                     let info = ServerMessage::WorldInfo { seed: self.seed };
                     if let Ok(bytes) = bincode::serialize(&info) {
@@ -145,13 +147,14 @@ impl GameServer {
             // Unreliable messages
             while let Some(bytes) = self.server.receive_message(client_id, DefaultChannel::Unreliable) {
                 if let Ok(msg) = bincode::deserialize::<ClientMessage>(&bytes) {
-                    if let ClientMessage::PlayerState { x, y, z, yaw, pitch, health } = msg {
+                    if let ClientMessage::PlayerState { x, y, z, yaw, pitch, health, sneaking } = msg {
                         if let Some(player) = self.remote_players.get_mut(&client_id) {
                             player.position = [x, y, z];
                             player.yaw = yaw;
                             player.health = health;
+                            player.sneaking = sneaking;
                         }
-                        let out = ServerMessage::PeerState { id: client_id, x, y, z, yaw, pitch, health };
+                        let out = ServerMessage::PeerState { id: client_id, x, y, z, yaw, pitch, health, sneaking };
                         if let Ok(out_bytes) = bincode::serialize(&out) {
                             self.server.broadcast_message_except(
                                 client_id,
@@ -194,8 +197,8 @@ impl GameServer {
         }
     }
 
-    pub fn broadcast_host_position(&mut self, x: f32, y: f32, z: f32, yaw: f32, pitch: f32, health: u8) {
-        let msg = ServerMessage::PeerState { id: u64::MAX, x, y, z, yaw, pitch, health };
+    pub fn broadcast_host_position(&mut self, x: f32, y: f32, z: f32, yaw: f32, pitch: f32, health: u8, sneaking: bool) {
+        let msg = ServerMessage::PeerState { id: u64::MAX, x, y, z, yaw, pitch, health, sneaking };
         if let Ok(bytes) = bincode::serialize(&msg) {
             self.server.broadcast_message(DefaultChannel::Unreliable, bytes);
         }
@@ -229,10 +232,10 @@ impl GameServer {
         }
     }
 
-    pub fn remote_players(&self) -> Vec<([f32; 3], f32, u8)> {
+    pub fn remote_players(&self) -> Vec<([f32; 3], f32, u8, bool)> {
         self.remote_players
             .values()
-            .map(|p| (p.position, p.yaw, p.health))
+            .map(|p| (p.position, p.yaw, p.health, p.sneaking))
             .collect()
     }
 }

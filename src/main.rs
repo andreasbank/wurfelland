@@ -1762,11 +1762,10 @@ fn main() {
                         let pc_x = (player.position[0] / 16.0).floor() as i32;
                         let pc_z = (player.position[2] / 16.0).floor() as i32;
                         // Targets for hostile AI: local player first, then remotes.
-                        // Remote players' sneak state isn't networked yet → assume false.
                         let skel_targets: Vec<Target> = {
                             let mut v = vec![Target { pos: player.position, sneaking: player.sneaking }];
                             if let Some(ref srv) = net_server {
-                                for (pos, _, _) in srv.remote_players() { v.push(Target { pos, sneaking: false }); }
+                                for (pos, _, _, sneaking) in srv.remote_players() { v.push(Target { pos, sneaking }); }
                             }
                             v
                         };
@@ -1922,6 +1921,7 @@ fn main() {
                             player.position[0], player.position[1], player.position[2],
                             player.yaw, player.pitch,
                             player.health.min(255) as u8,
+                            player.sneaking,
                         );
                         entity_broadcast_timer += delta_time;
                         if entity_broadcast_timer >= 0.05 {
@@ -2015,6 +2015,7 @@ fn main() {
                             player.position[0], player.position[1], player.position[2],
                             player.yaw, player.pitch,
                             player.health.min(255) as u8,
+                            player.sneaking,
                         );
 
                         // Lerp rendered entity positions toward the latest server targets.
@@ -2242,12 +2243,12 @@ fn main() {
                         shadow_pass.depth_texture_array(),
                         shadow_pass.light_space_matrices(),
                         shadow_pass.texel_world_sizes());
-                    let remote_peers: Vec<([f32; 3], f32, u8)> = if let Some(ref server) = net_server {
+                    let remote_peers: Vec<([f32; 3], f32, u8, bool)> = if let Some(ref server) = net_server {
                         server.remote_players()
                     } else if let Some(ref client) = net_client {
                         client.remote_players()
                     } else { vec![] };
-                    for (pos, yaw, health) in remote_peers {
+                    for (pos, yaw, health, _sneaking) in remote_peers {
                         player_renderer.draw(pos, yaw, &view, &projection, PlayerDrawMode::Full, 0.0,
                             fog_start, fog_end, fb_w as f32, fb_h as f32, sky_tex,
                             fog_override, fog_override_color);
