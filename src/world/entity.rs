@@ -695,9 +695,11 @@ fn detect_from_idle(
     let dx = target.pos[0] - skel_pos[0];
     let dz = target.pos[2] - skel_pos[2];
     let dist2_xz = dx * dx + dz * dz;
-    if dist2_xz < hearing_r * hearing_r {
-        return !target.sneaking;
+    // Heard: close enough and not sneaking.
+    if !target.sneaking && dist2_xz < hearing_r * hearing_r {
+        return true;
     }
+    // Seen: within vision cone with line of sight — sneaking doesn't hide from sight.
     if dist2_xz < vision_r * vision_r {
         let angle_to = dx.atan2(dz).to_degrees();
         if angle_diff(angle_to, skel_yaw).abs() < vision_angle * 0.5 {
