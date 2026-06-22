@@ -2102,7 +2102,7 @@ fn main() {
             total_time += delta_time;
             // Clients receive sun_angle from the server; only advance it locally in
             // singleplayer or when hosting.
-            if !time_frozen && net_client.is_none() {
+            if !time_frozen && !paused && net_client.is_none() {
                 sun_angle += delta_time * time_speed * (std::f32::consts::TAU / DAY_LENGTH_SECS);
                 if sun_angle > std::f32::consts::TAU { sun_angle -= std::f32::consts::TAU; }
             }
