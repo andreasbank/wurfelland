@@ -139,9 +139,12 @@ struct HostileAi {
     attack_hit_pending: bool,
     aggro: AggroState,
     target_player: Option<usize>,
-    target_lost_timer: f32,
-    strafe_dir: f32,
-    strafe_timer: f32,
+    /// Where to walk while `Alert` — the last spot a noise (or lost target) came from.
+    alert_pos: [f32; 3],
+    /// Time left investigating before giving up and returning to `Idle`.
+    alert_timer: f32,
+    /// Seconds the current chase target has been out of sight (grace before Alert).
+    lost_timer: f32,
 }
 
 /// A mob. Kinematics, health and wander state are shared; species behaviour and
@@ -243,9 +246,9 @@ impl Entity {
                 attack_hit_pending: false,
                 aggro: AggroState::Idle,
                 target_player: None,
-                target_lost_timer: 0.0,
-                strafe_dir: if seed.rem_euclid(2.0) < 1.0 { 1.0 } else { -1.0 },
-                strafe_timer: 2.0 + seed.rem_euclid(1.5),
+                alert_pos: [x, y, z],
+                alert_timer: 0.0,
+                lost_timer: 0.0,
             }),
         }
     }
@@ -272,19 +275,27 @@ impl Entity {
         let mut brain = self.brain;
         match &mut brain {
             Brain::Passive(p) => {
-                p.scare_yaw = push_dir[0].atan2(push_dir[2]).to_degrees();
+                p.scare_yaw = push_dir[2].atan2(push_dir[0]).to_degrees();
                 self.target_yaw = p.scare_yaw;
                 p.scared_timer = 5.0;
                 self.wander_timer = 0.0;
                 self.sitting = false;
             }
             Brain::Hostile(h) => {
-                self.target_yaw = push_dir[0].atan2(push_dir[2]).to_degrees() + 180.0;
+                self.target_yaw = push_dir[2].atan2(push_dir[0]).to_degrees() + 180.0;
                 self.move_speed = self.def.speed;
                 self.wander_timer = 2.0;
-                if h.aggro == AggroState::Idle {
-                    h.aggro = AggroState::Chasing;
-                    h.target_lost_timer = 0.0;
+                // Already chasing? Stay locked on. Otherwise close on whoever hit us
+                // (opposite the knockback push) and aggro for real once we see them.
+                if h.aggro == AggroState::Idle || h.aggro == AggroState::Alert {
+                    let pmag = (push_dir[0]*push_dir[0] + push_dir[2]*push_dir[2]).sqrt().max(1e-3);
+                    h.alert_pos = [
+                        self.position[0] - push_dir[0] / pmag * 6.0,
+                        self.position[1],
+                        self.position[2] - push_dir[2] / pmag * 6.0,
+                    ];
+                    h.alert_timer = ALERT_TIME;
+                    h.aggro = AggroState::Alert;
                 }
             }
         }
@@ -409,68 +420,104 @@ impl Entity {
                 h.burn_timer = 1.0;
             }
         } else {
-            h.burn_timer = h.burn_timer.min(0.0);
+            // Out of sunlight: keep the remaining countdown instead of forcing an
+            // instant burn tick the moment we step back into the light.
+            h.burn_timer = h.burn_timer.max(0.0);
         }
 
-        // ── Target acquisition: nearest detectable player given aggro state ──
-        let best_target: Option<(usize, f32)> = {
-            let mut best: Option<(usize, f32)> = None;
-            for (i, t) in targets.iter().enumerate() {
-                let dx = t.pos[0] - self.position[0];
-                let dz = t.pos[2] - self.position[2];
-                let dy = t.pos[1] - self.position[1];
-                let dist2 = dx*dx + dz*dz + dy*dy;
-                let detected = match h.aggro {
-                    AggroState::Idle => detect_from_idle(
-                        self.position, self.yaw, t,
-                        self.def.hearing_radius, self.def.vision_radius, self.def.vision_angle,
-                        &get_block),
-                    AggroState::Chasing | AggroState::InCombat =>
-                        dist2 < LOSE_TARGET_R2,
-                };
-                if detected && best.map_or(true, |(_, bd)| dist2 < bd) {
-                    best = Some((i, dist2));
-                }
+        // ── Sensing: hearing only points the mob at a noise; sight starts/holds aggro.
+        // Sight always needs the target inside the facing cone — an alerted mob turns
+        // to face the spot it's investigating, so it sees a target that's actually there.
+        let mut nearest_seen:  Option<(usize, f32)> = None;
+        let mut nearest_heard: Option<([f32; 3], f32)> = None;
+        for (i, t) in targets.iter().enumerate() {
+            let dx = t.pos[0] - self.position[0];
+            let dz = t.pos[2] - self.position[2];
+            let dist2_xz = dx*dx + dz*dz;
+            if seen_target(self.position, self.yaw, t,
+                           self.def.vision_radius, self.def.vision_angle, true, &get_block)
+                && nearest_seen.map_or(true, |(_, d)| dist2_xz < d) {
+                nearest_seen = Some((i, dist2_xz));
             }
-            best
-        };
-
-        if best_target.is_some() {
-            h.target_lost_timer = 0.0;
-            h.target_player = best_target.map(|(i, _)| i);
-        } else {
-            h.target_lost_timer += dt;
+            if heard_target(self.position, t, self.def.hearing_radius)
+                && nearest_heard.map_or(true, |(_, d)| dist2_xz < d) {
+                nearest_heard = Some((t.pos, dist2_xz));
+            }
         }
+
+        // Is the current chase target still in sight and in range? (sneaking shrinks
+        // the radius.) Sustains Chasing / InCombat.
+        let cur = h.target_player.and_then(|i| targets.get(i).map(|t| (i, t)));
+        let chase_held = cur.map_or(false, |(_, t)| {
+            let dx = t.pos[0] - self.position[0];
+            let dz = t.pos[2] - self.position[2];
+            let mut chase_r = self.def.vision_radius * CHASE_RANGE_MULT;
+            if t.sneaking { chase_r *= SNEAK_CHASE_FACTOR; }
+            dx*dx + dz*dz < chase_r * chase_r
+                && has_line_of_sight(self.position, t.pos, &get_block)
+        });
 
         // ── Aggro state transitions ──
-        let target_pos = h.target_player
-            .and_then(|i| targets.get(i))
-            .map(|t| t.pos);
-
-        if h.target_lost_timer >= LOSE_TARGET_TIME {
-            h.aggro = AggroState::Idle;
-            h.target_player = None;
-        } else if let Some(tpos) = target_pos {
-            let dx = tpos[0] - self.position[0];
-            let dz = tpos[2] - self.position[2];
-            let dy = tpos[1] - self.position[1];
-            let dist2_3d = dx*dx + dz*dz + dy*dy;
-            match h.aggro {
-                AggroState::Idle => {
-                    if best_target.is_some() { h.aggro = AggroState::Chasing; }
+        match h.aggro {
+            AggroState::Idle => {
+                if let Some((i, _)) = nearest_seen {
+                    h.aggro = AggroState::Chasing;
+                    h.target_player = Some(i);
+                    h.lost_timer = 0.0;
+                } else if let Some((pos, _)) = nearest_heard {
+                    h.aggro = AggroState::Alert;
+                    h.alert_pos = pos;
+                    h.alert_timer = ALERT_TIME;
                 }
-                AggroState::Chasing => {
-                    if dist2_3d < COMBAT_RANGE * COMBAT_RANGE {
-                        h.aggro = AggroState::InCombat;
+            }
+            AggroState::Alert => {
+                if let Some((i, _)) = nearest_seen {
+                    h.aggro = AggroState::Chasing;     // line of sight → real aggro
+                    h.target_player = Some(i);
+                    h.lost_timer = 0.0;
+                } else {
+                    if let Some((pos, _)) = nearest_heard {
+                        h.alert_pos = pos;             // a fresh noise updates the goal
+                        h.alert_timer = ALERT_TIME;
+                    }
+                    h.alert_timer -= dt;
+                    let dx = h.alert_pos[0] - self.position[0];
+                    let dz = h.alert_pos[2] - self.position[2];
+                    if h.alert_timer <= 0.0 || dx*dx + dz*dz < ALERT_REACH * ALERT_REACH {
+                        h.aggro = AggroState::Idle;    // reached the spot / gave up
                     }
                 }
-                AggroState::InCombat => {
-                    if dist2_3d > COMBAT_RANGE * COMBAT_RANGE * 2.25 {
+            }
+            AggroState::Chasing | AggroState::InCombat => {
+                if let (true, Some((_, t))) = (chase_held, cur) {
+                    h.lost_timer = 0.0;
+                    let dx = t.pos[0] - self.position[0];
+                    let dz = t.pos[2] - self.position[2];
+                    let dy = t.pos[1] - self.position[1];
+                    let dist2_3d = dx*dx + dz*dz + dy*dy;
+                    if h.aggro == AggroState::Chasing {
+                        if dist2_3d < COMBAT_RANGE * COMBAT_RANGE {
+                            h.aggro = AggroState::InCombat;
+                        }
+                    } else if dist2_3d > COMBAT_RANGE * COMBAT_RANGE * 2.25 {
                         h.aggro = AggroState::Chasing;
+                    }
+                } else {
+                    // Lost sight: after a short grace, investigate the last known spot
+                    // instead of giving up outright.
+                    h.lost_timer += dt;
+                    if h.lost_timer >= CHASE_LOSE_GRACE {
+                        h.alert_pos = cur.map_or(self.position, |(_, t)| t.pos);
+                        h.alert_timer = ALERT_TIME;
+                        h.aggro = AggroState::Alert;
+                        h.target_player = None;
                     }
                 }
             }
         }
+
+        // Current chase target position, after any transition above (for movement & melee).
+        let target_pos = h.target_player.and_then(|i| targets.get(i)).map(|t| t.pos);
 
         // ── Movement AI (skipped during knockback; integrate_motion decays it) ──
         let habitat = self.def.habitat;
@@ -507,11 +554,18 @@ impl Entity {
                         }
                     }
                 }
+                AggroState::Alert => {
+                    // Head toward the last noise/last-seen spot, looking for the target.
+                    let dx = h.alert_pos[0] - self.position[0];
+                    let dz = h.alert_pos[2] - self.position[2];
+                    self.target_yaw = dz.atan2(dx).to_degrees();
+                    self.move_speed = self.def.speed;
+                }
                 AggroState::Chasing => {
                     if let Some(tpos) = target_pos {
                         let dx = tpos[0] - self.position[0];
                         let dz = tpos[2] - self.position[2];
-                        self.target_yaw = dx.atan2(dz).to_degrees();
+                        self.target_yaw = dz.atan2(dx).to_degrees();
                         self.move_speed = self.def.speed;
                     }
                 }
@@ -519,14 +573,15 @@ impl Entity {
                     if let Some(tpos) = target_pos {
                         let dx = tpos[0] - self.position[0];
                         let dz = tpos[2] - self.position[2];
-                        // Orbit the target — periodically flip strafe direction.
-                        h.strafe_timer -= dt;
-                        if h.strafe_timer <= 0.0 {
-                            h.strafe_dir = -h.strafe_dir;
-                            h.strafe_timer = 1.5 + self.anim_time.rem_euclid(1.5);
-                        }
-                        self.target_yaw = dx.atan2(dz).to_degrees() + h.strafe_dir * 70.0;
-                        self.move_speed = self.def.speed * 0.7;
+                        // Face the target head-on and press in until at striking
+                        // distance, then hold ground and swing (no circling).
+                        self.target_yaw = dz.atan2(dx).to_degrees();
+                        let dist_xz = (dx*dx + dz*dz).sqrt();
+                        self.move_speed = if dist_xz > COMBAT_RANGE * 0.6 {
+                            self.def.speed
+                        } else {
+                            0.0
+                        };
                     }
                 }
             }
@@ -646,11 +701,14 @@ pub type Penguin = Entity;
 pub enum WeaponType { BareHands, Axe, Sword }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
-enum AggroState { Idle, Chasing, InCombat }
+enum AggroState { Idle, Alert, Chasing, InCombat }
 
 const COMBAT_RANGE: f32 = 2.0;   // Metres: enter/attack range
-const LOSE_TARGET_R2:    f32 = 1024.0; // 32² — give up chase once aggroed
-const LOSE_TARGET_TIME:  f32 = 5.0;    // seconds without target → Idle
+const CHASE_RANGE_MULT:  f32 = 2.0;    // give-up radius = vision_radius × this (16→32)
+const SNEAK_CHASE_FACTOR: f32 = 0.5;   // sneaking shrinks the re-detect radius mid-chase
+const ALERT_TIME:    f32 = 6.0;        // seconds spent investigating a noise → Idle
+const ALERT_REACH:   f32 = 1.5;        // within this of the noise spot → done investigating
+const CHASE_LOSE_GRACE: f32 = 0.6;     // seconds out of sight before a chase drops to Alert
 
 /// DDA line-of-sight: returns false if any solid block sits between the two points.
 fn has_line_of_sight(
@@ -682,31 +740,33 @@ pub struct Target {
     pub sneaking: bool,
 }
 
-/// Whether an Idle mob notices `target`, using its per-entity detection ranges:
-///   • within `hearing_r` blocks → noticed in any direction unless sneaking;
-///   • out to `vision_r` blocks  → noticed only inside the `vision_angle` cone
-///     with clear line of sight (sneaking does not hide you from sight here).
-fn detect_from_idle(
+/// Heard: within `hearing_r` blocks and not sneaking — omnidirectional, through
+/// walls. Hearing never grants aggro by itself; it only marks a spot to investigate.
+fn heard_target(skel_pos: [f32; 3], target: &Target, hearing_r: f32) -> bool {
+    if target.sneaking { return false; }
+    let dx = target.pos[0] - skel_pos[0];
+    let dz = target.pos[2] - skel_pos[2];
+    dx * dx + dz * dz < hearing_r * hearing_r
+}
+
+/// Seen: within `vision_r` blocks with clear line of sight (eye to eye). When
+/// `require_cone` is set (an idle, unsuspecting mob) the target must also be inside
+/// the `vision_angle` facing cone; an alerted mob is actively looking, so the cone
+/// is dropped. Sneaking does not hide you from sight.
+fn seen_target(
     skel_pos: [f32; 3], skel_yaw: f32,
     target: &Target,
-    hearing_r: f32, vision_r: f32, vision_angle: f32,
+    vision_r: f32, vision_angle: f32, require_cone: bool,
     get_block: &impl Fn(i32, i32, i32) -> BlockType,
 ) -> bool {
     let dx = target.pos[0] - skel_pos[0];
     let dz = target.pos[2] - skel_pos[2];
-    let dist2_xz = dx * dx + dz * dz;
-    // Heard: close enough and not sneaking.
-    if !target.sneaking && dist2_xz < hearing_r * hearing_r {
-        return true;
+    if dx * dx + dz * dz >= vision_r * vision_r { return false; }
+    if require_cone {
+        let angle_to = dz.atan2(dx).to_degrees();
+        if angle_diff(angle_to, skel_yaw).abs() >= vision_angle * 0.5 { return false; }
     }
-    // Seen: within vision cone with line of sight — sneaking doesn't hide from sight.
-    if dist2_xz < vision_r * vision_r {
-        let angle_to = dx.atan2(dz).to_degrees();
-        if angle_diff(angle_to, skel_yaw).abs() < vision_angle * 0.5 {
-            return has_line_of_sight(skel_pos, target.pos, get_block);
-        }
-    }
-    false
+    has_line_of_sight(skel_pos, target.pos, get_block)
 }
 
 
@@ -779,4 +839,107 @@ fn aabb_collides(
         }
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn skeleton_def() -> Arc<EntityDef> {
+        Arc::new(EntityDef {
+            identifier: "skeleton".into(),
+            habitat: Habitat::Land,
+            max_health: 10.0,
+            half_width: 0.25,
+            height: 1.80,
+            jump_speed: 8.0,
+            hit_half_width: 0.35,
+            render_scale: 1.0,
+            speed: 3.5,
+            turn_speed: 200.0,
+            knockback_h: 6.0,
+            knockback_v: 5.0,
+            flee_speed_mult: 1.0,
+            tameable: false,
+            behavior: Behavior::Hostile,
+            hearing_radius: 8.0,
+            vision_radius: 16.0,
+            vision_angle: 160.0,
+            idle_chance: 0.05,
+            idle_range: (0.5, 1.5),
+            walk_range: (3.0, 8.0),
+            loot: vec![],
+        })
+    }
+
+    fn aggro_of(e: &Entity) -> AggroState {
+        match e.brain { Brain::Hostile(h) => h.aggro, _ => panic!("not hostile") }
+    }
+
+    // Solid floor at y<64, air above — lets the skeleton stand and walk.
+    fn floor(_x: i32, y: i32, _z: i32) -> BlockType {
+        if y < 64 { BlockType::Stone } else { BlockType::Air }
+    }
+
+    const NIGHT: f32 = -std::f32::consts::FRAC_PI_2; // sun below horizon
+
+    // Hearing a player OUT of the facing cone must not start a chase — it raises the
+    // alert/investigate state instead (walk toward the noise), per the design.
+    #[test]
+    fn noise_behind_triggers_alert_not_chase() {
+        let mut skel = Entity::new(0.0, 64.0, 0.0, skeleton_def()); // faces +x
+        let behind = [-3.0, 64.0, 0.0]; // within hearing (8), outside the cone
+        skel.update_hostile(0.05, floor, |_, _, _| 0, &[Target { pos: behind, sneaking: false }], NIGHT);
+        assert_eq!(aggro_of(&skel), AggroState::Alert, "noise should only raise Alert, not aggro");
+    }
+
+    // While alerted, once the mob turns to face the noise and gets line of sight, it
+    // escalates to a real chase.
+    #[test]
+    fn alert_escalates_to_chase_on_sight() {
+        let mut skel = Entity::new(0.0, 64.0, 0.0, skeleton_def());
+        let behind = [-3.0, 64.0, 0.0];
+        let targets = [Target { pos: behind, sneaking: false }];
+        let mut became_chase = false;
+        for _ in 0..40 { // ~2 s: enough to turn ~180° and acquire sight
+            skel.update_hostile(0.05, floor, |_, _, _| 0, &targets, NIGHT);
+            if matches!(aggro_of(&skel), AggroState::Chasing | AggroState::InCombat) {
+                became_chase = true;
+                break;
+            }
+        }
+        assert!(became_chase, "alerted skeleton never escalated to a chase on sight");
+    }
+
+    // Once aggroed, a skeleton must actually close distance on a stationary target.
+    #[test]
+    fn chases_toward_target() {
+        let mut skel = Entity::new(0.0, 64.0, 0.0, skeleton_def());
+        let tgt = [5.0, 64.0, 0.0];
+        let targets = [Target { pos: tgt, sneaking: false }];
+        let night = -std::f32::consts::FRAC_PI_2;
+        let d0 = (tgt[0] - skel.position[0]).hypot(tgt[2] - skel.position[2]);
+        for _ in 0..60 { // ~3 s
+            skel.update_hostile(0.05, floor, |_, _, _| 0, &targets, night);
+        }
+        let d1 = (tgt[0] - skel.position[0]).hypot(tgt[2] - skel.position[2]);
+        assert!(d1 < d0 - 1.0, "skeleton did not approach target: {d0:.2} -> {d1:.2} (pos {:?})", skel.position);
+    }
+
+    // A fresh skeleton (yaw 0 ⇒ faces +x) must see a sneaking player straight ahead
+    // (beyond hearing range, inside the vision cone), but not one directly behind.
+    #[test]
+    fn vision_cone_points_where_it_faces() {
+        let night = -std::f32::consts::FRAC_PI_2;
+        let mut ahead = Entity::new(0.0, 64.0, 0.0, skeleton_def());
+        assert_eq!(ahead.yaw, 0.0, "test assumes the skeleton spawns facing +x");
+        let front = [10.0, 64.0, 0.0]; // +x, in front, 10m (vision 16, hearing 8)
+        ahead.update_hostile(0.05, floor, |_, _, _| 0, &[Target { pos: front, sneaking: true }], night);
+        assert_ne!(aggro_of(&ahead), AggroState::Idle, "did not see a player straight ahead");
+
+        let mut behind = Entity::new(0.0, 64.0, 0.0, skeleton_def());
+        let back = [-10.0, 64.0, 0.0]; // -x, behind
+        behind.update_hostile(0.05, floor, |_, _, _| 0, &[Target { pos: back, sneaking: true }], night);
+        assert_eq!(aggro_of(&behind), AggroState::Idle, "saw a sneaking player behind its back");
+    }
 }
