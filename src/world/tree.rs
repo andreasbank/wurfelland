@@ -66,17 +66,29 @@ pub fn generate_tree(
         ^ (world_seed as u64).wrapping_mul(0x1656_67B1_9E37_79F9);
     let mut rng = Rng::new(seed);
 
-    // Size class: small / medium / large (mirrors the old 20-way roll).
+    // Like Bedrock: the overwhelming majority are simple oaks — a straight
+    // trunk topped with a leaf canopy and no branches.  Only the rare "fancy
+    // oak" (~15%) grows a leaning, branching trunk.
     let roll = rng.u32() % 20;
-    let (trunk_h, n_branches, blob_r) = if roll < 10 {
-        (rng.range(5, 6), 2, 2)
-    } else if roll < 17 {
-        (rng.range(7, 9), rng.range(3, 4), 2)
-    } else {
-        (rng.range(10, 12), rng.range(4, 5), 3)
-    };
+    let fancy = roll >= 17;
 
-    // Trunk, with an optional one-block lean partway up.
+    if !fancy {
+        // ── Simple oak ───────────────────────────────────────────────────────
+        let trunk_h = if roll < 12 { rng.range(4, 6) } else { rng.range(6, 8) };
+        for i in 0..trunk_h {
+            emit(ox, base_wy + i, oz, BlockType::Log);
+        }
+        let top_y = base_wy + trunk_h - 1;
+        // Minecraft's oak canopy: a wide 5×5 ring around the top two trunk
+        // sections, narrowing to a 3×3 cap above.  Logs are never overwritten.
+        oak_canopy(ox, top_y, oz, &mut rng, emit);
+        return;
+    }
+
+    // ── Fancy oak: leaning, branching trunk ───────────────────────────────────
+    let trunk_h = rng.range(8, 12);
+    let blob_r = 3;
+
     let lean_at = if rng.chance(2) {
         rng.range(trunk_h / 2, trunk_h - 2)
     } else {
@@ -95,6 +107,7 @@ pub fn generate_tree(
     let top_y = base_wy + trunk_h - 1;
 
     // Branches: spring from the upper trunk, growing out and up to a leaf blob.
+    let n_branches = rng.range(3, 5);
     for _ in 0..n_branches {
         let start_y = base_wy + rng.range(trunk_h / 2, trunk_h - 1);
         let (dx, dz) = DIRS[(rng.u32() % 8) as usize];
@@ -115,6 +128,43 @@ pub fn generate_tree(
 
     // Crown above the trunk top.
     leaf_blob(tx, top_y + 1, tz, blob_r, &mut rng, emit);
+}
+
+/// Classic Minecraft oak canopy centred on the trunk top: two wide 5×5 layers
+/// (corners trimmed) at the top two trunk sections, then a 3×3 layer and a small
+/// cap above.  Leaves never overwrite logs.
+fn oak_canopy(
+    cx: i32,
+    top_y: i32,
+    cz: i32,
+    rng: &mut Rng,
+    emit: &mut impl FnMut(i32, i32, i32, BlockType),
+) {
+    // Two wide layers level with the top two trunk logs.
+    for dy in [-2i32, -1] {
+        for dx in -2i32..=2 {
+            for dz in -2i32..=2 {
+                // Clip the four outer corners, and randomly nibble the rest of
+                // the corner cells for an irregular edge.
+                if dx.abs() == 2 && dz.abs() == 2 {
+                    if rng.chance(2) {
+                        continue;
+                    }
+                }
+                emit(cx + dx, top_y + dy, cz + dz, BlockType::Leaves);
+            }
+        }
+    }
+    // Narrow 3×3 layer at the trunk top.
+    for dx in -1..=1 {
+        for dz in -1..=1 {
+            emit(cx + dx, top_y, cz + dz, BlockType::Leaves);
+        }
+    }
+    // Small cross-shaped cap one block above.
+    for (dx, dz) in [(0, 0), (1, 0), (-1, 0), (0, 1), (0, -1)] {
+        emit(cx + dx, top_y + 1, cz + dz, BlockType::Leaves);
+    }
 }
 
 /// A roughly spherical clump of leaves, with outer corners randomly trimmed for
