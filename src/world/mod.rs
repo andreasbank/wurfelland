@@ -11,6 +11,8 @@ pub mod biome;
 
 pub mod chunk;
 
+pub mod tree;
+
 pub mod block;
 pub use block::BlockType;
 

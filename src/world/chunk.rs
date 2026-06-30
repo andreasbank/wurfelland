@@ -2,6 +2,7 @@ use crate::renderer::ChunkMesh;
 use crate::world::face::Face;
 use crate::world::BlockType;
 use crate::world::biome::Biome;
+use crate::world::tree;
 use crate::world::{SEA_LEVEL, WORLD_HEIGHT_CHUNKS};
 use glam::Vec3;
 use crate::camera::frustum::Frustum;
@@ -82,65 +83,60 @@ fn should_place_tree(world_x: i32, world_z: i32, freq: u32) -> bool {
 }
 
 
-/// Small tree: 4-block trunk, tight 3×3 canopy.
-fn plant_tree_small(blocks: &mut Blocks, lx: usize, surf_y: usize, lz: usize) {
-    if lx < 1 || lx > 14 || lz < 1 || lz > 14 { return; }
-    if surf_y + 5 >= 16 { return; }
-    for dy in 1..=4 { blocks[lx][surf_y + dy][lz] = BlockType::Log; }
-    for layer in [3usize, 4] {
-        for dx in -1i32..=1 { for dz in -1i32..=1 {
-            let by = surf_y + layer;
-            let bx = (lx as i32 + dx) as usize;
-            let bz = (lz as i32 + dz) as usize;
-            if blocks[bx][by][bz] != BlockType::Log { blocks[bx][by][bz] = BlockType::Leaves; }
-        }}
-    }
-    blocks[lx][surf_y + 5][lz] = BlockType::Leaves;
+/// Biome at a world-space column, using a single (unblended) noise sample.
+/// This must match the biome used for `biome_grid`/`tree_freq` so that trees
+/// found by the cross-chunk scan agree with the chunk that owns their origin.
+fn column_biome(temp: &Perlin, moist: &Perlin, cont: &Perlin, wx: f64, wz: f64) -> Biome {
+    Biome::from_noise(
+        temp.get([wx * 0.003, wz * 0.003]),
+        moist.get([wx * 0.003, wz * 0.003]),
+        cont.get([wx * 0.005, wz * 0.005]),
+    )
 }
 
-/// Medium tree: 5-block trunk, 3×3 canopy + cross top.
-fn plant_tree_medium(blocks: &mut Blocks, lx: usize, surf_y: usize, lz: usize) {
-    if lx < 1 || lx > 14 || lz < 1 || lz > 14 { return; }
-    if surf_y + 7 >= 16 { return; }
-    for dy in 1..=5 { blocks[lx][surf_y + dy][lz] = BlockType::Log; }
-    for layer in [4usize, 5] {
-        for dx in -1i32..=1 { for dz in -1i32..=1 {
-            let by = surf_y + layer;
-            let bx = (lx as i32 + dx) as usize;
-            let bz = (lz as i32 + dz) as usize;
-            if blocks[bx][by][bz] != BlockType::Log { blocks[bx][by][bz] = BlockType::Leaves; }
-        }}
+/// World-Y of the surface block at a world-space column.  Blends terrain height
+/// over a 5-point cross (±16 blocks) so biome edges fade in gradually instead of
+/// creating instant cliffs.  For mountain samples the continentalness value
+/// biases the terrain noise upward so the centre of a mountain biome (high
+/// continentalness) is always the highest point — preventing inverted/hollow
+/// mountains.
+fn column_surface_y(
+    terrain: &Perlin, temp: &Perlin, moist: &Perlin, cont: &Perlin,
+    wx: f64, wz: f64,
+) -> i32 {
+    const BLEND_D: f64 = 16.0;
+    let mut blended_surf = 0.0f32;
+    for (ox, oz) in [(0.0f64, 0.0f64), (BLEND_D, 0.0), (-BLEND_D, 0.0), (0.0, BLEND_D), (0.0, -BLEND_D)] {
+        let sx = wx + ox;
+        let sz = wz + oz;
+        let c_raw = cont.get([sx * 0.005, sz * 0.005]);
+        let b = Biome::from_noise(
+            temp.get([sx * 0.003, sz * 0.003]),
+            moist.get([sx * 0.003, sz * 0.003]),
+            c_raw,
+        );
+        let bp = b.params();
+        let terrain_nv = ((terrain.get([sx * bp.scale, sz * bp.scale]) + 1.0) / 2.0) as f32;
+        let nv = if b == Biome::Mountains {
+            let c_norm = ((c_raw + 1.0) / 2.0) as f32;
+            let c_t = ((c_norm - 0.80) / 0.20).clamp(0.0, 1.0);
+            (terrain_nv * (1.0 - c_t * 0.5) + c_t * 0.6).min(1.0)
+        } else {
+            terrain_nv
+        };
+        blended_surf += bp.base_height + nv * bp.amplitude;
     }
-    for (dx, dz) in [(0i32,0i32),(1,0),(-1,0),(0,1),(0,-1)] {
-        let bx = (lx as i32 + dx) as usize;
-        let bz = (lz as i32 + dz) as usize;
-        if blocks[bx][surf_y + 6][bz] != BlockType::Log { blocks[bx][surf_y + 6][bz] = BlockType::Leaves; }
-    }
-    blocks[lx][surf_y + 7][lz] = BlockType::Leaves;
+    let surf_y = (blended_surf / 5.0) as i32;
+    surf_y.clamp(1, WORLD_HEIGHT_CHUNKS * 16 - 2)
 }
 
-/// Large tree: 6-block trunk, wide 5×5 canopy layers.
-fn plant_tree_large(blocks: &mut Blocks, lx: usize, surf_y: usize, lz: usize) {
-    if lx < 2 || lx > 13 || lz < 2 || lz > 13 { return; }
-    if surf_y + 8 >= 16 { return; }
-    for dy in 1..=6 { blocks[lx][surf_y + dy][lz] = BlockType::Log; }
-    // Two 5×5 (corners clipped) layers near canopy base
-    for layer in [5usize, 6] {
-        for dx in -2i32..=2 { for dz in -2i32..=2 {
-            if dx.abs() == 2 && dz.abs() == 2 { continue; }
-            let by = surf_y + layer;
-            let bx = (lx as i32 + dx) as usize;
-            let bz = (lz as i32 + dz) as usize;
-            if blocks[bx][by][bz] != BlockType::Log { blocks[bx][by][bz] = BlockType::Leaves; }
-        }}
-    }
-    // 3×3 at trunk top
-    for dx in -1i32..=1 { for dz in -1i32..=1 {
-        let bx = (lx as i32 + dx) as usize;
-        let bz = (lz as i32 + dz) as usize;
-        if blocks[bx][surf_y + 7][bz] != BlockType::Log { blocks[bx][surf_y + 7][bz] = BlockType::Leaves; }
-    }}
-    blocks[lx][surf_y + 8][lz] = BlockType::Leaves;
+/// True if a tree may stand on this column's surface block: the column's biome
+/// places grass and the surface sits below the snow line (matches the surface
+/// block selection in `Chunk::generate`).
+fn tree_surface_ok(biome: Biome, surf_y: i32) -> bool {
+    biome.params().surface_block == BlockType::Grass
+        && surf_y > SEA_LEVEL
+        && surf_y < SEA_LEVEL + 33
 }
 
 pub struct Chunk {
@@ -196,46 +192,11 @@ impl Chunk {
                 let wx = (position[0] * 16 + x as i32) as f64;
                 let wz = (position[2] * 16 + z as i32) as f64;
 
-                let biome = Biome::from_noise(
-                    temp .get([wx * 0.003, wz * 0.003]),
-                    moist.get([wx * 0.003, wz * 0.003]),
-                    cont .get([wx * 0.005, wz * 0.005]),
-                );
+                let biome = column_biome(&temp, &moist, &cont, wx, wz);
                 biome_grid[x][z] = biome;
                 let p = biome.params();
 
-                // Blend terrain height over a 5-point cross (±16 blocks) so biome
-                // edges fade in gradually instead of creating instant cliffs.
-                // For mountain samples the continentalness value biases the terrain
-                // noise upward so the centre of a mountain biome (high continentalness)
-                // is always the highest point — preventing inverted / hollow mountains.
-                const BLEND_D: f64 = 16.0;
-                let mut blended_surf = 0.0f32;
-                for (ox, oz) in [(0.0f64,0.0f64),(BLEND_D,0.0),(-BLEND_D,0.0),(0.0,BLEND_D),(0.0,-BLEND_D)] {
-                    let sx = wx + ox;
-                    let sz = wz + oz;
-                    let c_raw = cont.get([sx * 0.005, sz * 0.005]);
-                    let b = Biome::from_noise(
-                        temp .get([sx * 0.003, sz * 0.003]),
-                        moist.get([sx * 0.003, sz * 0.003]),
-                        c_raw,
-                    );
-                    let bp = b.params();
-                    let terrain_nv = ((terrain.get([sx * bp.scale, sz * bp.scale]) + 1.0) / 2.0) as f32;
-                    let nv = if b == Biome::Mountains {
-                        // c_t = 0 at the biome edge (cont=0.80), 1 at the deepest centre (cont=1.0).
-                        // Lerp terrain_nv toward 1 as c_t rises so the continentalness peak
-                        // always sits at the top of the mountain.
-                        let c_norm = ((c_raw + 1.0) / 2.0) as f32;
-                        let c_t = ((c_norm - 0.80) / 0.20).clamp(0.0, 1.0);
-                        (terrain_nv * (1.0 - c_t * 0.5) + c_t * 0.6).min(1.0)
-                    } else {
-                        terrain_nv
-                    };
-                    blended_surf += bp.base_height + nv * bp.amplitude;
-                }
-                let surf_y = (blended_surf / 5.0) as i32;
-                let surf_y = surf_y.clamp(1, WORLD_HEIGHT_CHUNKS * 16 - 2);
+                let surf_y = column_surface_y(&terrain, &temp, &moist, &cont, wx, wz);
                 surface[x][z] = surf_y;
 
                 let underwater = surf_y < SEA_LEVEL;
@@ -262,29 +223,60 @@ impl Chunk {
         }
 
         // ── Trees ────────────────────────────────────────────────────────────
-        // Only place trees whose surface block falls within this chunk's Y range.
-        for x in 0..16usize {
-            for z in 0..16usize {
-                let surf_wy = surface[x][z];
-                let local_surf = surf_wy - wy_base;
-                if local_surf < 0 || local_surf >= 16 { continue; }
-                let local_surf = local_surf as usize;
+        // Procedural Bedrock-style trees with randomised trunks and branches that
+        // may span chunk borders.  Because each tree is generated deterministically
+        // from its world origin, every chunk it overlaps recomputes the identical
+        // blocks and keeps only those inside its own bounds — so branches line up
+        // across seams with no shared mutable state.
+        //
+        // Scan a margin of `MAX_TREE_RADIUS` blocks around this chunk for tree
+        // origins.  Skip entirely for chunks whose Y range is below sea level,
+        // where no tree blocks can fall.
+        if wy_base + 16 > SEA_LEVEL {
+            let chunk_x0 = position[0] * 16;
+            let chunk_z0 = position[2] * 16;
+            let m = tree::MAX_TREE_RADIUS;
 
-                let world_x = position[0] * 16 + x as i32;
-                let world_z = position[2] * 16 + z as i32;
-                let p = biome_grid[x][z].params();
-                if should_place_tree(world_x, world_z, p.tree_freq)
-                    && surf_wy > SEA_LEVEL
-                    && blocks[x][local_surf][z] == BlockType::Grass
-                {
-                    let sh = (world_x.wrapping_mul(1_723_459)
-                              ^ world_z.wrapping_mul(9_876_543)) as u32;
-                    match sh % 20 {
-                        0..=9   => plant_tree_small (&mut blocks, x, local_surf, z),
-                        10..=16 => plant_tree_medium(&mut blocks, x, local_surf, z),
-                        _       => plant_tree_large (&mut blocks, x, local_surf, z),
-                    }
+            // Collect origins first so the mutable `blocks` borrow in `emit` is
+            // scoped to one tree at a time.
+            let mut origins: Vec<(i32, i32, i32)> = Vec::new(); // (ox, surf_y, oz)
+            for wx in (chunk_x0 - m)..(chunk_x0 + 16 + m) {
+                for wz in (chunk_z0 - m)..(chunk_z0 + 16 + m) {
+                    let biome = column_biome(&temp, &moist, &cont, wx as f64, wz as f64);
+                    let freq = biome.params().tree_freq;
+                    if freq == 0 { continue; }
+                    if !should_place_tree(wx, wz, freq) { continue; }
+                    let surf_y = column_surface_y(&terrain, &temp, &moist, &cont, wx as f64, wz as f64);
+                    if !tree_surface_ok(biome, surf_y) { continue; }
+                    origins.push((wx, surf_y, wz));
                 }
+            }
+
+            for (ox, surf_y, oz) in origins {
+                let mut emit = |wx: i32, wy: i32, wz: i32, block: BlockType| {
+                    let lx = wx - chunk_x0;
+                    let ly = wy - wy_base;
+                    let lz = wz - chunk_z0;
+                    if lx < 0 || lx >= 16 || ly < 0 || ly >= 16 || lz < 0 || lz >= 16 { return; }
+                    let (lx, ly, lz) = (lx as usize, ly as usize, lz as usize);
+                    let cur = blocks[lx][ly][lz];
+                    match block {
+                        // Logs win over leaves and may replace previously-placed
+                        // leaves (keeps the result order-independent across chunks).
+                        BlockType::Log => {
+                            if cur == BlockType::Air || cur == BlockType::Leaves {
+                                blocks[lx][ly][lz] = BlockType::Log;
+                            }
+                        }
+                        BlockType::Leaves => {
+                            if cur == BlockType::Air {
+                                blocks[lx][ly][lz] = BlockType::Leaves;
+                            }
+                        }
+                        _ => {}
+                    }
+                };
+                tree::generate_tree(ox, surf_y + 1, oz, seed, &mut emit);
             }
         }
 
