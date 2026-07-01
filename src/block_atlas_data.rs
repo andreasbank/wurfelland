@@ -62,6 +62,13 @@ pub fn build_block_atlas_pixels() -> Vec<u8> {
 
                 let alpha: u8 = if tile_idx == 8 {
                     if in_blade { 255 } else { 0 }
+                } else if tile_idx == 6 {
+                    // Bedrock-style fancy leaves: scattered transparent gaps so
+                    // the canopy is partially see-through.  ~19% of texels are
+                    // punched out in a mottled, clustered pattern.
+                    let h = (px.wrapping_mul(7) ^ py.wrapping_mul(13)
+                        ^ (px / 2).wrapping_mul(23) ^ (py / 2).wrapping_mul(31)) % 16;
+                    if h < 3 { 0 } else { 255 }
                 } else if tile_idx == 3 {
                     160
                 } else {
@@ -130,6 +137,17 @@ pub fn build_block_atlas_pixels() -> Vec<u8> {
                             [255u8, 210, 30]
                         } else {
                             base_color
+                        }
+                    }
+                    6 => {
+                        // Mottled greens: darker clumps and lighter highlights
+                        // give the leaves depth around the transparent gaps.
+                        let h = (px.wrapping_mul(3) ^ py.wrapping_mul(11)
+                            ^ (px / 3).wrapping_mul(7) ^ (py / 3).wrapping_mul(13)) % 5;
+                        match h {
+                            0 => [42u8, 96, 30],   // shaded leaf clump
+                            1 => [74u8, 142, 54],  // sunlit highlight
+                            _ => base_color,
                         }
                     }
                     4 if py >= TILE_SIZE - 4 => [120u8, 172, 48],
